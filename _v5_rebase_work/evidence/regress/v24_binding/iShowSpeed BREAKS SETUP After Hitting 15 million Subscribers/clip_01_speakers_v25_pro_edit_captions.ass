@@ -1,0 +1,61 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I love{\1a&HFF&\3a&HFF&} you guys
+Dialogue: 0,0:00:00.70,0:00:00.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I love{\t(0,50,\c&H00D7FF&)} you{\1a&HFF&\3a&HFF&} guys
+Dialogue: 0,0:00:00.86,0:00:01.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I love you{\t(0,50,\c&H0080FF&)} guys
+Dialogue: 0,0:00:01.20,0:00:01.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}so{\1a&HFF&\3a&HFF&} much, bro.
+Dialogue: 0,0:00:01.50,0:00:01.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}so{\t(0,50,\c&H0080FF&)} much,{\1a&HFF&\3a&HFF&} bro.
+Dialogue: 0,0:00:01.86,0:00:02.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}so{\c&H0080FF&} much,{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} bro.
+Dialogue: 0,0:00:03.42,0:00:03.94,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}With{\1a&HFF&\3a&HFF&} all my heart.
+Dialogue: 0,0:00:03.94,0:00:04.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}With{\t(0,50,\c&H0080FF&)} all{\1a&HFF&\3a&HFF&} my heart.
+Dialogue: 0,0:00:04.04,0:00:04.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}With{\c&H0080FF&} all{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} my{\1a&HFF&\3a&HFF&} heart.
+Dialogue: 0,0:00:04.22,0:00:06.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}With{\c&H0080FF&} all{\c&HF2F2F2&} my{\t(0,50,\c&H00D7FF&)} heart.
+Dialogue: 0,0:00:06.28,0:00:06.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} love every
+Dialogue: 0,0:00:06.74,0:00:06.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H00D7FF&)} love{\1a&HFF&\3a&HFF&} every
+Dialogue: 0,0:00:06.80,0:00:07.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I love{\t(0,50,\c&H0080FF&)} every
+Dialogue: 0,0:00:07.12,0:00:07.34,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}single{\1a&HFF&\3a&HFF&} one of you guys
+Dialogue: 0,0:00:07.34,0:00:07.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}single{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} one{\1a&HFF&\3a&HFF&} of you guys
+Dialogue: 0,0:00:07.52,0:00:07.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}single{\c&HF2F2F2&} one{\t(0,50,\c&H00D7FF&)} of{\1a&HFF&\3a&HFF&} you guys
+Dialogue: 0,0:00:07.68,0:00:07.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}single{\c&HF2F2F2&} one of{\t(0,50,\c&H00D7FF&)} you guys
+Dialogue: 0,0:00:07.88,0:00:08.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}in{\1a&HFF&\3a&HFF&} the chat.
+Dialogue: 0,0:00:08.02,0:00:08.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}in{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} chat.
+Dialogue: 0,0:00:08.20,0:00:08.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}in the{\t(0,50,\c&H00D7FF&)} chat.
+Dialogue: 0,0:00:08.54,0:00:09.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} love every
+Dialogue: 0,0:00:09.42,0:00:09.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H00D7FF&)} love{\1a&HFF&\3a&HFF&} every
+Dialogue: 0,0:00:09.54,0:00:09.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I love{\t(0,50,\c&H00D7FF&)} every
+Dialogue: 0,0:00:11.08,0:00:11.22,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}single{\1a&HFF&\3a&HFF&} person who
+Dialogue: 0,0:00:11.22,0:00:11.52,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}single{\t(0,50,\c&H00D7FF&)} person{\1a&HFF&\3a&HFF&} who
+Dialogue: 0,0:00:11.52,0:00:11.64,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}single person{\t(0,50,\c&H00D7FF&)} who
+Dialogue: 0,0:00:11.64,0:00:12.04,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}single person who
+Dialogue: 0,0:00:11.64,0:00:12.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}subscribed{\1a&HFF&\3a&HFF&} to me.
+Dialogue: 0,0:00:12.04,0:00:12.24,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}single person who
+Dialogue: 0,0:00:12.04,0:00:12.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}subscribed{\t(0,50,\c&H00D7FF&)} to{\1a&HFF&\3a&HFF&} me.
+Dialogue: 0,0:00:12.24,0:00:12.38,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}single person who
+Dialogue: 0,0:00:12.24,0:00:12.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}subscribed to{\t(0,50,\c&H00D7FF&)} me.
+Dialogue: 0,0:00:12.38,0:00:12.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} love every
+Dialogue: 0,0:00:12.54,0:00:12.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H00D7FF&)} love{\1a&HFF&\3a&HFF&} every
+Dialogue: 0,0:00:12.80,0:00:13.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I love{\t(0,50,\c&H00D7FF&)} every
+Dialogue: 0,0:00:13.14,0:00:13.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}single{\1a&HFF&\3a&HFF&} one of y'all.
+Dialogue: 0,0:00:13.38,0:00:13.62,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}single{\t(0,50,\c&H00D7FF&)} one{\1a&HFF&\3a&HFF&} of y'all.
+Dialogue: 0,0:00:13.62,0:00:13.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}single one{\t(0,20,\c&H00D7FF&)} of{\1a&HFF&\3a&HFF&} y'all.
+Dialogue: 0,0:00:13.64,0:00:14.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}single one of{\t(0,50,\c&H00D7FF&)} y'all.
+Dialogue: 0,0:00:14.12,0:00:14.59,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Psych!
+Dialogue: 0,0:00:14.59,0:00:15.07,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Psych!
+Dialogue: 0,0:00:15.07,0:00:15.55,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Psych!
+Dialogue: 0,0:00:15.55,0:00:16.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Psych!
+Dialogue: 0,0:00:16.02,0:00:16.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Psych!

@@ -1,0 +1,57 @@
+﻿[Script Info]
+Title: MIMIR Unified Clean Captions V15
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ViralMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,530,1
+Style: ViralSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,650,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.70,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I love{\rViralMain} {\alpha&HFF&}you{\rViralMain} {\alpha&HFF&}guys{\rViralMain} {\alpha&HFF&}so{\rViralMain}
+Dialogue: 0,0:00:00.70,0:00:00.86,ViralMain,,0,0,0,,{\c&H00F2F2F2}I love{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}you{\rViralMain} {\alpha&HFF&}guys{\rViralMain} {\alpha&HFF&}so{\rViralMain}
+Dialogue: 0,0:00:00.86,0:00:01.20,ViralMain,,0,0,0,,{\c&H00F2F2F2}I love{\rViralMain} {\c&H00F2F2F2}you{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}guys{\rViralMain} {\alpha&HFF&}so{\rViralMain}
+Dialogue: 0,0:00:01.20,0:00:01.50,ViralMain,,0,0,0,,{\c&H00F2F2F2}I love{\rViralMain} {\c&H00F2F2F2}you{\rViralMain} {\b1\c&H000080FF}guys{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}so{\rViralMain}
+Dialogue: 0,0:00:01.50,0:00:01.86,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}much,{\rViralMain} {\alpha&HFF&}bro.{\rViralMain}
+Dialogue: 0,0:00:01.86,0:00:02.18,ViralMain,,0,0,0,,{\b1\c&H000080FF}much,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}bro.{\rViralMain}
+Dialogue: 0,0:00:03.42,0:00:03.94,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}With{\rViralMain} {\alpha&HFF&}all{\rViralMain} {\alpha&HFF&}my{\rViralMain} {\alpha&HFF&}heart.{\rViralMain}
+Dialogue: 0,0:00:03.94,0:00:04.04,ViralMain,,0,0,0,,{\c&H00F2F2F2}With{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}all{\rViralMain} {\alpha&HFF&}my{\rViralMain} {\alpha&HFF&}heart.{\rViralMain}
+Dialogue: 0,0:00:04.04,0:00:04.22,ViralMain,,0,0,0,,{\c&H00F2F2F2}With{\rViralMain} {\c&H00F2F2F2}all{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}my{\rViralMain} {\alpha&HFF&}heart.{\rViralMain}
+Dialogue: 0,0:00:04.22,0:00:06.28,ViralMain,,0,0,0,,{\c&H00F2F2F2}With{\rViralMain} {\c&H00F2F2F2}all{\rViralMain} {\c&H00F2F2F2}my{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}heart.{\rViralMain}
+Dialogue: 0,0:00:06.28,0:00:06.74,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}love{\rViralMain} {\alpha&HFF&}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:06.74,0:00:06.81,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}love{\rViralMain} {\alpha&HFF&}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:06.80,0:00:07.12,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}love{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:07.12,0:00:07.34,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}love{\rViralMain} {\c&H00F2F2F2}every{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}single{\rViralMain}
+Dialogue: 0,0:00:07.34,0:00:07.52,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}one{\rViralMain} {\alpha&HFF&}of{\rViralMain} {\alpha&HFF&}you guys{\rViralMain} {\alpha&HFF&}in{\rViralMain}
+Dialogue: 0,0:00:07.52,0:00:07.68,ViralMain,,0,0,0,,{\c&H00F2F2F2}one{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}of{\rViralMain} {\alpha&HFF&}you guys{\rViralMain} {\alpha&HFF&}in{\rViralMain}
+Dialogue: 0,0:00:07.68,0:00:07.88,ViralMain,,0,0,0,,{\c&H00F2F2F2}one{\rViralMain} {\c&H00F2F2F2}of{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}you guys{\rViralMain} {\alpha&HFF&}in{\rViralMain}
+Dialogue: 0,0:00:07.88,0:00:08.02,ViralMain,,0,0,0,,{\c&H00F2F2F2}one{\rViralMain} {\c&H00F2F2F2}of{\rViralMain} {\c&H00F2F2F2}you guys{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}in{\rViralMain}
+Dialogue: 0,0:00:08.02,0:00:08.20,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}the{\rViralMain} {\alpha&HFF&}chat.{\rViralMain}
+Dialogue: 0,0:00:08.20,0:00:08.54,ViralMain,,0,0,0,,{\c&H00F2F2F2}the{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}chat.{\rViralMain}
+Dialogue: 0,0:00:08.54,0:00:09.42,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}love{\rViralMain} {\alpha&HFF&}every{\rViralMain}
+Dialogue: 0,0:00:09.42,0:00:09.54,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}love{\rViralMain} {\alpha&HFF&}every{\rViralMain}
+Dialogue: 0,0:00:09.54,0:00:09.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}love{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}every{\rViralMain}
+Dialogue: 0,0:00:11.08,0:00:11.22,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}single{\rViralMain} {\alpha&HFF&}person{\rViralMain} {\alpha&HFF&}who{\rViralMain} {\alpha&HFF&}subscribed{\rViralMain}
+Dialogue: 0,0:00:11.22,0:00:11.52,ViralMain,,0,0,0,,{\c&H00F2F2F2}single{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}person{\rViralMain} {\alpha&HFF&}who{\rViralMain} {\alpha&HFF&}subscribed{\rViralMain}
+Dialogue: 0,0:00:11.52,0:00:11.64,ViralMain,,0,0,0,,{\c&H00F2F2F2}single{\rViralMain} {\c&H00F2F2F2}person{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}who{\rViralMain} {\alpha&HFF&}subscribed{\rViralMain}
+Dialogue: 0,0:00:11.64,0:00:12.04,ViralMain,,0,0,0,,{\c&H00F2F2F2}single{\rViralMain} {\c&H00F2F2F2}person{\rViralMain} {\c&H00F2F2F2}who{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}subscribed{\rViralMain}
+Dialogue: 0,0:00:12.04,0:00:12.24,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}to{\rViralMain} {\alpha&HFF&}me.{\rViralMain}
+Dialogue: 0,0:00:12.24,0:00:12.38,ViralMain,,0,0,0,,{\c&H00F2F2F2}to{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}me.{\rViralMain}
+Dialogue: 0,0:00:12.38,0:00:12.54,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}love{\rViralMain} {\alpha&HFF&}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:12.54,0:00:12.80,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}love{\rViralMain} {\alpha&HFF&}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:12.80,0:00:13.14,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}love{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}every{\rViralMain} {\alpha&HFF&}single{\rViralMain}
+Dialogue: 0,0:00:13.14,0:00:13.38,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}love{\rViralMain} {\c&H00F2F2F2}every{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}single{\rViralMain}
+Dialogue: 0,0:00:13.38,0:00:13.62,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}one{\rViralMain} {\alpha&HFF&}of{\rViralMain} {\alpha&HFF&}y'all.{\rViralMain}
+Dialogue: 0,0:00:13.62,0:00:13.69,ViralMain,,0,0,0,,{\c&H00F2F2F2}one{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}of{\rViralMain} {\alpha&HFF&}y'all.{\rViralMain}
+Dialogue: 0,0:00:13.64,0:00:14.12,ViralMain,,0,0,0,,{\c&H00F2F2F2}one{\rViralMain} {\c&H00F2F2F2}of{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}y'all.{\rViralMain}
+Dialogue: 0,0:00:14.12,0:00:14.59,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Psych!{\rViralMain}
+Dialogue: 0,0:00:14.59,0:00:15.07,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Psych!{\rViralMain}
+Dialogue: 0,0:00:15.07,0:00:15.55,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Psych!{\rViralMain}
+Dialogue: 0,0:00:15.55,0:00:16.02,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}Psych!{\rViralMain}
+Dialogue: 0,0:00:16.02,0:00:16.50,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Psych!{\rViralMain}

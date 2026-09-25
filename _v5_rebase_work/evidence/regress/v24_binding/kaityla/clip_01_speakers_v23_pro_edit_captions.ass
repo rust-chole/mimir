@@ -1,0 +1,109 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} My{\1a&HFF&\3a&HFF&} only option
+Dialogue: 0,0:00:00.20,0:00:00.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} My{\t(0,50,\c&H00D7FF&)} only{\1a&HFF&\3a&HFF&} option
+Dialogue: 0,0:00:00.36,0:00:00.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} My only{\t(0,50,\c&H00D7FF&)} option
+Dialogue: 0,0:00:00.72,0:00:01.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} is,{\1a&HFF&\3a&HFF&} um,
+Dialogue: 0,0:00:01.66,0:00:02.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} is,{\t(0,50,\c&H00D7FF&)} um,
+Dialogue: 0,0:00:04.70,0:00:05.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Tyler,{\1a&HFF&\3a&HFF&} would you like
+Dialogue: 0,0:00:05.14,0:00:05.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Tyler,{\t(0,50,\c&H00D7FF&)} would{\1a&HFF&\3a&HFF&} you like
+Dialogue: 0,0:00:05.58,0:00:05.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Tyler, would{\t(0,50,\c&H00D7FF&)} you{\1a&HFF&\3a&HFF&} like
+Dialogue: 0,0:00:05.66,0:00:05.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Tyler, would you{\t(0,50,\c&H0080FF&)} like
+Dialogue: 0,0:00:05.78,0:00:05.90,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} to{\1a&HFF&\3a&HFF&} go
+Dialogue: 0,0:00:05.90,0:00:05.98,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} to{\t(0,50,\c&H0080FF&)} go
+Dialogue: 0,0:00:05.98,0:00:06.04,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} to{\c&H0080FF&} go
+Dialogue: 0,0:00:05.98,0:00:06.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}on{\1a&HFF&\3a&HFF&} a date with me?
+Dialogue: 0,0:00:06.04,0:00:06.14,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} to{\c&H0080FF&} go
+Dialogue: 0,0:00:06.04,0:00:06.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}on{\t(0,50,\c&H00D7FF&)} a{\1a&HFF&\3a&HFF&} date with me?
+Dialogue: 0,0:00:06.14,0:00:06.32,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} to{\c&H0080FF&} go
+Dialogue: 0,0:00:06.14,0:00:06.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}on a{\t(0,50,\c&H00D7FF&)} date with{\1a&HFF&\3a&HFF&} me?
+Dialogue: 0,0:00:06.32,0:00:06.64,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} to{\c&H0080FF&} go
+Dialogue: 0,0:00:06.32,0:00:06.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}on a date with{\t(0,50,\c&H0080FF&)} me?
+Dialogue: 0,0:00:07.30,0:00:07.44,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Are{\1a&HFF&\3a&HFF&} you
+Dialogue: 0,0:00:07.44,0:00:07.60,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} Are{\t(0,50,\c&H00D7FF&)} you
+Dialogue: 0,0:00:07.60,0:00:07.64,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} Are you
+Dialogue: 0,0:00:07.60,0:00:07.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,40,\c&H0080FF&)}asking{\1a&HFF&\3a&HFF&} for real?
+Dialogue: 0,0:00:07.64,0:00:07.92,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} Are you
+Dialogue: 0,0:00:07.64,0:00:07.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}asking{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} for{\1a&HFF&\3a&HFF&} real?
+Dialogue: 0,0:00:07.92,0:00:08.28,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} Are you
+Dialogue: 0,0:00:07.92,0:00:08.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}asking{\c&HF2F2F2&} for{\t(0,50,\c&H0080FF&)} real?
+Dialogue: 0,0:00:08.48,0:00:08.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Yeah.
+Dialogue: 0,0:00:10.72,0:00:10.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Don't{\1a&HFF&\3a&HFF&} do that.
+Dialogue: 0,0:00:10.80,0:00:11.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Don't{\t(0,50,\c&H0080FF&)} do{\1a&HFF&\3a&HFF&} that.
+Dialogue: 0,0:00:11.00,0:00:11.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Don't{\c&H0080FF&} do{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} that.
+Dialogue: 0,0:00:11.60,0:00:11.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} What{\1a&HFF&\3a&HFF&} you mean?
+Dialogue: 0,0:00:11.86,0:00:12.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} What{\t(0,50,\c&H00D7FF&)} you{\1a&HFF&\3a&HFF&} mean?
+Dialogue: 0,0:00:12.00,0:00:12.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} What you{\t(0,50,\c&H00D7FF&)} mean?
+Dialogue: 0,0:00:12.52,0:00:12.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Why{\1a&HFF&\3a&HFF&} not?
+Dialogue: 0,0:00:12.76,0:00:13.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Why{\t(0,50,\c&H00D7FF&)} not?
+Dialogue: 0,0:00:13.26,0:00:13.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} Don't{\1a&HFF&\3a&HFF&} do that.
+Dialogue: 0,0:00:13.58,0:00:13.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&H0080FF&} Don't{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} do{\1a&HFF&\3a&HFF&} that.
+Dialogue: 0,0:00:13.86,0:00:14.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&H0080FF&} Don't{\c&HF2F2F2&} do{\t(0,50,\c&H00D7FF&)} that.
+Dialogue: 0,0:00:14.22,0:00:14.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} I'm{\1a&HFF&\3a&HFF&} serious.
+Dialogue: 0,0:00:14.50,0:00:15.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&H0080FF&} I'm{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} serious.
+Dialogue: 0,0:00:15.06,0:00:15.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Whenever{\1a&HFF&\3a&HFF&} you get some
+Dialogue: 0,0:00:15.42,0:00:15.56,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Whenever{\t(0,50,\c&H00D7FF&)} you{\1a&HFF&\3a&HFF&} get some
+Dialogue: 0,0:00:15.56,0:00:15.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Whenever you{\t(0,50,\c&H00D7FF&)} get{\1a&HFF&\3a&HFF&} some
+Dialogue: 0,0:00:15.66,0:00:15.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Whenever you get{\t(0,50,\c&H00D7FF&)} some
+Dialogue: 0,0:00:15.88,0:00:16.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} free{\1a&HFF&\3a&HFF&} time, would you
+Dialogue: 0,0:00:16.06,0:00:16.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} free{\t(0,50,\c&H00D7FF&)} time,{\1a&HFF&\3a&HFF&} would you
+Dialogue: 0,0:00:16.36,0:00:16.44,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} free time,{\t(0,50,\c&H0080FF&)} would{\1a&HFF&\3a&HFF&} you
+Dialogue: 0,0:00:16.44,0:00:16.51,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} free time,{\c&H0080FF&} would{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} you
+Dialogue: 0,0:00:16.50,0:00:16.62,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} like{\1a&HFF&\3a&HFF&} to go
+Dialogue: 0,0:00:16.62,0:00:16.72,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&H0080FF&} like{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} to{\1a&HFF&\3a&HFF&} go
+Dialogue: 0,0:00:16.72,0:00:16.76,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&H0080FF&} like{\c&HF2F2F2&} to{\t(0,40,\c&H00D7FF&)} go
+Dialogue: 0,0:00:16.76,0:00:16.94,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&H0080FF&} like{\c&HF2F2F2&} to go
+Dialogue: 0,0:00:16.76,0:00:16.94,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}on{\1a&HFF&\3a&HFF&} a date with me?
+Dialogue: 0,0:00:16.94,0:00:17.12,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&H0080FF&} like{\c&HF2F2F2&} to go
+Dialogue: 0,0:00:16.94,0:00:17.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}on{\t(0,50,\c&H00D7FF&)} a date with{\1a&HFF&\3a&HFF&} me?
+Dialogue: 0,0:00:17.12,0:00:17.44,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}KAI:{\c&H0080FF&} like{\c&HF2F2F2&} to go
+Dialogue: 0,0:00:17.12,0:00:17.44,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}on a date with{\t(0,50,\c&H00D7FF&)} me?
+Dialogue: 0,0:00:18.28,0:00:18.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} You{\1a&HFF&\3a&HFF&} can't do that
+Dialogue: 0,0:00:18.72,0:00:18.96,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} You{\t(0,50,\c&H00D7FF&)} can't{\1a&HFF&\3a&HFF&} do that
+Dialogue: 0,0:00:18.96,0:00:19.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} You can't{\t(0,50,\c&H00D7FF&)} do{\1a&HFF&\3a&HFF&} that
+Dialogue: 0,0:00:19.08,0:00:19.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} You can't do{\t(0,50,\c&H00D7FF&)} that
+Dialogue: 0,0:00:19.72,0:00:19.98,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} on{\1a&HFF&\3a&HFF&} a whole
+Dialogue: 0,0:00:19.98,0:00:20.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} on{\t(0,50,\c&H00D7FF&)} a{\1a&HFF&\3a&HFF&} whole
+Dialogue: 0,0:00:20.06,0:00:20.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} on a{\t(0,50,\c&H00D7FF&)} whole
+Dialogue: 0,0:00:20.30,0:00:20.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} live{\1a&HFF&\3a&HFF&} thing.
+Dialogue: 0,0:00:20.70,0:00:21.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&} live{\t(0,50,\c&H00D7FF&)} thing.
+Dialogue: 0,0:00:22.50,0:00:22.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Why{\1a&HFF&\3a&HFF&} not?
+Dialogue: 0,0:00:22.74,0:00:23.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} Why{\t(0,50,\c&H00D7FF&)} not?
+Dialogue: 0,0:00:23.12,0:00:23.56,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} It's{\1a&HFF&\3a&HFF&} true
+Dialogue: 0,0:00:23.56,0:00:24.49,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} It's{\t(0,50,\c&H00D7FF&)} true
+Dialogue: 0,0:00:24.49,0:00:24.95,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}or{\1a&HFF&\3a&HFF&} dare.
+Dialogue: 0,0:00:24.95,0:00:25.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}or{\t(0,50,\c&H00D7FF&)} dare.
+Dialogue: 0,0:00:25.88,0:00:26.34,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Uh,
+Dialogue: 0,0:00:27.94,0:00:28.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}um,
+Dialogue: 0,0:00:29.18,0:00:29.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}but{\1a&HFF&\3a&HFF&} we're friends though.
+Dialogue: 0,0:00:29.52,0:00:30.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}but{\t(0,50,\c&H00D7FF&)} we're{\1a&HFF&\3a&HFF&} friends though.
+Dialogue: 0,0:00:30.04,0:00:30.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}but we're{\t(0,50,\c&H00D7FF&)} friends{\1a&HFF&\3a&HFF&} though.
+Dialogue: 0,0:00:30.20,0:00:31.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}but we're friends{\t(0,50,\c&H00D7FF&)} though.
+Dialogue: 0,0:00:31.44,0:00:31.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} You
+Dialogue: 0,0:00:31.60,0:00:32.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} right.
+Dialogue: 0,0:00:32.22,0:00:32.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}TYLA:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Yeah,
+Dialogue: 0,0:00:32.80,0:00:33.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} we{\1a&HFF&\3a&HFF&} friends.
+Dialogue: 0,0:00:33.38,0:00:33.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} we{\t(0,50,\c&H00D7FF&)} friends.
+Dialogue: 0,0:00:33.52,0:00:33.82,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} You{\1a&HFF&\3a&HFF&} right.
+Dialogue: 0,0:00:33.82,0:00:34.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} You{\t(0,50,\c&H00D7FF&)} right.
+Dialogue: 0,0:00:35.50,0:00:35.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} All{\1a&HFF&\3a&HFF&} right, next one.
+Dialogue: 0,0:00:35.78,0:00:36.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} All{\t(0,50,\c&H00D7FF&)} right,{\1a&HFF&\3a&HFF&} next one.
+Dialogue: 0,0:00:36.24,0:00:36.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} All right,{\t(0,50,\c&H00D7FF&)} next{\1a&HFF&\3a&HFF&} one.
+Dialogue: 0,0:00:36.52,0:00:36.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}KAI:{\c&HF2F2F2&} All right, next{\t(0,50,\c&H00D7FF&)} one.
+Dialogue: 0,0:00:38.74,0:00:39.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Go{\1a&HFF&\3a&HFF&} ahead.
+Dialogue: 0,0:00:39.32,0:00:39.55,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Go{\t(0,50,\c&H00D7FF&)} ahead.

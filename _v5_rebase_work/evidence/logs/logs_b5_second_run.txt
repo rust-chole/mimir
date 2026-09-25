@@ -1,0 +1,95 @@
+...................F..................................s........................s............................................................................................................................................................
+======================================================================
+FAIL: test_two_line_page_line_one_is_stable_when_line_two_appears (test_pro_edit_captions.LibassStabilityTests.test_two_line_page_line_one_is_stable_when_line_two_appears)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\yusuf\Desktop\mimir_unified_clean_v3\_v5_rebase_work\final_root\tests\test_pro_edit_captions.py", line 882, in test_two_line_page_line_one_is_stable_when_line_two_appears
+    self.assertEqual(ink(f1).tolist(), ink(f2).tolist())         # line 1 never reflows
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [195,[1258 chars]2, 488, 489, 490, 491, 492, 493, 494, 495, 496[126 chars] 522] != [195,[1258 chars]2, 489, 490, 491, 492, 493, 494, 495, 496, 497[121 chars] 522]
+
+First differing element 253:
+488
+489
+
+First list contains 1 additional elements.
+First extra element 287:
+522
+
+Diff is 2304 characters long. Set self.maxDiff to None to see it.
+
+----------------------------------------------------------------------
+Ran 236 tests in 379.360s
+
+FAILED (failures=1, skipped=2)
+
+====================================================================
+🎬 CAPTION PREVIEW — CLIP 1
+====================================================================
+📹 Video:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\edited_clips\demo textured\clip_01_demo_edited.mp4
+
+📝 Captions:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\demo textured_captions.ass
+
+⏱️ Video süresi: 8.000s
+🎯 Timeline süresi: 8.000s
+✅ Duration eşleşiyor.
+
+📝 Dinamik altyazılar videoya basılıyor...
+
+✅ CAPTION PREVIEW HAZIR
+⏱️ Final süre: 8.000s
+📂 C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\previews\demo textured\clip_01_captioned_preview.mp4
+====================================================================
+
+====================================================================
+🎬 CAPTION PREVIEW — CLIP 1
+====================================================================
+📹 Video:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\edited_clips\demo flat\clip_01_demo_edited.mp4
+
+📝 Captions:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\demo flat_captions.ass
+
+⏱️ Video süresi: 8.000s
+🎯 Timeline süresi: 8.000s
+✅ Duration eşleşiyor.
+
+📝 Dinamik altyazılar videoya basılıyor...
+
+✅ CAPTION PREVIEW HAZIR
+⏱️ Final süre: 8.000s
+📂 C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\previews\demo flat\clip_01_captioned_preview.mp4
+====================================================================
+
+========================================================================
+âš¡ MIMIR INTRO RENDERER V10
+========================================================================
+ğŸï¸ Clip          : 1
+ğŸ§² Hook text     : WAIT FOR IT
+â­ Terra score   : 9.0/10
+ğŸ›¡ï¸ Quality gate  : >= 8.0/10
+ğŸ”¤ Font          : Impact
+ğŸ”¥ Teaser cut    : 3.200 â†’ 4.600s
+ğŸ”¥ Teaser sÃ¼re   : 1.400s
+ğŸ“ Neon sÃ¼re     : 1.280s
+ğŸŒŠ Transition    : 0.160s smooth crossfade
+âœ‚ï¸ Main restart  : 0.000s (uzun post-intro gap yok / gÃ¼venli fallback)
+ğŸš« Teaser altyazÄ±: YOK
+âœ… Main altyazÄ±  : VAR
+ğŸ¬ YapÄ±          : CLEAN TEASER + HOOK â†’ SMOOTH MAIN RESTART 0.00s
+ğŸ“¥ Clean teaser source:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\edited_clips\demo textured\clip_01_demo_edited.mp4
+ğŸ“¥ Captioned main:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\demo textured\for_intro.mp4
+ğŸ“ Hook ASS:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\intro_assets\demo\clip_01_intro_v5.ass
+
+ğŸï¸ Render baÅŸlÄ±yor...
+
+âœ… Expected final : 9.240s
+âœ… Actual final   : 9.240s
+âœ… Ã‡Ä±ktÄ±:
+C:\Users\yusuf\AppData\Local\Temp\mimir pro edit ✓ çıktı ify65htk\final_previews\demo textured\clip_01_demo_final_preview_v10.mp4
+========================================================================

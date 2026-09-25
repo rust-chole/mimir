@@ -1,0 +1,79 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Well, let's{\1a&HFF&\3a&HFF&} turn up,
+Dialogue: 0,0:00:00.38,0:00:00.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} Well, let's{\t(0,50,\c&H00D7FF&)} turn{\1a&HFF&\3a&HFF&} up,
+Dialogue: 0,0:00:00.54,0:00:00.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} Well, let's turn{\t(0,50,\c&H00D7FF&)} up,
+Dialogue: 0,0:00:00.64,0:00:00.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} let's{\1a&HFF&\3a&HFF&} turn up, let's
+Dialogue: 0,0:00:00.90,0:00:01.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} let's{\t(0,50,\c&H00D7FF&)} turn{\1a&HFF&\3a&HFF&} up, let's
+Dialogue: 0,0:00:01.04,0:00:01.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} let's turn{\t(0,50,\c&H00D7FF&)} up,{\1a&HFF&\3a&HFF&} let's
+Dialogue: 0,0:00:01.22,0:00:02.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} let's turn up,{\t(0,50,\c&H00D7FF&)} let's
+Dialogue: 0,0:00:02.16,0:00:02.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} turn{\1a&HFF&\3a&HFF&} up.
+Dialogue: 0,0:00:02.22,0:00:02.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} turn{\t(0,50,\c&H00D7FF&)} up.
+Dialogue: 0,0:00:02.86,0:00:03.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Please
+Dialogue: 0,0:00:04.72,0:00:05.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} sign us.
+Dialogue: 0,0:00:05.42,0:00:05.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} He's{\1a&HFF&\3a&HFF&} from my friend.
+Dialogue: 0,0:00:05.86,0:00:06.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&H0080FF&} He's{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} from{\1a&HFF&\3a&HFF&} my friend.
+Dialogue: 0,0:00:06.04,0:00:06.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&H0080FF&} He's{\c&HF2F2F2&} from{\t(0,50,\c&H00D7FF&)} my{\1a&HFF&\3a&HFF&} friend.
+Dialogue: 0,0:00:06.30,0:00:06.62,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&H0080FF&} He's{\c&HF2F2F2&} from my{\t(0,50,\c&H00D7FF&)} friend.
+Dialogue: 0,0:00:07.64,0:00:07.75,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} He's—{\1a&HFF&\3a&HFF&} What
+Dialogue: 0,0:00:07.75,0:00:07.86,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} He's—{\t(0,50,\c&H00D7FF&)} What
+Dialogue: 0,0:00:07.86,0:00:08.02,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} He's— What
+Dialogue: 0,0:00:07.86,0:00:08.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}the{\1a&HFF&\3a&HFF&} fuck is this?
+Dialogue: 0,0:00:08.02,0:00:08.22,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} He's— What
+Dialogue: 0,0:00:08.02,0:00:08.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\t(0,50,\c&H0080FF&)} fuck{\1a&HFF&\3a&HFF&} is this?
+Dialogue: 0,0:00:08.22,0:00:08.40,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} He's— What
+Dialogue: 0,0:00:08.22,0:00:08.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\c&H0080FF&} fuck{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} is{\1a&HFF&\3a&HFF&} this?
+Dialogue: 0,0:00:08.40,0:00:08.72,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} He's— What
+Dialogue: 0,0:00:08.40,0:00:08.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\c&H0080FF&} fuck{\c&HF2F2F2&} is{\t(0,50,\c&H00D7FF&)} this?
+Dialogue: 0,0:00:08.80,0:00:09.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} He{\1a&HFF&\3a&HFF&} got 12
+Dialogue: 0,0:00:09.32,0:00:09.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} He{\t(0,50,\c&H0080FF&)} got{\1a&HFF&\3a&HFF&} 12
+Dialogue: 0,0:00:09.52,0:00:09.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} He{\c&H0080FF&} got{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} 12
+Dialogue: 0,0:00:09.90,0:00:10.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} wins{\1a&HFF&\3a&HFF&} in arena.
+Dialogue: 0,0:00:10.22,0:00:10.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&H0080FF&} wins{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} in{\1a&HFF&\3a&HFF&} arena.
+Dialogue: 0,0:00:10.76,0:00:11.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&H0080FF&} wins{\c&HF2F2F2&} in{\t(0,50,\c&H00D7FF&)} arena.
+Dialogue: 0,0:00:11.02,0:00:11.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} He{\1a&HFF&\3a&HFF&} got 12s
+Dialogue: 0,0:00:11.12,0:00:11.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} He{\t(0,50,\c&H0080FF&)} got{\1a&HFF&\3a&HFF&} 12s
+Dialogue: 0,0:00:11.30,0:00:11.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} He{\c&H0080FF&} got{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} 12s
+Dialogue: 0,0:00:11.66,0:00:12.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} in{\1a&HFF&\3a&HFF&} arena.
+Dialogue: 0,0:00:12.04,0:00:12.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} in{\t(0,50,\c&H00D7FF&)} arena.
+Dialogue: 0,0:00:12.62,0:00:13.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Arena?
+Dialogue: 0,0:00:13.20,0:00:13.40,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Yeah,{\1a&HFF&\3a&HFF&} he's
+Dialogue: 0,0:00:13.40,0:00:13.60,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} Yeah,{\t(0,50,\c&H00D7FF&)} he's
+Dialogue: 0,0:00:13.60,0:00:13.68,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} Yeah, he's
+Dialogue: 0,0:00:13.60,0:00:13.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}a{\1a&HFF&\3a&HFF&} bit retarded,
+Dialogue: 0,0:00:13.68,0:00:13.80,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} Yeah, he's
+Dialogue: 0,0:00:13.68,0:00:13.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}a{\t(0,50,\c&H00D7FF&)} bit{\1a&HFF&\3a&HFF&} retarded,
+Dialogue: 0,0:00:13.80,0:00:14.16,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} Yeah, he's
+Dialogue: 0,0:00:13.80,0:00:14.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}a bit{\t(0,50,\c&H00D7FF&)} retarded,
+Dialogue: 0,0:00:14.16,0:00:14.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} but{\1a&HFF&\3a&HFF&} he's my friend.
+Dialogue: 0,0:00:14.32,0:00:14.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} but{\t(0,40,\c&H00D7FF&)} he's{\1a&HFF&\3a&HFF&} my friend.
+Dialogue: 0,0:00:14.36,0:00:14.82,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} but he's{\t(0,50,\c&H00D7FF&)} my{\1a&HFF&\3a&HFF&} friend.
+Dialogue: 0,0:00:14.82,0:00:15.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} but he's my{\t(0,50,\c&H00D7FF&)} friend.
+Dialogue: 0,0:00:15.20,0:00:15.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} What{\1a&HFF&\3a&HFF&} the fuck
+Dialogue: 0,0:00:15.72,0:00:16.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} What{\t(0,50,\c&H00D7FF&)} the fuck
+Dialogue: 0,0:00:16.20,0:00:16.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} is{\1a&HFF&\3a&HFF&} this?
+Dialogue: 0,0:00:16.42,0:00:16.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} is{\t(0,50,\c&H00D7FF&)} this?
+Dialogue: 0,0:00:16.90,0:00:17.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Please.
+Dialogue: 0,0:00:17.90,0:00:18.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Thank{\1a&HFF&\3a&HFF&} you.
+Dialogue: 0,0:00:18.42,0:00:18.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} Thank{\t(0,50,\c&H00D7FF&)} you.
+Dialogue: 0,0:00:18.94,0:00:19.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} We{\1a&HFF&\3a&HFF&} won,
+Dialogue: 0,0:00:19.04,0:00:19.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&} We{\t(0,50,\c&H00D7FF&)} won,
+Dialogue: 0,0:00:19.80,0:00:19.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}FAN:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} go!
+Dialogue: 0,0:00:19.92,0:00:20.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} What{\1a&HFF&\3a&HFF&} the hell?
+Dialogue: 0,0:00:20.16,0:00:20.34,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} What{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} hell?
+Dialogue: 0,0:00:20.34,0:00:20.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} What the{\t(0,50,\c&H00D7FF&)} hell?

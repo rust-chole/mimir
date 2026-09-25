@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "profile_set_id": "EXAMPLE_profile_set_not_platform_data",
+  "source": "EXAMPLE ONLY - placeholder boxes to show the v2 schema. These are NOT TikTok / Reels / Shorts measurements. Replace every box with geometry you measured yourself and record how you measured it here.",
+  "variants": [
+    {
+      "platform": "tiktok",
+      "output_aspect": "9:16",
+      "ui_variant": "organic_feed",
+      "device_class": "phone",
+      "profile": {
+        "profile_id": "example_vertical_feed",
+        "version": 1,
+        "minimum_edge_padding": 0.03,
+        "right_ui_column": [0.86, 0.40, 1.0, 0.86],
+        "shorthand_mode": "soft",
+        "shorthand_weight": 3.0
+      },
+      "overlay_regions": [
+        {"id": "example_top_bar", "box": [0.0, 0.0, 1.0, 0.06], "mode": "soft", "weight": 1.5}
+      ],
+      "description_footprints": {
+        "short": {"box": [0.0, 0.84, 0.82, 0.93], "mode": "soft", "weight": 3.0},
+        "long": {"box": [0.0, 0.74, 0.82, 0.93], "mode": "soft", "weight": 3.0}
+      }
+    },
+    {
+      "platform": "any",
+      "output_aspect": "16:9",
+      "ui_variant": "any",
+      "device_class": "any",
+      "profile": {"profile_id": "example_landscape", "version": 1, "minimum_edge_padding": 0.02}
+    }
+  ]
+}

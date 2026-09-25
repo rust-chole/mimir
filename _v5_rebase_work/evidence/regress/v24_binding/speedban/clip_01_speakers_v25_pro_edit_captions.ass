@@ -1,0 +1,98 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:06.26,0:00:06.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}What?
+Dialogue: 0,0:00:07.92,0:00:08.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}What{\1a&HFF&\3a&HFF&} happened?
+Dialogue: 0,0:00:08.18,0:00:08.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}What{\t(0,50,\c&H0080FF&)} happened?
+Dialogue: 0,0:00:09.04,0:00:09.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}You
+Dialogue: 0,0:00:09.82,0:00:10.42,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}wanna{\1a&HFF&\3a&HFF&} ban me
+Dialogue: 0,0:00:10.42,0:00:10.48,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}wanna{\t(0,50,\c&H0080FF&)} ban{\1a&HFF&\3a&HFF&} me
+Dialogue: 0,0:00:10.48,0:00:10.62,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}wanna{\c&H0080FF&} ban{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} me
+Dialogue: 0,0:00:10.62,0:00:10.74,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}wanna{\c&H0080FF&} ban{\c&HF2F2F2&} me
+Dialogue: 0,0:00:10.62,0:00:10.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}from{\1a&HFF&\3a&HFF&} the mall?
+Dialogue: 0,0:00:10.74,0:00:11.00,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}wanna{\c&H0080FF&} ban{\c&HF2F2F2&} me
+Dialogue: 0,0:00:10.74,0:00:11.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}from{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} mall?
+Dialogue: 0,0:00:11.00,0:00:11.32,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}wanna{\c&H0080FF&} ban{\c&HF2F2F2&} me
+Dialogue: 0,0:00:11.00,0:00:11.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}from{\c&HF2F2F2&} the{\t(0,50,\c&H00D7FF&)} mall?
+Dialogue: 0,0:00:11.38,0:00:11.80,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}You're{\1a&HFF&\3a&HFF&} not allowed
+Dialogue: 0,0:00:11.80,0:00:11.94,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}You're{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} not{\1a&HFF&\3a&HFF&} allowed
+Dialogue: 0,0:00:11.94,0:00:12.10,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}You're not{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} allowed
+Dialogue: 0,0:00:12.10,0:00:12.28,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}You're not{\c&HF2F2F2&} allowed
+Dialogue: 0,0:00:12.10,0:00:12.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}to{\1a&HFF&\3a&HFF&} come back
+Dialogue: 0,0:00:12.28,0:00:12.42,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}You're not{\c&HF2F2F2&} allowed
+Dialogue: 0,0:00:12.28,0:00:12.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}to{\t(0,50,\c&H00D7FF&)} come{\1a&HFF&\3a&HFF&} back
+Dialogue: 0,0:00:12.42,0:00:12.66,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}You're not{\c&HF2F2F2&} allowed
+Dialogue: 0,0:00:12.42,0:00:12.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}to come{\t(0,50,\c&H00D7FF&)} back
+Dialogue: 0,0:00:12.66,0:00:12.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}to{\1a&HFF&\3a&HFF&} the mall ever.
+Dialogue: 0,0:00:12.76,0:00:13.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}to{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} mall ever.
+Dialogue: 0,0:00:13.02,0:00:13.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}to the{\t(0,50,\c&H00D7FF&)} mall ever.
+Dialogue: 0,0:00:13.78,0:00:14.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Okay.
+Dialogue: 0,0:00:14.34,0:00:14.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Per{\1a&HFF&\3a&HFF&} management.
+Dialogue: 0,0:00:14.60,0:00:14.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Per{\t(0,50,\c&H00D7FF&)} management.
+Dialogue: 0,0:00:15.58,0:00:16.00,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}No!
+Dialogue: 0,0:00:18.18,0:00:18.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}No!
+Dialogue: 0,0:00:20.42,0:00:20.84,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}Why{\1a&HFF&\3a&HFF&} is he banned?
+Dialogue: 0,0:00:20.84,0:00:20.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}Why{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} is{\1a&HFF&\3a&HFF&} he banned?
+Dialogue: 0,0:00:20.92,0:00:21.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}Why{\c&HF2F2F2&} is{\t(0,50,\c&H00D7FF&)} he{\1a&HFF&\3a&HFF&} banned?
+Dialogue: 0,0:00:21.14,0:00:21.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}Why{\c&HF2F2F2&} is he{\t(0,50,\c&H00D7FF&)} banned?
+Dialogue: 0,0:00:21.38,0:00:21.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Why{\1a&HFF&\3a&HFF&} am I banned?
+Dialogue: 0,0:00:21.58,0:00:21.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Why{\t(0,50,\c&H00D7FF&)} am{\1a&HFF&\3a&HFF&} I banned?
+Dialogue: 0,0:00:21.66,0:00:22.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Why am{\t(0,50,\c&H00D7FF&)} I{\1a&HFF&\3a&HFF&} banned?
+Dialogue: 0,0:00:22.10,0:00:22.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Why am I{\t(0,50,\c&H00D7FF&)} banned?
+Dialogue: 0,0:00:25.56,0:00:25.84,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Calm{\1a&HFF&\3a&HFF&} down, calm down.
+Dialogue: 0,0:00:25.84,0:00:25.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Calm{\t(0,50,\c&H00D7FF&)} down,{\1a&HFF&\3a&HFF&} calm down.
+Dialogue: 0,0:00:25.92,0:00:26.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Calm down,{\t(0,50,\c&H00D7FF&)} calm{\1a&HFF&\3a&HFF&} down.
+Dialogue: 0,0:00:26.22,0:00:26.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Calm down, calm{\t(0,50,\c&H00D7FF&)} down.
+Dialogue: 0,0:00:27.38,0:00:27.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}But{\1a&HFF&\3a&HFF&} he hasn't
+Dialogue: 0,0:00:27.80,0:00:27.94,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}But{\t(0,50,\c&H00D7FF&)} he{\1a&HFF&\3a&HFF&} hasn't
+Dialogue: 0,0:00:27.94,0:00:28.20,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}But he{\t(0,50,\c&H00D7FF&)} hasn't
+Dialogue: 0,0:00:28.20,0:00:28.44,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}done{\1a&HFF&\3a&HFF&} anything.
+Dialogue: 0,0:00:28.44,0:00:28.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}done{\t(0,50,\c&H00D7FF&)} anything.
+Dialogue: 0,0:00:28.60,0:00:28.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} didn't do anything.
+Dialogue: 0,0:00:28.72,0:00:28.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H00D7FF&)} didn't{\1a&HFF&\3a&HFF&} do anything.
+Dialogue: 0,0:00:28.92,0:00:29.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I didn't{\t(0,50,\c&H00D7FF&)} do{\1a&HFF&\3a&HFF&} anything.
+Dialogue: 0,0:00:29.22,0:00:29.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I didn't do{\t(0,50,\c&H00D7FF&)} anything.
+Dialogue: 0,0:00:30.58,0:00:31.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I'm{\1a&HFF&\3a&HFF&} banned
+Dialogue: 0,0:00:31.04,0:00:31.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I'm{\t(0,50,\c&H00D7FF&)} banned
+Dialogue: 0,0:00:31.32,0:00:31.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}because{\1a&HFF&\3a&HFF&} my fans
+Dialogue: 0,0:00:31.74,0:00:32.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}because{\t(0,50,\c&H00D7FF&)} my{\1a&HFF&\3a&HFF&} fans
+Dialogue: 0,0:00:32.06,0:00:32.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}because my{\t(0,50,\c&H00D7FF&)} fans
+Dialogue: 0,0:00:32.38,0:00:32.62,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}came{\1a&HFF&\3a&HFF&} to the mall?
+Dialogue: 0,0:00:32.62,0:00:32.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}came{\t(0,50,\c&H00D7FF&)} to{\1a&HFF&\3a&HFF&} the mall?
+Dialogue: 0,0:00:32.68,0:00:32.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}came to{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} mall?
+Dialogue: 0,0:00:32.80,0:00:33.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}came to the{\t(0,50,\c&H00D7FF&)} mall?
+Dialogue: 0,0:00:33.04,0:00:33.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}How?
+Dialogue: 0,0:00:33.90,0:00:34.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I'm
+Dialogue: 0,0:00:34.72,0:00:34.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}with{\1a&HFF&\3a&HFF&} Corey.
+Dialogue: 0,0:00:34.92,0:00:35.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}with{\t(0,50,\c&H00D7FF&)} Corey.
+Dialogue: 0,0:00:35.38,0:00:35.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}That{\1a&HFF&\3a&HFF&} don't
+Dialogue: 0,0:00:35.50,0:00:35.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}That{\t(0,50,\c&H00D7FF&)} don't
+Dialogue: 0,0:00:35.70,0:00:35.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}make{\1a&HFF&\3a&HFF&} any sense.
+Dialogue: 0,0:00:35.88,0:00:36.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}make{\t(0,50,\c&H00D7FF&)} any{\1a&HFF&\3a&HFF&} sense.
+Dialogue: 0,0:00:36.18,0:00:36.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}make any{\t(0,50,\c&H00D7FF&)} sense.
+Dialogue: 0,0:00:36.50,0:00:36.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}But anyway,{\1a&HFF&\3a&HFF&} let's go.
+Dialogue: 0,0:00:36.86,0:00:37.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}But anyway,{\t(0,50,\c&H00D7FF&)} let's{\1a&HFF&\3a&HFF&} go.
+Dialogue: 0,0:00:37.04,0:00:37.46,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}But anyway, let's{\t(0,50,\c&H00D7FF&)} go.
+Dialogue: 0,0:00:37.94,0:00:39.15,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Chat,{\1a&HFF&\3a&HFF&} I'm
+Dialogue: 0,0:00:39.15,0:00:40.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Chat,{\t(0,50,\c&H00D7FF&)} I'm
+Dialogue: 0,0:00:40.06,0:00:40.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}guess{\1a&HFF&\3a&HFF&} I'm banned
+Dialogue: 0,0:00:40.32,0:00:40.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}guess{\t(0,50,\c&H00D7FF&)} I'm{\1a&HFF&\3a&HFF&} banned
+Dialogue: 0,0:00:40.50,0:00:40.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}guess I'm{\t(0,50,\c&H00D7FF&)} banned
+Dialogue: 0,0:00:40.70,0:00:40.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}from{\1a&HFF&\3a&HFF&} Houston Mall, chat.
+Dialogue: 0,0:00:40.92,0:00:41.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}from{\t(0,50,\c&H00D7FF&)} Houston{\1a&HFF&\3a&HFF&} Mall, chat.
+Dialogue: 0,0:00:41.18,0:00:41.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}from Houston{\t(0,50,\c&H00D7FF&)} Mall,{\1a&HFF&\3a&HFF&} chat.
+Dialogue: 0,0:00:41.58,0:00:41.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}from Houston Mall,{\t(0,50,\c&H00D7FF&)} chat.

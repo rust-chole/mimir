@@ -1,0 +1,39 @@
+﻿[Script Info]
+Title: MIMIR Unified Clean Captions V15
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ViralMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,530,1
+Style: ViralSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,650,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.97,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Oh{\rViralMain} {\alpha&HFF&}my{\rViralMain} {\alpha&HFF&}God.{\rViralMain}
+Dialogue: 0,0:00:00.97,0:00:01.93,ViralMain,,0,0,0,,{\c&H00F2F2F2}Oh{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}my{\rViralMain} {\alpha&HFF&}God.{\rViralMain}
+Dialogue: 0,0:00:01.93,0:00:03.37,ViralMain,,0,0,0,,{\c&H00F2F2F2}Oh{\rViralMain} {\c&H00F2F2F2}my{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}God.{\rViralMain}
+Dialogue: 0,0:00:03.37,0:00:04.81,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Let{\rViralMain} {\alpha&HFF&}me{\rViralMain} {\alpha&HFF&}get{\rViralMain} {\alpha&HFF&}some.{\rViralMain}
+Dialogue: 0,0:00:04.81,0:00:05.77,ViralMain,,0,0,0,,{\c&H00F2F2F2}Let{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}me{\rViralMain} {\alpha&HFF&}get{\rViralMain} {\alpha&HFF&}some.{\rViralMain}
+Dialogue: 0,0:00:05.77,0:00:07.21,ViralMain,,0,0,0,,{\c&H00F2F2F2}Let{\rViralMain} {\c&H00F2F2F2}me{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}get{\rViralMain} {\alpha&HFF&}some.{\rViralMain}
+Dialogue: 0,0:00:07.21,0:00:09.14,ViralMain,,0,0,0,,{\c&H00F2F2F2}Let{\rViralMain} {\c&H00F2F2F2}me{\rViralMain} {\c&H00F2F2F2}get{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}some.{\rViralMain}
+Dialogue: 0,0:00:09.14,0:00:09.58,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain}
+Dialogue: 0,0:00:24.24,0:00:24.68,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}just,{\rViralMain} {\alpha&HFF&}I{\rViralMain} {\alpha&HFF&}bit{\rViralMain} {\alpha&HFF&}that{\rViralMain}
+Dialogue: 0,0:00:24.68,0:00:25.00,ViralMain,,0,0,0,,{\c&H00F2F2F2}just,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}bit{\rViralMain} {\alpha&HFF&}that{\rViralMain}
+Dialogue: 0,0:00:25.00,0:00:25.07,ViralMain,,0,0,0,,{\c&H00F2F2F2}just,{\rViralMain} {\c&H00F2F2F2}I{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}bit{\rViralMain} {\alpha&HFF&}that{\rViralMain}
+Dialogue: 0,0:00:25.06,0:00:25.27,ViralMain,,0,0,0,,{\c&H00F2F2F2}just,{\rViralMain} {\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}bit{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}that{\rViralMain}
+Dialogue: 0,0:00:25.27,0:00:25.48,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}shit.{\rViralMain}
+Dialogue: 0,0:00:25.48,0:00:25.64,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Nah,{\rViralMain} {\alpha&HFF&}it's{\rViralMain} {\alpha&HFF&}cool.{\rViralMain}
+Dialogue: 0,0:00:25.64,0:00:25.86,ViralMain,,0,0,0,,{\c&H00F2F2F2}Nah,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}it's{\rViralMain} {\alpha&HFF&}cool.{\rViralMain}
+Dialogue: 0,0:00:25.86,0:00:26.07,ViralMain,,0,0,0,,{\c&H00F2F2F2}Nah,{\rViralMain} {\c&H00F2F2F2}it's{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}cool.{\rViralMain}
+Dialogue: 0,0:00:26.07,0:00:26.28,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}It's{\rViralMain} {\alpha&HFF&}good.{\rViralMain}
+Dialogue: 0,0:00:26.28,0:00:26.60,ViralMain,,0,0,0,,{\c&H00F2F2F2}It's{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}good.{\rViralMain}
+Dialogue: 0,0:00:32.34,0:00:32.62,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}It's{\rViralMain} {\alpha&HFF&}good.{\rViralMain}
+Dialogue: 0,0:00:32.62,0:00:32.90,ViralMain,,0,0,0,,{\c&H00F2F2F2}It's{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}good.{\rViralMain}
+Dialogue: 0,0:00:32.90,0:00:33.02,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Appreciate{\rViralMain} {\alpha&HFF&}you,{\rViralMain} {\alpha&HFF&}bro.{\rViralMain}
+Dialogue: 0,0:00:33.02,0:00:33.30,ViralMain,,0,0,0,,{\c&H00F2F2F2}Appreciate{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}you,{\rViralMain} {\alpha&HFF&}bro.{\rViralMain}
+Dialogue: 0,0:00:33.30,0:00:34.31,ViralMain,,0,0,0,,{\c&H00F2F2F2}Appreciate{\rViralMain} {\c&H00F2F2F2}you,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}bro.{\rViralMain}

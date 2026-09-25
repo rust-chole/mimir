@@ -1,0 +1,141 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}And{\1a&HFF&\3a&HFF&} I saw you
+Dialogue: 0,0:00:00.12,0:00:00.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}And{\t(0,50,\c&H00D7FF&)} I{\1a&HFF&\3a&HFF&} saw you
+Dialogue: 0,0:00:00.28,0:00:00.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}And I{\t(0,50,\c&H00D7FF&)} saw{\1a&HFF&\3a&HFF&} you
+Dialogue: 0,0:00:00.42,0:00:00.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}And I saw{\t(0,50,\c&H00D7FF&)} you
+Dialogue: 0,0:00:00.58,0:00:00.74,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}brought{\1a&HFF&\3a&HFF&} the Lambo
+Dialogue: 0,0:00:00.74,0:00:01.04,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}brought{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} Lambo
+Dialogue: 0,0:00:01.04,0:00:01.16,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}brought the{\t(0,50,\c&H00D7FF&)} Lambo
+Dialogue: 0,0:00:01.16,0:00:01.38,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}brought the Lambo
+Dialogue: 0,0:00:01.16,0:00:01.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}out{\1a&HFF&\3a&HFF&} of Miami.
+Dialogue: 0,0:00:01.38,0:00:01.58,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}brought the Lambo
+Dialogue: 0,0:00:01.38,0:00:01.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}out{\t(0,50,\c&H00D7FF&)} of{\1a&HFF&\3a&HFF&} Miami.
+Dialogue: 0,0:00:01.58,0:00:01.90,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}brought the Lambo
+Dialogue: 0,0:00:01.58,0:00:01.90,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}out of{\t(0,50,\c&H00D7FF&)} Miami.
+Dialogue: 0,0:00:02.16,0:00:02.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}You{\1a&HFF&\3a&HFF&} know
+Dialogue: 0,0:00:02.28,0:00:02.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You{\t(0,50,\c&H00D7FF&)} know
+Dialogue: 0,0:00:02.36,0:00:02.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} had to do
+Dialogue: 0,0:00:02.52,0:00:02.62,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H00D7FF&)} had{\1a&HFF&\3a&HFF&} to do
+Dialogue: 0,0:00:02.62,0:00:02.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I had{\t(0,50,\c&H00D7FF&)} to{\1a&HFF&\3a&HFF&} do
+Dialogue: 0,0:00:02.74,0:00:02.98,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I had to{\t(0,50,\c&H00D7FF&)} do
+Dialogue: 0,0:00:02.98,0:00:03.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}the{\1a&HFF&\3a&HFF&} same thing.
+Dialogue: 0,0:00:03.12,0:00:03.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\t(0,50,\c&H00D7FF&)} same{\1a&HFF&\3a&HFF&} thing.
+Dialogue: 0,0:00:03.40,0:00:03.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the same{\t(0,50,\c&H00D7FF&)} thing.
+Dialogue: 0,0:00:03.96,0:00:04.10,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Which
+Dialogue: 0,0:00:04.10,0:00:04.56,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} Which
+Dialogue: 0,0:00:04.10,0:00:04.56,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Lamborghini{\1a&HFF&\3a&HFF&} is
+Dialogue: 0,0:00:04.56,0:00:04.88,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} Which
+Dialogue: 0,0:00:04.56,0:00:04.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Lamborghini{\t(0,50,\c&H00D7FF&)} is
+Dialogue: 1,0:00:04.76,0:00:04.98,MimirSecondary,,0,0,0,,{\an2\pos(540,1199)}{\c&HFFE054&}SPEED:{\c&HFFF7E8&\t(0,50,\c&HFFE054&)} this{\1a&HFF&\3a&HFF&} one?
+Dialogue: 1,0:00:04.98,0:00:05.30,MimirSecondary,,0,0,0,,{\an2\pos(540,1199)}{\c&HFFE054&}SPEED:{\c&HFFF7E8&} this{\t(0,50,\c&HFFE054&)} one?
+Dialogue: 0,0:00:05.00,0:00:05.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}This{\1a&HFF&\3a&HFF&} the SVJ, you
+Dialogue: 0,0:00:05.30,0:00:05.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}This{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} SVJ, you
+Dialogue: 0,0:00:05.52,0:00:06.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}This the{\t(0,50,\c&H0080FF&)} SVJ,{\1a&HFF&\3a&HFF&} you
+Dialogue: 0,0:00:06.24,0:00:06.26,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}This the{\c&H0080FF&} SVJ,{\c&HF2F2F2&\t(0,20,\c&H00D7FF&)} you
+Dialogue: 0,0:00:06.26,0:00:06.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}can't{\1a&HFF&\3a&HFF&} even get this,
+Dialogue: 0,0:00:06.40,0:00:06.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}can't{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} even{\1a&HFF&\3a&HFF&} get this,
+Dialogue: 0,0:00:06.60,0:00:06.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}can't{\c&HF2F2F2&} even{\t(0,50,\c&H00D7FF&)} get{\1a&HFF&\3a&HFF&} this,
+Dialogue: 0,0:00:06.78,0:00:07.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}can't{\c&HF2F2F2&} even get{\t(0,50,\c&H00D7FF&)} this,
+Dialogue: 0,0:00:07.34,0:00:07.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} limited edition.
+Dialogue: 0,0:00:07.60,0:00:07.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} What{\1a&HFF&\3a&HFF&} the
+Dialogue: 0,0:00:07.80,0:00:08.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&H0080FF&} What{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} the
+Dialogue: 0,0:00:08.04,0:00:08.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,20,\c&H00D7FF&)}fuck?
+Dialogue: 0,0:00:08.06,0:00:08.27,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}One{\1a&HFF&\3a&HFF&} on one.
+Dialogue: 0,0:00:08.27,0:00:08.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One{\t(0,50,\c&H00D7FF&)} on{\1a&HFF&\3a&HFF&} one.
+Dialogue: 0,0:00:08.70,0:00:08.91,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One on{\t(0,50,\c&H00D7FF&)} one.
+Dialogue: 0,0:00:08.91,0:00:09.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}One{\1a&HFF&\3a&HFF&} on one, man.
+Dialogue: 0,0:00:09.12,0:00:09.55,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One{\t(0,50,\c&H00D7FF&)} on{\1a&HFF&\3a&HFF&} one, man.
+Dialogue: 0,0:00:09.55,0:00:09.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One on{\t(0,50,\c&H00D7FF&)} one,{\1a&HFF&\3a&HFF&} man.
+Dialogue: 0,0:00:09.76,0:00:10.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One on one,{\t(0,50,\c&H00D7FF&)} man.
+Dialogue: 0,0:00:10.56,0:00:10.65,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}One{\1a&HFF&\3a&HFF&} on one, chat.
+Dialogue: 0,0:00:10.65,0:00:10.83,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One{\t(0,50,\c&H00D7FF&)} on{\1a&HFF&\3a&HFF&} one, chat.
+Dialogue: 0,0:00:10.83,0:00:11.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One on{\t(0,50,\c&H00D7FF&)} one,{\1a&HFF&\3a&HFF&} chat.
+Dialogue: 0,0:00:11.32,0:00:11.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}One on one,{\t(0,50,\c&H00D7FF&)} chat.
+Dialogue: 0,0:00:12.50,0:00:12.84,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Chat,
+Dialogue: 0,0:00:12.84,0:00:13.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} what{\1a&HFF&\3a&HFF&} the hell
+Dialogue: 0,0:00:13.08,0:00:13.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&H0080FF&} what{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} hell
+Dialogue: 0,0:00:13.28,0:00:13.44,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&H0080FF&} what{\c&HF2F2F2&} the{\t(0,50,\c&H00D7FF&)} hell
+Dialogue: 0,0:00:13.44,0:00:13.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} is{\1a&HFF&\3a&HFF&} this?
+Dialogue: 0,0:00:13.66,0:00:14.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} is{\t(0,50,\c&H00D7FF&)} this?
+Dialogue: 0,0:00:14.06,0:00:14.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Fuck{\1a&HFF&\3a&HFF&} with it.
+Dialogue: 0,0:00:14.22,0:00:14.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Fuck{\t(0,50,\c&H00D7FF&)} with{\1a&HFF&\3a&HFF&} it.
+Dialogue: 0,0:00:14.40,0:00:14.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Fuck with{\t(0,50,\c&H00D7FF&)} it.
+Dialogue: 0,0:00:14.90,0:00:15.26,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I{\1a&HFF&\3a&HFF&} can
+Dialogue: 0,0:00:15.26,0:00:15.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I{\t(0,50,\c&H0080FF&)} can
+Dialogue: 0,0:00:15.36,0:00:15.48,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}let{\1a&HFF&\3a&HFF&} you hold it.
+Dialogue: 0,0:00:15.48,0:00:15.66,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}let{\t(0,50,\c&H00D7FF&)} you{\1a&HFF&\3a&HFF&} hold it.
+Dialogue: 0,0:00:15.66,0:00:15.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}let you{\t(0,50,\c&H0080FF&)} hold{\1a&HFF&\3a&HFF&} it.
+Dialogue: 0,0:00:15.78,0:00:16.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}let you{\c&H0080FF&} hold{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} it.
+Dialogue: 0,0:00:16.88,0:00:17.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}You{\1a&HFF&\3a&HFF&} gotta let me
+Dialogue: 0,0:00:17.24,0:00:17.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You{\t(0,50,\c&H00D7FF&)} gotta{\1a&HFF&\3a&HFF&} let me
+Dialogue: 0,0:00:17.32,0:00:17.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You gotta{\t(0,50,\c&H0080FF&)} let{\1a&HFF&\3a&HFF&} me
+Dialogue: 0,0:00:17.40,0:00:17.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You gotta{\c&H0080FF&} let{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} me
+Dialogue: 0,0:00:17.68,0:00:17.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}hold that{\1a&HFF&\3a&HFF&} one though.
+Dialogue: 0,0:00:17.92,0:00:18.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}hold that{\t(0,50,\c&H00D7FF&)} one{\1a&HFF&\3a&HFF&} though.
+Dialogue: 0,0:00:18.10,0:00:18.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}hold that one{\t(0,50,\c&H00D7FF&)} though.
+Dialogue: 0,0:00:18.62,0:00:18.80,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} do a trade-off?
+Dialogue: 0,0:00:18.80,0:00:18.92,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} do{\1a&HFF&\3a&HFF&} a trade-off?
+Dialogue: 0,0:00:18.92,0:00:19.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We do{\t(0,50,\c&H00D7FF&)} a{\1a&HFF&\3a&HFF&} trade-off?
+Dialogue: 0,0:00:19.06,0:00:20.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We do a{\t(0,50,\c&H00D7FF&)} trade-off?
+Dialogue: 0,0:00:20.06,0:00:20.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} I{\1a&HFF&\3a&HFF&} ain't trading you.
+Dialogue: 0,0:00:20.42,0:00:20.46,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} I{\t(0,40,\c&H00D7FF&)} ain't{\1a&HFF&\3a&HFF&} trading you.
+Dialogue: 0,0:00:20.46,0:00:20.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} I ain't{\t(0,50,\c&H00D7FF&)} trading{\1a&HFF&\3a&HFF&} you.
+Dialogue: 0,0:00:20.68,0:00:20.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} I ain't trading{\t(0,50,\c&H00D7FF&)} you.
+Dialogue: 0,0:00:20.74,0:00:20.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}You{\1a&HFF&\3a&HFF&} know what
+Dialogue: 0,0:00:20.86,0:00:20.94,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You{\t(0,50,\c&H00D7FF&)} know{\1a&HFF&\3a&HFF&} what
+Dialogue: 0,0:00:20.94,0:00:21.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}You know{\t(0,50,\c&H0080FF&)} what
+Dialogue: 0,0:00:21.10,0:00:21.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I'm{\1a&HFF&\3a&HFF&} saying, a little
+Dialogue: 0,0:00:21.16,0:00:21.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I'm{\t(0,50,\c&H00D7FF&)} saying,{\1a&HFF&\3a&HFF&} a little
+Dialogue: 0,0:00:21.24,0:00:21.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I'm saying,{\t(0,50,\c&H00D7FF&)} a{\1a&HFF&\3a&HFF&} little
+Dialogue: 0,0:00:21.60,0:00:21.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I'm saying, a{\t(0,50,\c&H00D7FF&)} little
+Dialogue: 0,0:00:21.88,0:00:22.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}whip{\1a&HFF&\3a&HFF&} for whip.
+Dialogue: 0,0:00:22.04,0:00:22.40,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}whip{\t(0,50,\c&H00D7FF&)} for{\1a&HFF&\3a&HFF&} whip.
+Dialogue: 0,0:00:22.40,0:00:22.56,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}whip for{\t(0,50,\c&H00D7FF&)} whip.
+Dialogue: 0,0:00:22.56,0:00:22.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H0080FF&)} Hold{\1a&HFF&\3a&HFF&} on, what
+Dialogue: 0,0:00:22.86,0:00:23.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&H0080FF&} Hold{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} on,{\1a&HFF&\3a&HFF&} what
+Dialogue: 0,0:00:23.02,0:00:23.31,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&H0080FF&} Hold{\c&HF2F2F2&} on,{\t(0,50,\c&H00D7FF&)} what
+Dialogue: 0,0:00:23.31,0:00:23.53,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}the{\1a&HFF&\3a&HFF&} hell?
+Dialogue: 0,0:00:23.53,0:00:23.84,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\t(0,50,\c&H00D7FF&)} hell?
+Dialogue: 0,0:00:23.84,0:00:24.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} You{\1a&HFF&\3a&HFF&} know what I'm
+Dialogue: 0,0:00:24.16,0:00:24.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} You{\t(0,50,\c&H00D7FF&)} know what I'm
+Dialogue: 0,0:00:24.30,0:00:24.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}saying, let{\1a&HFF&\3a&HFF&} me
+Dialogue: 0,0:00:24.54,0:00:24.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}saying, let{\t(0,50,\c&H00D7FF&)} me
+Dialogue: 0,0:00:24.68,0:00:24.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}check{\1a&HFF&\3a&HFF&} it out.
+Dialogue: 0,0:00:24.88,0:00:25.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}check{\t(0,50,\c&H00D7FF&)} it{\1a&HFF&\3a&HFF&} out.
+Dialogue: 0,0:00:25.08,0:00:25.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}check it{\t(0,50,\c&H00D7FF&)} out.
+Dialogue: 0,0:00:25.28,0:00:25.52,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} You{\1a&HFF&\3a&HFF&} know what
+Dialogue: 0,0:00:25.52,0:00:25.54,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} You{\t(0,20,\c&H00D7FF&)} know what
+Dialogue: 0,0:00:25.54,0:00:25.82,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} You know what
+Dialogue: 0,0:00:25.54,0:00:25.82,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}I'm{\1a&HFF&\3a&HFF&} saying?
+Dialogue: 0,0:00:25.82,0:00:26.14,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&} You know what
+Dialogue: 0,0:00:25.82,0:00:26.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}I'm{\t(0,50,\c&H00D7FF&)} saying?
+Dialogue: 0,0:00:26.42,0:00:26.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H00D7FF&}SPEED:{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} Damn.
+Dialogue: 0,0:00:26.78,0:00:27.42,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Wait,{\1a&HFF&\3a&HFF&} they
+Dialogue: 0,0:00:27.42,0:00:27.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Wait,{\t(0,50,\c&H00D7FF&)} they
+Dialogue: 0,0:00:27.64,0:00:27.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}saying{\1a&HFF&\3a&HFF&} the mic.
+Dialogue: 0,0:00:27.78,0:00:28.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}saying{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} mic.
+Dialogue: 0,0:00:28.04,0:00:28.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}saying the{\t(0,50,\c&H00D7FF&)} mic.
+Dialogue: 0,0:00:28.18,0:00:28.34,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}What's{\1a&HFF&\3a&HFF&} wrong
+Dialogue: 0,0:00:28.34,0:00:28.40,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}What's{\t(0,50,\c&H00D7FF&)} wrong
+Dialogue: 0,0:00:28.40,0:00:28.68,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}What's wrong
+Dialogue: 0,0:00:28.40,0:00:28.68,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}with{\1a&HFF&\3a&HFF&} the mic, bro?
+Dialogue: 0,0:00:28.68,0:00:29.22,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}What's wrong
+Dialogue: 0,0:00:28.68,0:00:29.22,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}with{\t(0,50,\c&H00D7FF&)} the mic,{\1a&HFF&\3a&HFF&} bro?
+Dialogue: 0,0:00:29.22,0:00:29.50,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}What's wrong
+Dialogue: 0,0:00:29.22,0:00:29.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}with the mic,{\t(0,50,\c&H00D7FF&)} bro?

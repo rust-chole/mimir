@@ -1,0 +1,43 @@
+{
+ "build": {
+  "exit": 0,
+  "output": "{\n \"added\": 64,\n \"modified\": 6,\n \"zip\": \"C:\\\\Users\\\\yusuf\\\\Desktop\\\\mimir_unified_clean_v3\\\\mimir_current_root_to_pro_edit_v5_patch.zip\"\n}\n  A .env.example\n  A ai/editor/pro_edit/__init__.py\n  A ai/editor/pro_edit/camera.py\n  A ai/editor/pro_edit/caption_action.py\n  A ai/editor/pro_edit/caption_background.py\n  A ai/editor/pro_edit/caption_brand.py\n  A ai/editor/pro_edit/caption_guard.py\n  A ai/editor/pro_edit/caption_layout.py\n  A ai/editor/pro_edit/caption_legibility.py\n  A ai/editor/pro_edit/caption_occupancy.py\n  A ai/editor/pro_edit/caption_placement.py\n  A ai/editor/pro_edit/caption_platform.py\n  A ai/editor/pro_edit/caption_presentation.py\n  A ai/editor/pro_edit/caption_primitives.py\n  A ai/editor/pro_edit/config.py\n  A ai/editor/pro_edit/context.py\n  A ai/editor/pro_edit/diagnostics.py\n  A ai/editor/pro_edit/editorial_energy.py\n  A ai/editor/pro_edit/errors.py\n  A ai/editor/pro_edit/examples/caption_brand_example.json\n  A ai/editor/pro_edit/examples/caption_platform_custom_example.json\n  A ai/editor/pro_edit/examples/caption_platform_profile_set_example.json\n  A ai/editor/pro_edit/executor.py\n  A ai/editor/pro_edit/ffmpeg_filters.py\n  A ai/editor/pro_edit/font_metrics.py\n  A ai/editor/pro_edit/framing.py\n  A ai/editor/pro_edit/intro_timeline.py\n  A ai/editor/pro_edit/media.py\n  A ai/editor/pro_edit/models/README.txt\n  A ai/editor/pro_edit/planner.py\n  A ai/editor/pro_edit/policy.py\n  A ai/editor/pro_edit/presets.py\n  A ai/editor/pro_edit/providers.py\n  A ai/editor/pro_edit/request.py\n  A ai/editor/pro_edit/schema.py\n  A ai/editor/pro_edit/speaker_link.py\n  A ai/editor/pro_edit/stage.py\n  A ai/editor/pro_edit/story.py\n  A ai/editor/pro_edit/style.py\n  A ai/editor/pro_edit/subjects.py\n  A ai/editor/pro_edit/timebase.py\n  A ai/editor/pro_edit/validator.py\n  A ai/editor/pro_edit/vision/__init__.py\n  A ai/editor/pro_edit/vision/association.py\n  A ai/editor/pro_edit/vision/detectors.py\n  A ai/editor/pro_edit/vision/frames.py\n  A ai/editor/pro_edit/vision/provider.py\n  A ai/editor/pro_edit/vision/tracker.py\n  A tests/__init__.py\n  A tests/golden/caption_presentation_v3_1.json\n  A tests/pipeline_harness.py\n  A tests/pro_edit_fixtures.py\n  A tests/test_pro_edit_captions.py\n  A tests/test_pro_edit_captions_v4.py\n  A tests/test_pro_edit_current_root.py\n  A tests/test_pro_edit_filters.py\n  A tests/test_pro_edit_pipeline.py\n  A tests/test_pro_edit_planner.py\n  A tests/test_pro_edit_presets.py\n  A tests/test_pro_edit_protection.py\n  A tests/test_pro_edit_render.py\n  A tests/test_pro_edit_timeline.py\n  A tests/test_pro_edit_v5.py\n  A tests/test_pro_edit_validator.py\n  M ai/editor/caption_renderer.py\n  M ai/editor/intro_analyzer.py\n  M ai/editor/intro_renderer.py\n  M ai/shorts_pipeline.py\n  M requirements.txt\n  M verify_unified_clean.py"
+ },
+ "zip": {
+  "path": "C:\\Users\\yusuf\\Desktop\\mimir_unified_clean_v3\\mimir_current_root_to_pro_edit_v5_patch.zip",
+  "bytes": 365626,
+  "sha256": "c0b09dc882964fa5fe2ac73b7550f0409928c5775fed965813c94da9c21534b1"
+ },
+ "scan": {
+  "exit": 0,
+  "members": 70,
+  "failures": []
+ },
+ "repro": {
+  "exit": 0,
+  "python_zipfile": {
+   "entries": 107,
+   "only_patched": [],
+   "only_final": [],
+   "content_differs": [],
+   "mismatch_count": 0
+  },
+  "expand_archive_exit": 0,
+  "powershell_expand_archive": {
+   "entries": 107,
+   "only_patched": [],
+   "only_final": [],
+   "content_differs": [],
+   "mismatch_count": 0
+  }
+ },
+ "live_root_original_sources": {
+  "content_differs": [],
+  "missing_originals": [],
+  "new_top_level_files": [
+   "MIMIR_V5_REBASE_REPORT.md",
+   "mimir_current_root_to_pro_edit_v5_patch.zip"
+  ],
+  "unchanged": true
+ }
+}

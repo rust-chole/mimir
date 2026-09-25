@@ -1,0 +1,90 @@
+﻿[Script Info]
+Title: MIMIR Pro Edit Caption Presentation v4
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MimirMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+Style: MimirTertiary,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:13.62,0:00:14.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Stop,{\1a&HFF&\3a&HFF&} bro.
+Dialogue: 0,0:00:14.14,0:00:14.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Stop,{\t(0,50,\c&H0080FF&)} bro.
+Dialogue: 0,0:00:14.54,0:00:14.82,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}Stop.
+Dialogue: 0,0:00:14.82,0:00:15.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}Stop{\1a&HFF&\3a&HFF&} fighting, bro.
+Dialogue: 0,0:00:15.24,0:00:15.50,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}Stop{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} fighting,{\1a&HFF&\3a&HFF&} bro.
+Dialogue: 0,0:00:15.50,0:00:16.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&H0080FF&}Stop{\c&HF2F2F2&} fighting,{\t(0,50,\c&H00D7FF&)} bro.
+Dialogue: 0,0:00:16.24,0:00:16.57,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Stop.
+Dialogue: 0,0:00:16.57,0:00:16.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Hey, stop{\1a&HFF&\3a&HFF&} fighting.
+Dialogue: 0,0:00:16.64,0:00:17.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Hey, stop{\t(0,50,\c&H00D7FF&)} fighting.
+Dialogue: 0,0:00:18.40,0:00:18.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Salam{\1a&HFF&\3a&HFF&} alaikum.
+Dialogue: 0,0:00:18.72,0:00:19.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Salam{\t(0,50,\c&H0080FF&)} alaikum.
+Dialogue: 0,0:00:19.18,0:00:19.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Stop{\1a&HFF&\3a&HFF&} fighting.
+Dialogue: 0,0:00:19.32,0:00:19.94,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Stop{\t(0,50,\c&H0080FF&)} fighting.
+Dialogue: 0,0:00:19.94,0:00:20.32,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We,{\1a&HFF&\3a&HFF&} bro, listen,
+Dialogue: 0,0:00:20.32,0:00:21.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We,{\t(0,50,\c&H0080FF&)} bro,{\1a&HFF&\3a&HFF&} listen,
+Dialogue: 0,0:00:21.06,0:00:21.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We,{\c&H0080FF&} bro,{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} listen,
+Dialogue: 0,0:00:21.80,0:00:21.87,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}listen.
+Dialogue: 0,0:00:21.84,0:00:21.98,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} at the pyramids
+Dialogue: 0,0:00:21.98,0:00:22.10,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} at{\1a&HFF&\3a&HFF&} the pyramids
+Dialogue: 0,0:00:22.10,0:00:22.52,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}We at{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} pyramids
+Dialogue: 0,0:00:22.52,0:00:22.78,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}We at the{\t(0,50,\c&H0080FF&)} pyramids
+Dialogue: 0,0:00:22.78,0:00:23.10,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&}We at the{\c&H0080FF&} pyramids
+Dialogue: 0,0:00:22.78,0:00:23.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}and y'all fighting?
+Dialogue: 0,0:00:23.78,0:00:24.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} at the
+Dialogue: 0,0:00:24.02,0:00:24.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} at{\1a&HFF&\3a&HFF&} the
+Dialogue: 0,0:00:24.16,0:00:24.60,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We at{\t(0,50,\c&H00D7FF&)} the
+Dialogue: 0,0:00:24.60,0:00:24.66,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&HF2F2F2&\t(0,50,\c&H0080FF&)}pyramids{\1a&HFF&\3a&HFF&} and y'all
+Dialogue: 0,0:00:24.66,0:00:24.73,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}pyramids{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)} and{\1a&HFF&\3a&HFF&} y'all
+Dialogue: 0,0:00:24.73,0:00:24.84,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}pyramids{\c&HF2F2F2&} and{\t(0,50,\c&H00D7FF&)} y'all
+Dialogue: 0,0:00:24.84,0:00:25.16,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}pyramids{\c&HF2F2F2&} and y'all
+Dialogue: 0,0:00:24.84,0:00:25.16,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}fighting{\1a&HFF&\3a&HFF&} right now.
+Dialogue: 0,0:00:25.16,0:00:25.38,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}pyramids{\c&HF2F2F2&} and y'all
+Dialogue: 0,0:00:25.16,0:00:25.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}fighting{\t(0,50,\c&H00D7FF&)} right{\1a&HFF&\3a&HFF&} now.
+Dialogue: 0,0:00:25.38,0:00:25.70,MimirMain,,0,0,0,,{\an2\pos(540,1313)}{\c&H0080FF&}pyramids{\c&HF2F2F2&} and y'all
+Dialogue: 0,0:00:25.38,0:00:25.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}fighting right{\t(0,50,\c&H00D7FF&)} now.
+Dialogue: 0,0:00:25.88,0:00:26.14,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} at the pyramids.
+Dialogue: 0,0:00:26.14,0:00:26.28,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} at{\1a&HFF&\3a&HFF&} the pyramids.
+Dialogue: 0,0:00:26.28,0:00:26.98,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We at{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} pyramids.
+Dialogue: 0,0:00:26.98,0:00:27.30,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We at the{\t(0,50,\c&H00D7FF&)} pyramids.
+Dialogue: 0,0:00:27.86,0:00:28.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Come{\1a&HFF&\3a&HFF&} on, y'all.
+Dialogue: 0,0:00:28.08,0:00:28.34,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Come{\t(0,50,\c&H00D7FF&)} on,{\1a&HFF&\3a&HFF&} y'all.
+Dialogue: 0,0:00:28.34,0:00:28.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Come on,{\t(0,50,\c&H00D7FF&)} y'all.
+Dialogue: 0,0:00:28.52,0:00:29.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Don't{\1a&HFF&\3a&HFF&} be doing that.
+Dialogue: 0,0:00:29.64,0:00:29.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Don't{\t(0,50,\c&H00D7FF&)} be{\1a&HFF&\3a&HFF&} doing that.
+Dialogue: 0,0:00:29.78,0:00:30.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Don't be{\t(0,50,\c&H00D7FF&)} doing{\1a&HFF&\3a&HFF&} that.
+Dialogue: 0,0:00:30.08,0:00:30.88,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Don't be doing{\t(0,50,\c&H00D7FF&)} that.
+Dialogue: 0,0:00:31.62,0:00:31.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,20,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} got the pyramids
+Dialogue: 0,0:00:31.64,0:00:31.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} got{\1a&HFF&\3a&HFF&} the pyramids
+Dialogue: 0,0:00:31.78,0:00:32.10,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We got{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} pyramids
+Dialogue: 0,0:00:32.10,0:00:32.34,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We got the{\t(0,50,\c&H00D7FF&)} pyramids
+Dialogue: 0,0:00:32.34,0:00:32.54,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}and{\1a&HFF&\3a&HFF&} y'all fighting.
+Dialogue: 0,0:00:32.54,0:00:32.70,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}and{\t(0,50,\c&H00D7FF&)} y'all{\1a&HFF&\3a&HFF&} fighting.
+Dialogue: 0,0:00:32.70,0:00:33.08,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}and y'all{\t(0,50,\c&H00D7FF&)} fighting.
+Dialogue: 0,0:00:34.30,0:00:34.36,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Stop{\1a&HFF&\3a&HFF&} fighting.
+Dialogue: 0,0:00:34.36,0:00:34.74,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Stop{\t(0,50,\c&H00D7FF&)} fighting.
+Dialogue: 0,0:00:37.28,0:00:37.58,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}What{\1a&HFF&\3a&HFF&} the hell?
+Dialogue: 0,0:00:37.58,0:00:37.78,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}What{\t(0,50,\c&H00D7FF&)} the{\1a&HFF&\3a&HFF&} hell?
+Dialogue: 0,0:00:37.78,0:00:38.12,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}What the{\t(0,50,\c&H00D7FF&)} hell?
+Dialogue: 0,0:00:38.42,0:00:38.52,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Come{\1a&HFF&\3a&HFF&} on, bro.
+Dialogue: 0,0:00:38.52,0:00:38.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Come{\t(0,50,\c&H00D7FF&)} on,{\1a&HFF&\3a&HFF&} bro.
+Dialogue: 0,0:00:38.72,0:00:39.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Come on,{\t(0,50,\c&H00D7FF&)} bro.
+Dialogue: 0,0:00:39.60,0:00:39.86,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Hey,{\1a&HFF&\3a&HFF&} hey,
+Dialogue: 0,0:00:39.86,0:00:40.18,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Hey,{\t(0,50,\c&H00D7FF&)} hey,
+Dialogue: 0,0:00:40.68,0:00:40.96,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}hey,{\1a&HFF&\3a&HFF&} hey, hey.
+Dialogue: 0,0:00:40.96,0:00:41.76,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}hey,{\t(0,50,\c&H00D7FF&)} hey,{\1a&HFF&\3a&HFF&} hey.
+Dialogue: 0,0:00:41.76,0:00:42.24,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}hey, hey,{\t(0,50,\c&H00D7FF&)} hey.
+Dialogue: 0,0:00:42.44,0:00:42.64,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}We{\1a&HFF&\3a&HFF&} are at
+Dialogue: 0,0:00:42.64,0:00:42.82,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We{\t(0,50,\c&H00D7FF&)} are{\1a&HFF&\3a&HFF&} at
+Dialogue: 0,0:00:42.82,0:00:43.02,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}We are{\t(0,50,\c&H00D7FF&)} at
+Dialogue: 0,0:00:43.02,0:00:43.72,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}the{\1a&HFF&\3a&HFF&} pyramids.
+Dialogue: 0,0:00:43.72,0:00:44.04,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}the{\t(0,50,\c&H00D7FF&)} pyramids.
+Dialogue: 0,0:00:44.86,0:00:45.06,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&\t(0,50,\c&H00D7FF&)}Stop,{\1a&HFF&\3a&HFF&} y'all.
+Dialogue: 0,0:00:45.06,0:00:45.38,MimirMain,,0,0,0,,{\an2\pos(540,1390)}{\c&HF2F2F2&}Stop,{\t(0,50,\c&H00D7FF&)} y'all.

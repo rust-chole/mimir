@@ -1,0 +1,65 @@
+﻿--- a/ai/editor/teaser_analyzer.py
++++ b/ai/editor/teaser_analyzer.py
+@@ -160,21 +160,35 @@ TEASER_INSTRUCTIONS = """
+ You are selecting a COLD OPEN / TEASER from an already selected clip.
+ 
+ The final short will be edited like this:
+ 
+     [TEASER FROM A STRONG LATER MOMENT]
+                     â†“
+               hard restart
+                     â†“
+     [THE MAIN CLIP FROM ITS REAL BEGINNING]
+ 
+ The teaser scene will therefore appear once at the beginning and then
+ naturally appear again later when the main clip reaches that moment.
+ 
+ This repetition is intentional.
+ 
+ 
+ ============================================================
+ YOUR MAIN JOB
+ ============================================================
+ 
+-Select the strongest short spoken moment that makes a new viewer
+-immediately curious about what led to it.
+-
+-You are NOT writing a hook sentence.
+-
+-You are selecting REAL WORDS that were actually spoken.
+-
+-You must select a contiguous range from the provided AVAILABLE WORDS.
++Select the strongest PEAK EVENT from the provided MULTIMODAL PEAK CANDIDATES.
++
++You are NOT writing a hook sentence.
++
++You are selecting a REAL PEAK WINDOW from the provided candidates.
++
++Each candidate has:
++  - peak_id
++  - core time range (start-end)
++  - recommended teaser window (teaser_start-teaser_end)
++  - combined_score (audio+visual alignment strength)
++  - audio_score, visual_score
++  - signals (event types like explosion, crash, reaction, reveal, etc.)
++  - visual_description
++  - nearby_text (words spoken in that window)
++
++Your selection MUST be one of the provided peak candidates.
++Choose the candidate with the strongest combined evidence.
++If a silent physical event is the strongest peak, select it.
++If a spoken reaction aligned with audio+visual is strongest, select it.
++Do not select a weak spoken phrase just because it has "clean" words.
+ 
+ Return:
+ 
+-peak_id
+-start_word_id
+-end_word_id
++peak_id
++teaser_start
++teaser_end
+ 
+ The software will calculate all timestamps itself.
+ 
+ Never invent timestamps.

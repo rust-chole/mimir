@@ -1,0 +1,91 @@
+﻿[Script Info]
+Title: MIMIR Unified Clean Captions V15
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+ScaledBorderAndShadow: yes
+WrapStyle: 2
+YCbCr Matrix: TV.709
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: ViralMain,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,530,1
+Style: ViralSecondary,Arial,74,&H00FFF7E8,&H00FFF7E8,&H00000000,&HFF000000,-1,0,0,0,100,100,0,0,1,6,2,2,70,70,650,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:06.26,0:00:06.68,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}What?{\rViralMain}
+Dialogue: 0,0:00:07.92,0:00:08.18,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}What{\rViralMain} {\alpha&HFF&}happened?{\rViralMain}
+Dialogue: 0,0:00:08.18,0:00:08.50,ViralMain,,0,0,0,,{\c&H00F2F2F2}What{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}happened?{\rViralMain}
+Dialogue: 0,0:00:09.04,0:00:09.36,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}You{\rViralMain}
+Dialogue: 0,0:00:09.82,0:00:10.42,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}wanna{\rViralMain} {\alpha&HFF&}ban{\rViralMain} {\alpha&HFF&}me{\rViralMain} {\alpha&HFF&}from{\rViralMain}
+Dialogue: 0,0:00:10.42,0:00:10.49,ViralMain,,0,0,0,,{\c&H00F2F2F2}wanna{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}ban{\rViralMain} {\alpha&HFF&}me{\rViralMain} {\alpha&HFF&}from{\rViralMain}
+Dialogue: 0,0:00:10.48,0:00:10.62,ViralMain,,0,0,0,,{\c&H00F2F2F2}wanna{\rViralMain} {\b1\c&H000080FF}ban{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}me{\rViralMain} {\alpha&HFF&}from{\rViralMain}
+Dialogue: 0,0:00:10.62,0:00:10.74,ViralMain,,0,0,0,,{\c&H00F2F2F2}wanna{\rViralMain} {\b1\c&H000080FF}ban{\rViralMain} {\c&H00F2F2F2}me{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}from{\rViralMain}
+Dialogue: 0,0:00:10.74,0:00:11.00,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}the{\rViralMain} {\alpha&HFF&}mall?{\rViralMain}
+Dialogue: 0,0:00:11.00,0:00:11.32,ViralMain,,0,0,0,,{\c&H00F2F2F2}the{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}mall?{\rViralMain}
+Dialogue: 0,0:00:11.38,0:00:11.80,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}You're{\rViralMain} {\alpha&HFF&}not{\rViralMain} {\alpha&HFF&}allowed{\rViralMain} {\alpha&HFF&}to{\rViralMain}
+Dialogue: 0,0:00:11.80,0:00:11.94,ViralMain,,0,0,0,,{\c&H00F2F2F2}You're{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}not{\rViralMain} {\alpha&HFF&}allowed{\rViralMain} {\alpha&HFF&}to{\rViralMain}
+Dialogue: 0,0:00:11.94,0:00:12.10,ViralMain,,0,0,0,,{\c&H00F2F2F2}You're{\rViralMain} {\b1\c&H000080FF}not{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}allowed{\rViralMain} {\alpha&HFF&}to{\rViralMain}
+Dialogue: 0,0:00:12.10,0:00:12.28,ViralMain,,0,0,0,,{\c&H00F2F2F2}You're{\rViralMain} {\b1\c&H000080FF}not{\rViralMain} {\c&H00F2F2F2}allowed{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}to{\rViralMain}
+Dialogue: 0,0:00:12.28,0:00:12.42,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}come{\rViralMain} {\alpha&HFF&}back{\rViralMain} {\alpha&HFF&}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:12.42,0:00:12.66,ViralMain,,0,0,0,,{\b1\c&H000080FF}come{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}back{\rViralMain} {\alpha&HFF&}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:12.66,0:00:12.76,ViralMain,,0,0,0,,{\b1\c&H000080FF}come{\rViralMain} {\c&H00F2F2F2}back{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:12.76,0:00:13.02,ViralMain,,0,0,0,,{\b1\c&H000080FF}come{\rViralMain} {\c&H00F2F2F2}back{\rViralMain} {\c&H00F2F2F2}to{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}the{\rViralMain}
+Dialogue: 0,0:00:13.02,0:00:13.36,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}mall ever.{\rViralMain}
+Dialogue: 0,0:00:13.78,0:00:14.10,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Okay.{\rViralMain}
+Dialogue: 0,0:00:14.34,0:00:14.60,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Per{\rViralMain} {\alpha&HFF&}management.{\rViralMain}
+Dialogue: 0,0:00:14.60,0:00:14.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}Per{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}management.{\rViralMain}
+Dialogue: 0,0:00:15.58,0:00:16.00,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}No!{\rViralMain}
+Dialogue: 0,0:00:18.18,0:00:18.60,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}No!{\rViralMain}
+Dialogue: 0,0:00:20.42,0:00:20.84,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Why{\rViralMain} {\alpha&HFF&}is{\rViralMain} {\alpha&HFF&}he{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:20.84,0:00:20.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}Why{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}is{\rViralMain} {\alpha&HFF&}he{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:20.92,0:00:21.14,ViralMain,,0,0,0,,{\c&H00F2F2F2}Why{\rViralMain} {\c&H00F2F2F2}is{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}he{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:21.14,0:00:21.38,ViralMain,,0,0,0,,{\c&H00F2F2F2}Why{\rViralMain} {\c&H00F2F2F2}is{\rViralMain} {\c&H00F2F2F2}he{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}banned?{\rViralMain}
+Dialogue: 0,0:00:21.38,0:00:21.58,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}Why{\rViralMain} {\alpha&HFF&}am{\rViralMain} {\alpha&HFF&}I{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:21.58,0:00:21.66,ViralMain,,0,0,0,,{\b1\c&H000080FF}Why{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}am{\rViralMain} {\alpha&HFF&}I{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:21.66,0:00:22.10,ViralMain,,0,0,0,,{\b1\c&H000080FF}Why{\rViralMain} {\c&H00F2F2F2}am{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}banned?{\rViralMain}
+Dialogue: 0,0:00:22.10,0:00:22.42,ViralMain,,0,0,0,,{\b1\c&H000080FF}Why{\rViralMain} {\c&H00F2F2F2}am{\rViralMain} {\c&H00F2F2F2}I{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}banned?{\rViralMain}
+Dialogue: 0,0:00:25.56,0:00:25.84,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Calm{\rViralMain} {\alpha&HFF&}down,{\rViralMain} {\alpha&HFF&}calm{\rViralMain} {\alpha&HFF&}down.{\rViralMain}
+Dialogue: 0,0:00:25.84,0:00:25.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}Calm{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}down,{\rViralMain} {\alpha&HFF&}calm{\rViralMain} {\alpha&HFF&}down.{\rViralMain}
+Dialogue: 0,0:00:25.92,0:00:26.22,ViralMain,,0,0,0,,{\c&H00F2F2F2}Calm{\rViralMain} {\c&H00F2F2F2}down,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}calm{\rViralMain} {\alpha&HFF&}down.{\rViralMain}
+Dialogue: 0,0:00:26.22,0:00:26.54,ViralMain,,0,0,0,,{\c&H00F2F2F2}Calm{\rViralMain} {\c&H00F2F2F2}down,{\rViralMain} {\c&H00F2F2F2}calm{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}down.{\rViralMain}
+Dialogue: 0,0:00:27.38,0:00:27.80,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}But{\rViralMain} {\alpha&HFF&}he{\rViralMain} {\alpha&HFF&}hasn't{\rViralMain} {\alpha&HFF&}done{\rViralMain}
+Dialogue: 0,0:00:27.80,0:00:27.94,ViralMain,,0,0,0,,{\c&H00F2F2F2}But{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}he{\rViralMain} {\alpha&HFF&}hasn't{\rViralMain} {\alpha&HFF&}done{\rViralMain}
+Dialogue: 0,0:00:27.94,0:00:28.20,ViralMain,,0,0,0,,{\c&H00F2F2F2}But{\rViralMain} {\c&H00F2F2F2}he{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}hasn't{\rViralMain} {\alpha&HFF&}done{\rViralMain}
+Dialogue: 0,0:00:28.20,0:00:28.44,ViralMain,,0,0,0,,{\c&H00F2F2F2}But{\rViralMain} {\c&H00F2F2F2}he{\rViralMain} {\c&H00F2F2F2}hasn't{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}done{\rViralMain}
+Dialogue: 0,0:00:28.44,0:00:28.60,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}anything.{\rViralMain}
+Dialogue: 0,0:00:28.60,0:00:28.72,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I{\rViralMain} {\alpha&HFF&}didn't{\rViralMain} {\alpha&HFF&}do{\rViralMain} {\alpha&HFF&}anything.{\rViralMain}
+Dialogue: 0,0:00:28.72,0:00:28.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}didn't{\rViralMain} {\alpha&HFF&}do{\rViralMain} {\alpha&HFF&}anything.{\rViralMain}
+Dialogue: 0,0:00:28.92,0:00:29.22,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}didn't{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}do{\rViralMain} {\alpha&HFF&}anything.{\rViralMain}
+Dialogue: 0,0:00:29.22,0:00:29.54,ViralMain,,0,0,0,,{\c&H00F2F2F2}I{\rViralMain} {\c&H00F2F2F2}didn't{\rViralMain} {\c&H00F2F2F2}do{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}anything.{\rViralMain}
+Dialogue: 0,0:00:30.58,0:00:31.04,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I'm{\rViralMain} {\alpha&HFF&}banned{\rViralMain} {\alpha&HFF&}because{\rViralMain} {\alpha&HFF&}my{\rViralMain}
+Dialogue: 0,0:00:31.04,0:00:31.32,ViralMain,,0,0,0,,{\c&H00F2F2F2}I'm{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}banned{\rViralMain} {\alpha&HFF&}because{\rViralMain} {\alpha&HFF&}my{\rViralMain}
+Dialogue: 0,0:00:31.32,0:00:31.74,ViralMain,,0,0,0,,{\c&H00F2F2F2}I'm{\rViralMain} {\b1\c&H000080FF}banned{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}because{\rViralMain} {\alpha&HFF&}my{\rViralMain}
+Dialogue: 0,0:00:31.74,0:00:32.06,ViralMain,,0,0,0,,{\c&H00F2F2F2}I'm{\rViralMain} {\b1\c&H000080FF}banned{\rViralMain} {\c&H00F2F2F2}because{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}my{\rViralMain}
+Dialogue: 0,0:00:32.06,0:00:32.38,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}fans{\rViralMain} {\alpha&HFF&}came{\rViralMain} {\alpha&HFF&}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:32.38,0:00:32.62,ViralMain,,0,0,0,,{\c&H00F2F2F2}fans{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}came{\rViralMain} {\alpha&HFF&}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:32.62,0:00:32.69,ViralMain,,0,0,0,,{\c&H00F2F2F2}fans{\rViralMain} {\c&H00F2F2F2}came{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}to{\rViralMain} {\alpha&HFF&}the{\rViralMain}
+Dialogue: 0,0:00:32.68,0:00:32.80,ViralMain,,0,0,0,,{\c&H00F2F2F2}fans{\rViralMain} {\c&H00F2F2F2}came{\rViralMain} {\c&H00F2F2F2}to{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}the{\rViralMain}
+Dialogue: 0,0:00:32.80,0:00:33.04,ViralMain,,0,0,0,,{\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}mall?{\rViralMain}
+Dialogue: 0,0:00:33.04,0:00:33.90,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}How?{\rViralMain}
+Dialogue: 0,0:00:33.90,0:00:34.22,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I'm{\rViralMain}
+Dialogue: 0,0:00:34.72,0:00:34.92,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}with{\rViralMain} {\alpha&HFF&}Corey.{\rViralMain}
+Dialogue: 0,0:00:34.92,0:00:35.38,ViralMain,,0,0,0,,{\c&H00F2F2F2}with{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Corey.{\rViralMain}
+Dialogue: 0,0:00:35.38,0:00:35.50,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}That{\rViralMain} {\alpha&HFF&}don't{\rViralMain} {\alpha&HFF&}make{\rViralMain} {\alpha&HFF&}any{\rViralMain}
+Dialogue: 0,0:00:35.50,0:00:35.70,ViralMain,,0,0,0,,{\c&H00F2F2F2}That{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}don't{\rViralMain} {\alpha&HFF&}make{\rViralMain} {\alpha&HFF&}any{\rViralMain}
+Dialogue: 0,0:00:35.70,0:00:35.88,ViralMain,,0,0,0,,{\c&H00F2F2F2}That{\rViralMain} {\c&H00F2F2F2}don't{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}make{\rViralMain} {\alpha&HFF&}any{\rViralMain}
+Dialogue: 0,0:00:35.88,0:00:36.18,ViralMain,,0,0,0,,{\c&H00F2F2F2}That{\rViralMain} {\c&H00F2F2F2}don't{\rViralMain} {\c&H00F2F2F2}make{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}any{\rViralMain}
+Dialogue: 0,0:00:36.18,0:00:36.50,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}sense.{\rViralMain}
+Dialogue: 0,0:00:36.50,0:00:36.86,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}But anyway,{\rViralMain} {\alpha&HFF&}let's{\rViralMain} {\alpha&HFF&}go.{\rViralMain}
+Dialogue: 0,0:00:36.86,0:00:37.04,ViralMain,,0,0,0,,{\c&H00F2F2F2}But anyway,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}let's{\rViralMain} {\alpha&HFF&}go.{\rViralMain}
+Dialogue: 0,0:00:37.04,0:00:37.46,ViralMain,,0,0,0,,{\c&H00F2F2F2}But anyway,{\rViralMain} {\c&H00F2F2F2}let's{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}go.{\rViralMain}
+Dialogue: 0,0:00:37.94,0:00:39.15,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Chat,{\rViralMain} {\alpha&HFF&}I'm{\rViralMain} {\alpha&HFF&}guess{\rViralMain} {\alpha&HFF&}I'm{\rViralMain}
+Dialogue: 0,0:00:39.15,0:00:40.06,ViralMain,,0,0,0,,{\c&H00F2F2F2}Chat,{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I'm{\rViralMain} {\alpha&HFF&}guess{\rViralMain} {\alpha&HFF&}I'm{\rViralMain}
+Dialogue: 0,0:00:40.06,0:00:40.32,ViralMain,,0,0,0,,{\c&H00F2F2F2}Chat,{\rViralMain} {\c&H00F2F2F2}I'm{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}guess{\rViralMain} {\alpha&HFF&}I'm{\rViralMain}
+Dialogue: 0,0:00:40.32,0:00:40.50,ViralMain,,0,0,0,,{\c&H00F2F2F2}Chat,{\rViralMain} {\c&H00F2F2F2}I'm{\rViralMain} {\c&H00F2F2F2}guess{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}I'm{\rViralMain}
+Dialogue: 0,0:00:40.50,0:00:40.70,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}banned{\rViralMain} {\alpha&HFF&}from{\rViralMain} {\alpha&HFF&}Houston{\rViralMain} {\alpha&HFF&}Mall,{\rViralMain}
+Dialogue: 0,0:00:40.70,0:00:40.92,ViralMain,,0,0,0,,{\c&H00F2F2F2}banned{\rViralMain} {\b1\c&H000080FF\fscx94\fscy94\t(0,70,\fscx116\fscy116)}from{\rViralMain} {\alpha&HFF&}Houston{\rViralMain} {\alpha&HFF&}Mall,{\rViralMain}
+Dialogue: 0,0:00:40.92,0:00:41.18,ViralMain,,0,0,0,,{\c&H00F2F2F2}banned{\rViralMain} {\b1\c&H000080FF}from{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Houston{\rViralMain} {\alpha&HFF&}Mall,{\rViralMain}
+Dialogue: 0,0:00:41.18,0:00:41.58,ViralMain,,0,0,0,,{\c&H00F2F2F2}banned{\rViralMain} {\b1\c&H000080FF}from{\rViralMain} {\c&H00F2F2F2}Houston{\rViralMain} {\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}Mall,{\rViralMain}
+Dialogue: 0,0:00:41.58,0:00:41.90,ViralMain,,0,0,0,,{\b1\c&H0000D7FF\fscx96\fscy96\t(0,70,\fscx108\fscy108)}chat.{\rViralMain}

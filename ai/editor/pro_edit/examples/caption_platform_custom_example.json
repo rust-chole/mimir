@@ -1,0 +1,13 @@
+{
+  "profile_id": "example_measure_your_own",
+  "version": 1,
+  "output_aspect": "9:16",
+  "source": "EXAMPLE ONLY - placeholder boxes, NOT platform data. Replace with geometry you measured (screenshots of your target app) and describe how/when.",
+  "minimum_edge_padding": 0.03,
+  "shorthand_mode": "soft",
+  "shorthand_weight": 3.0,
+  "right_ui_column": [0.86, 0.40, 1.0, 0.88],
+  "bottom_ui_region": [0.0, 0.88, 1.0, 1.0],
+  "reserved_regions": [],
+  "preferred_caption_regions": [[0.04, 0.45, 0.86, 0.86]]
+}

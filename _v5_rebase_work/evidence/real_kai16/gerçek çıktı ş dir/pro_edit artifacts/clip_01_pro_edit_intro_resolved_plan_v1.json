@@ -1,0 +1,92 @@
+{
+  "engine_version": 2,
+  "clip_identity": "de14fc9878fde38f39b48527",
+  "style": {
+    "name": "pro_stream_v1",
+    "version": 1
+  },
+  "fps": "60/1",
+  "frame_count": 636,
+  "source_size": [
+    1920,
+    1080
+  ],
+  "output_profile": "preserve",
+  "base_window": [
+    0,
+    0,
+    1920,
+    1080
+  ],
+  "active_frame_ranges": [
+    [
+      307,
+      473
+    ]
+  ],
+  "ops": [
+    {
+      "event_id": "intro",
+      "preset": "punch_in",
+      "camera": "speaker_close",
+      "frames": [
+        307,
+        473
+      ],
+      "resolved": {
+        "scale_start": 1.0,
+        "scale_peak": 1.168,
+        "attack_s": 0.233,
+        "hold_s": 2.267,
+        "release_s": 0.267,
+        "anchor_x": 0.4281,
+        "anchor_y": 0.4281,
+        "easing_in": "ease_out_cubic",
+        "easing_out": "smoothstep",
+        "zoom_cap": 1.3,
+        "target": {
+          "source": "dominant_subject",
+          "subject_id": "face_01",
+          "reliable": true,
+          "confidence": 0.736
+        },
+        "merged_with_next": false,
+        "notes": [
+          "target:dominant_subject:face_01",
+          "text_overlap_unavoidable",
+          "capped_to_preset_max_active"
+        ]
+      }
+    }
+  ],
+  "dropped": [],
+  "recommendations_not_executed_v1": [],
+  "metrics": {
+    "peak_zoom": 1.168,
+    "max_zoom_step": 0.035863,
+    "max_follow_speed": 0.0,
+    "active_frames": 166.0
+  },
+  "intro_timeline": {
+    "intro_source_paced": [
+      5.11,
+      10.585
+    ],
+    "intro_source_vod": [
+      5.11,
+      10.585
+    ],
+    "intro_local": [
+      0.0,
+      5.475
+    ],
+    "transition_s": 0.16,
+    "main_restart_paced": 0.0,
+    "first_caption_paced": 0.0,
+    "main_duration": 10.6,
+    "expected_final_duration": 15.915,
+    "peak_focus_paced": null,
+    "teaser_record_signature": "ca64097e75e6316806895e482a513e84551266e366c38f95ba9eccd845a9b70f",
+    "order": "intro -> xfade -> main (intentional repeated peak; not deduplicated)"
+  }
+}

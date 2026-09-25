@@ -1,0 +1,18 @@
+UNIFIED CLEAN VERIFY: PASS
+ - compile/import contracts: OK
+ - legacy calibration/identity-word engines: absent
+ - GPT wording / Whisper anchor invariants: OK
+ - local exact-PCM caption clock outlier guard: OK
+ - evidence-backed streamer slang spelling: OK
+ - caption display readability without clock mutation: OK
+ - speaker boundary QA / retry gate: OK
+ - Gold V7 speaker word/time preservation: OK
+ - V5 diarization-gap identity fail-closed: OK
+ - V6 human-known-voice phrase identity lock: OK
+ - V6 short human reference stitch (2s contract): OK
+ - V6 risky phrase two-view identity consensus: OK
+ - V6 one-phrase-one-identity final fail-closed guard: OK
+ - V7 verified direct-address participant-name orthography: OK
+ - intro exact-path + adaptive-duration contract: OK
+ - Pro Edit V5 (default OFF) contracts + tests: OK (248 run, 0 failed, 0 errors, 24 skipped)
+VERIFY_REPRO_PROD_EXIT=0

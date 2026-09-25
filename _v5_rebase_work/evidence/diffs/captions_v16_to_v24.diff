@@ -1,0 +1,754 @@
+--- _v5_reference/extracted/MIMIR_SHORTS_V7_1_PRO_EDIT_V5/ai/editor/captions.py	2026-09-22 23:53:18.000000000 +0300
++++ _v5_rebase_work/baseline_root/ai/editor/captions.py	2026-09-23 23:18:25.950847600 +0300
+@@ -19,7 +19,7 @@
+ # CONFIG
+ # ============================================================
+ 
+-CAPTION_VERSION = 16
++CAPTION_VERSION = 24
+ 
+ PLAY_RES_X = 1080
+ PLAY_RES_Y = 1920
+@@ -44,6 +44,24 @@
+ # single-word flashes such as "Amy." while preserving the measured word onset.
+ MIN_TERMINAL_DISPLAY_DURATION = 0.32
+ 
++# V23 two-lane stale-caption guard.
++# This NEVER changes Whisper/acoustic timestamps. It only prevents one speaker's
++# rendered word from visually hanging for seconds after that speaker stopped.
++# Normal word timestamps in MIMIR are far shorter than this; >1.15 s is treated
++# as a display anomaly in two-lane mode only.
++MAX_TWO_LANE_EVENT_DURATION = 1.15
++CROSS_LANE_HANDOFF_EPSILON = 0.025
++
++# V24 adaptive two-lane policy.
++# A second visual lane is NOT a permanent speaker lane. It exists only around
++# measured simultaneous/interrupting speech. Ordinary A->B conversation stays
++# on the same main caption position.
++MIN_TRUE_SPEECH_OVERLAP = 0.045
++OVERLAP_WINDOW_PAD_BEFORE = 0.08
++OVERLAP_WINDOW_PAD_AFTER = 0.14
++WORD_OVERLAP_FALLBACK_PAD = 0.12
++OVERLAP_WINDOW_MERGE_GAP = 0.12
++
+ # Caption'ın ekrandaki yüksekliği.
+ CAPTION_MARGIN_V = 530
+ 
+@@ -742,11 +760,15 @@
+                 + len(text)
+             )
+ 
++            previous_label = str(previous.get("speaker_label", "")).strip()
++            current_label = str(word.get("speaker_label", "")).strip()
++
++            # V24: raw A/B diarization is metadata, not a caption-layout command.
++            # Only a visible HUMAN-confirmed name transition may force a group
++            # boundary. If both identities are blank, dialogue flows naturally.
+             speaker_changed = (
+-                str(word.get("speaker_role", "main"))
+-                != str(previous.get("speaker_role", "main"))
+-                or str(word.get("speaker_raw", ""))
+-                != str(previous.get("speaker_raw", ""))
++                (previous_label or current_label)
++                and previous_label.casefold() != current_label.casefold()
+             )
+ 
+             if (
+@@ -925,6 +947,7 @@
+     active_index: int,
+     edited_duration: float,
+     next_group_start: float | None = None,
++    strict_no_overlap: bool = False,
+ ) -> float:
+     """Return DISPLAY end without changing the acoustic word clock.
+ 
+@@ -946,14 +969,27 @@
+             end = next_start
+         # Never let an active word event run through the next measured onset.
+         end = min(end, next_start)
++        if strict_no_overlap and next_start > start:
++            # In diarization hard-failure mode, readability floors must never
++            # create two simultaneous ASS events on the single fail-safe lane.
++            return min(max(end, start), next_start, edited_duration)
+         end = max(end, min(next_start, start + MIN_EVENT_DURATION))
+     else:
+         # Display-only hold. Acoustic edited_end is preserved in the word data.
+         desired = max(end, start + MIN_TERMINAL_DISPLAY_DURATION)
+         if next_group_start is not None and next_group_start > start:
++            if strict_no_overlap:
++                # Hard-failure lane: keep a tiny terminal word readable, but do
++                # not grant the normal 320 ms hold when another phrase begins
++                # immediately.  The next group's first event may be delayed by
++                # at most this small display-only floor; acoustic timestamps in
++                # the profile remain untouched.
++                minimum_readable_end = max(end, start + MIN_EVENT_DURATION)
++                if next_group_start >= minimum_readable_end:
++                    return min(next_group_start, edited_duration)
++                return min(minimum_readable_end, edited_duration)
+             desired = min(desired, next_group_start)
+-            # If the real inter-caption gap is tiny, keep the current word up to
+-            # the next caption onset but never overlap two groups on one lane.
++            # Normal trusted-speaker path keeps the existing readability rule.
+             if 0.0 <= next_group_start - end <= MAX_HOLD_GAP:
+                 desired = max(desired, next_group_start)
+         end = desired
+@@ -1048,6 +1084,446 @@
+ 
+ 
+ # ============================================================
++# SPEAKER RENDER FAIL-SAFE
++# ============================================================
++
++def _speaker_render_hard_failure(
++    speaker_profile: dict[str, Any] | None,
++) -> bool:
++    """Return True only when the diarization boundary audit hard-failed.
++
++    This is intentionally render-only.  The speaker profile, identities and
++    Whisper word clock stay untouched; unreliable WHO metadata simply loses
++    permission to split/recolor captions for this render.
++    """
++    if not speaker_profile or str(speaker_profile.get("status", "")) != "ok":
++        return False
++    audit = speaker_profile.get("speaker_boundary_audit", {}) or {}
++    return bool(audit.get("hard_failure", False))
++
++
++def _trusted_human_display_map(
++    speaker_profile: dict[str, Any] | None,
++) -> dict[str, str]:
++    """Return only user-confirmed/raw->display mappings safe for fail-safe render.
++
++    Naming already writes display_labels after the human voice checkpoint.
++    In a diarization hard-failure we do NOT trust raw boundaries for grouping,
++    but a name explicitly confirmed by the user remains valid display metadata.
++    """
++    if not isinstance(speaker_profile, dict):
++        return {}
++
++    display = speaker_profile.get("display_labels", {})
++    if not isinstance(display, dict):
++        return {}
++
++    source = str(
++        (speaker_profile.get("speaker_names") or {}).get("source", "")
++        if isinstance(speaker_profile.get("speaker_names"), dict)
++        else ""
++    ).casefold()
++
++    calibration = speaker_profile.get("identity_calibration", {})
++    human_raws: set[str] = set()
++
++    if isinstance(calibration, dict):
++        for item in calibration.values():
++            if not isinstance(item, dict):
++                continue
++            if not bool(item.get("human_verified", False)):
++                continue
++            raw = str(item.get("raw_speaker", "")).strip()
++            if raw:
++                human_raws.add(raw)
++
++    manual_source = (
++        "manual" in source
++        or "human" in source
++        or "voice_calibrated" in source
++    )
++
++    trusted: dict[str, str] = {}
++    for raw, name in display.items():
++        raw_key = str(raw).strip()
++        clean_name = str(name).strip()
++        if not raw_key or not clean_name:
++            continue
++        if manual_source or raw_key in human_raws:
++            trusted[raw_key] = clean_name
++
++    return trusted
++
++
++def _neutralize_speaker_render_metadata(
++    words: list[dict[str, Any]],
++    *,
++    trusted_display_map: dict[str, str] | None = None,
++    lane_raw_map: dict[str, str] | None = None,
++) -> list[dict[str, Any]]:
++    """Prepare hard-failure speaker metadata for safe rendering.
++
++    V22 keeps at most two defensible speaker lanes alive. This is the important
++    difference from V17-V20: a hard boundary failure no longer forces every
++    word into one visual lane when we still know there are two real speakers.
++
++    Human-confirmed names stay authoritative. Untrusted extra clusters lose
++    their identity and fall back to the main lane. Text/timestamps are untouched.
++    """
++    trusted_display_map = trusted_display_map or {}
++    lane_raw_map = lane_raw_map or {}
++    output: list[dict[str, Any]] = []
++
++    for word in words:
++        item = dict(word)
++        raw_speaker = str(item.get("speaker_raw", "")).strip()
++        label = str(item.get("speaker_label", "")).strip()
++
++        if raw_speaker in trusted_display_map:
++            label = trusted_display_map[raw_speaker]
++
++        if raw_speaker in lane_raw_map:
++            # Keep this raw id only as a render-lane key. It cannot alter the
++            # acoustic word clock or wording.
++            item["speaker_raw"] = raw_speaker
++            item["speaker_role"] = lane_raw_map[raw_speaker]
++        else:
++            # Any third/unstable cluster loses permission to create a third
++            # caption lane.
++            item["speaker_raw"] = ""
++            item["speaker_role"] = "main"
++
++        item["speaker_label"] = label
++        item["speaker_confidence"] = 0.0
++        output.append(item)
++
++    return output
++
++
++def _fail_safe_group_display_label(
++    group: list[dict[str, Any]],
++) -> str:
++    """Choose a human label without letting uncertain words erase it.
++
++    Important V19 rule:
++    - blank/unresolved words do NOT cancel a confirmed human name;
++    - exactly one distinct non-empty human name in the group -> show it;
++    - two different non-empty names in the same visual group -> show no name.
++
++    Thus broken diarization may make a group unlabeled, but it cannot invent
++    the wrong person's name and cannot erase a clean human identity merely
++    because one neighbouring word was unresolved.
++    """
++    if not group:
++        return ""
++
++    labels = [
++        str(word.get("speaker_label", "")).strip()
++        for word in group
++        if str(word.get("speaker_label", "")).strip()
++    ]
++
++    if not labels:
++        return ""
++
++    unique: list[str] = []
++    seen: set[str] = set()
++    for label in labels:
++        folded = label.casefold()
++        if folded in seen:
++            continue
++        seen.add(folded)
++        unique.append(label)
++
++    if len(unique) != 1:
++        return ""
++
++    return unique[0]
++
++
++
++
++def _fail_safe_two_lane_raw_map(
++    speaker_profile: dict[str, Any] | None,
++    trusted_display_map: dict[str, str],
++) -> dict[str, str]:
++    """Choose at most two raw speakers that may own independent render lanes.
++
++    This helper is used only when the diarization boundary audit hard-failed.
++    We do not blindly trust every A/B/C/D/E cluster. Two-lane rendering is
++    enabled only when there is a compact, defensible two-speaker mapping:
++
++    1) explicit primary+secondary from the profile, or
++    2) exactly two participant speakers, or
++    3) two human-confirmed raw speaker identities.
++
++    The result maps raw speaker id -> ``main`` / ``secondary``. Word text and
++    acoustic timestamps are never changed.
++    """
++    if not isinstance(speaker_profile, dict):
++        return {}
++
++    primary = str(speaker_profile.get("primary_speaker") or "").strip()
++    secondary = str(speaker_profile.get("secondary_speaker") or "").strip()
++    if primary and secondary and primary != secondary:
++        return {primary: "main", secondary: "secondary"}
++
++    participants = [
++        str(value).strip()
++        for value in (speaker_profile.get("participant_speakers") or [])
++        if str(value).strip()
++    ]
++    participants = list(dict.fromkeys(participants))
++    if len(participants) == 2:
++        return {participants[0]: "main", participants[1]: "secondary"}
++
++    trusted_raws = [
++        raw for raw in trusted_display_map
++        if str(raw).strip()
++    ]
++    trusted_raws = list(dict.fromkeys(trusted_raws))
++    if len(trusted_raws) == 2:
++        return {trusted_raws[0]: "main", trusted_raws[1]: "secondary"}
++
++    return {}
++
++
++
++def _render_two_speaker_raw_map(
++    speaker_profile: dict[str, Any] | None,
++    trusted_display_map: dict[str, str],
++) -> dict[str, str]:
++    """Return at most two defensible raw speaker ids for layout purposes only.
++
++    This does NOT decide what name is printed and never changes word timing.
++    """
++    if not isinstance(speaker_profile, dict):
++        return {}
++
++    primary = str(speaker_profile.get("primary_speaker") or "").strip()
++    secondary = str(speaker_profile.get("secondary_speaker") or "").strip()
++    if primary and secondary and primary != secondary:
++        return {primary: "main", secondary: "secondary"}
++
++    participants = [
++        str(value).strip()
++        for value in (speaker_profile.get("participant_speakers") or [])
++        if str(value).strip()
++    ]
++    participants = list(dict.fromkeys(participants))
++    if len(participants) == 2:
++        return {participants[0]: "main", participants[1]: "secondary"}
++
++    trusted_raws = [str(raw).strip() for raw in trusted_display_map if str(raw).strip()]
++    trusted_raws = list(dict.fromkeys(trusted_raws))
++    if len(trusted_raws) == 2:
++        return {trusted_raws[0]: "main", trusted_raws[1]: "secondary"}
++
++    return {}
++
++
++def _merge_time_windows(
++    windows: list[tuple[float, float]],
++) -> list[tuple[float, float]]:
++    clean = sorted(
++        (max(0.0, float(start)), max(0.0, float(end)))
++        for start, end in windows
++        if float(end) > float(start)
++    )
++    if not clean:
++        return []
++
++    merged: list[list[float]] = [[clean[0][0], clean[0][1]]]
++    for start, end in clean[1:]:
++        previous = merged[-1]
++        if start <= previous[1] + OVERLAP_WINDOW_MERGE_GAP:
++            previous[1] = max(previous[1], end)
++        else:
++            merged.append([start, end])
++
++    return [(round_time(start), round_time(end)) for start, end in merged]
++
++
++def _adaptive_overlap_windows(
++    speaker_profile: dict[str, Any] | None,
++    words: list[dict[str, Any]],
++    raw_map: dict[str, str],
++) -> list[tuple[float, float]]:
++    """Find only real two-person collision windows.
++
++    Priority:
++    1) diarization segments that physically overlap;
++    2) exact final-word clocks that physically overlap.
++
++    Sequential turn-taking is deliberately NOT a collision.
++    """
++    if len(raw_map) != 2:
++        return []
++
++    main_raw = next((raw for raw, role in raw_map.items() if role == "main"), "")
++    secondary_raw = next((raw for raw, role in raw_map.items() if role == "secondary"), "")
++    if not main_raw or not secondary_raw:
++        return []
++
++    windows: list[tuple[float, float]] = []
++
++    # Full speaker-turn evidence first. If two diarized turns overlap, keep the
++    # whole secondary turn on lane 2 so a sentence is never split mid-phrase.
++    if isinstance(speaker_profile, dict):
++        segments = [
++            item
++            for item in (speaker_profile.get("segments") or [])
++            if isinstance(item, dict)
++        ]
++        main_segments = [
++            item for item in segments
++            if str(item.get("speaker", "")).strip() == main_raw
++        ]
++        secondary_segments = [
++            item for item in segments
++            if str(item.get("speaker", "")).strip() == secondary_raw
++        ]
++
++        for secondary in secondary_segments:
++            try:
++                s_start = float(secondary.get("start", 0.0))
++                s_end = float(secondary.get("end", s_start))
++            except (TypeError, ValueError):
++                continue
++            if s_end <= s_start:
++                continue
++
++            for main in main_segments:
++                try:
++                    m_start = float(main.get("start", 0.0))
++                    m_end = float(main.get("end", m_start))
++                except (TypeError, ValueError):
++                    continue
++                overlap = min(s_end, m_end) - max(s_start, m_start)
++                if overlap >= MIN_TRUE_SPEECH_OVERLAP:
++                    windows.append(
++                        (
++                            max(0.0, s_start - OVERLAP_WINDOW_PAD_BEFORE),
++                            s_end + OVERLAP_WINDOW_PAD_AFTER,
++                        )
++                    )
++                    break
++
++    # Word-clock fallback catches overlap that segment normalization missed.
++    main_words = [
++        word for word in words
++        if str(word.get("speaker_raw", "")).strip() == main_raw
++    ]
++    secondary_words = [
++        word for word in words
++        if str(word.get("speaker_raw", "")).strip() == secondary_raw
++    ]
++
++    for secondary in secondary_words:
++        s_start = float(secondary.get("edited_start", 0.0))
++        s_end = float(secondary.get("edited_end", s_start))
++        for main in main_words:
++            m_start = float(main.get("edited_start", 0.0))
++            m_end = float(main.get("edited_end", m_start))
++            overlap = min(s_end, m_end) - max(s_start, m_start)
++            if overlap >= MIN_TRUE_SPEECH_OVERLAP:
++                windows.append(
++                    (
++                        max(0.0, s_start - WORD_OVERLAP_FALLBACK_PAD),
++                        s_end + WORD_OVERLAP_FALLBACK_PAD,
++                    )
++                )
++                break
++
++    return _merge_time_windows(windows)
++
++
++def _interval_hits_windows(
++    start: float,
++    end: float,
++    windows: list[tuple[float, float]],
++) -> bool:
++    for win_start, win_end in windows:
++        if min(end, win_end) - max(start, win_start) > 0.0:
++            return True
++    return False
++
++
++def _prepare_adaptive_render_words(
++    words: list[dict[str, Any]],
++    *,
++    speaker_profile: dict[str, Any] | None,
++    trusted_display_map: dict[str, str],
++) -> tuple[list[dict[str, Any]], list[tuple[float, float]]]:
++    """Apply the final V24 render policy without touching text or timestamps.
++
++    - Human names are sticky and authoritative.
++    - Blank naming means BLANK on screen: no automatic A/B/X placeholders.
++    - Ordinary sequential dialogue uses one main visual lane.
++    - Secondary lane appears only inside real measured overlap windows.
++    """
++    raw_map = _render_two_speaker_raw_map(
++        speaker_profile,
++        trusted_display_map,
++    )
++
++    collision_windows = _adaptive_overlap_windows(
++        speaker_profile,
++        words,
++        raw_map,
++    )
++
++    secondary_raw = next(
++        (raw for raw, role in raw_map.items() if role == "secondary"),
++        "",
++    )
++
++    prepared: list[dict[str, Any]] = []
++    for word in words:
++        item = dict(word)
++        raw = str(item.get("speaker_raw", "")).strip()
++
++        # Never leak automatic placeholder identity into published captions.
++        # A label is printable only if it came from the human naming checkpoint.
++        item["speaker_label"] = trusted_display_map.get(raw, "")
++
++        role = "main"
++        if raw and raw == secondary_raw and collision_windows:
++            start = float(item.get("edited_start", 0.0))
++            end = float(item.get("edited_end", start))
++            if _interval_hits_windows(start, end, collision_windows):
++                role = "secondary"
++
++        item["speaker_role"] = role
++        prepared.append(item)
++
++    return prepared, collision_windows
++
++
++def _has_two_render_lanes(words: list[dict[str, Any]]) -> bool:
++    roles = {
++        str(word.get("speaker_role", "main"))
++        for word in words
++        if isinstance(word, dict)
++    }
++    return "main" in roles and "secondary" in roles
++
++
++def _lane_words(
++    words: list[dict[str, Any]],
++    role: str,
++) -> list[dict[str, Any]]:
++    if role == "secondary":
++        return [
++            word for word in words
++            if str(word.get("speaker_role", "main")) == "secondary"
++        ]
++    return [
++        word for word in words
++        if str(word.get("speaker_role", "main")) != "secondary"
++    ]
++
++# ============================================================
+ # CREATE ASS
+ # ============================================================
+ 
+@@ -1093,6 +1569,8 @@
+             "Caption için edited duration geçersiz."
+         )
+ 
++    speaker_render_fail_safe = _speaker_render_hard_failure(speaker_profile)
++
+     edited_words = _profile_edited_words(
+         speaker_profile=speaker_profile,
+         edited_duration=edited_duration,
+@@ -1130,70 +1608,156 @@
+             "Bu klip için caption üretilecek kelime bulunamadı."
+         )
+ 
++    # V24 final render policy:
++    # identity metadata may help detect real overlap, but it may NEVER fragment
++    # ordinary blank-named dialogue into permanent A/B lanes.
++    trusted_display_map = _trusted_human_display_map(speaker_profile)
++    edited_words, collision_windows = _prepare_adaptive_render_words(
++        edited_words,
++        speaker_profile=speaker_profile,
++        trusted_display_map=trusted_display_map,
++    )
++
+     emphasis_markers = (
+         get_emphasis_markers(
+             clip_timeline
+         )
+     )
+ 
+-    groups = split_caption_groups(
+-        edited_words
+-    )
+-
+-    events: list[str] = []
++    two_lane_render = _has_two_render_lanes(edited_words)
+ 
+-    for group_index, group in enumerate(groups):
+-        next_group_start = None
+-        if group_index + 1 < len(groups) and groups[group_index + 1]:
+-            next_group_start = float(groups[group_index + 1][0]["edited_start"])
++    # V24: lane 2 exists only inside measured collision windows. Normal A->B
++    # turn-taking remains one stable main caption stream. During true overlap,
++    # each lane owns its own grouping/hold clock.
++    lane_specs: list[tuple[str, list[dict[str, Any]]]]
++    if two_lane_render:
++        lane_specs = [
++            ("main", _lane_words(edited_words, "main")),
++            ("secondary", _lane_words(edited_words, "secondary")),
++        ]
++    else:
++        lane_specs = [("main", edited_words)]
+ 
+-        for active_index, word in enumerate(
+-            group
+-        ):
++    event_rows: list[tuple[float, int, str]] = []
++    lane_free_at = {"main": 0.0, "secondary": 0.0}
++    lane_words_by_role = {
++        role: words_for_lane
++        for role, words_for_lane in lane_specs
++    }
+ 
+-            start = float(
+-                word[
+-                    "edited_start"
+-                ]
+-            )
++    for lane_role, lane_word_list in lane_specs:
++        if not lane_word_list:
++            continue
+ 
+-            end = get_event_end(
+-                group=group,
+-                active_index=active_index,
+-                edited_duration=edited_duration,
+-                next_group_start=next_group_start,
+-            )
++        groups = split_caption_groups(lane_word_list)
++        lane_index = 1 if lane_role == "secondary" else 0
+ 
+-            if end <= start:
+-                continue
++        for group_index, group in enumerate(groups):
++            next_group_start = None
++            if group_index + 1 < len(groups) and groups[group_index + 1]:
++                next_group_start = float(groups[group_index + 1][0]["edited_start"])
++
++            for active_index, word in enumerate(group):
++                start = float(word["edited_start"])
++
++                # In hard-failure mode prevent collisions only WITHIN THE SAME
++                # lane. Main and Secondary are intentionally allowed to overlap.
++                if (
++                    speaker_render_fail_safe
++                    and active_index == 0
++                    and start < lane_free_at[lane_role]
++                    and lane_free_at[lane_role] - start <= 0.12
++                ):
++                    start = lane_free_at[lane_role]
+ 
+-            caption_text = (
+-                build_caption_text(
++                end = get_event_end(
+                     group=group,
+                     active_index=active_index,
++                    edited_duration=edited_duration,
++                    next_group_start=next_group_start,
++                    strict_no_overlap=speaker_render_fail_safe,
++                )
++
++                # V23: two independent lanes may overlap ONLY when the measured
++                # speech itself overlaps. A finished caption must not hang merely
++                # because its own lane has no next phrase for several seconds.
++                if two_lane_render:
++                    acoustic_end = float(word.get("edited_end", end))
++                    end = min(
++                        end,
++                        start + MAX_TWO_LANE_EVENT_DURATION,
++                    )
++
++                    other_role = (
++                        "secondary"
++                        if lane_role == "main"
++                        else "main"
++                    )
++                    other_words = lane_words_by_role.get(other_role, [])
++
++                    # Find the first onset from the other speaker that happens
++                    # after this word acoustically ended. If it begins during a
++                    # display-only hold, hand the screen over immediately.
++                    for other_word in other_words:
++                        other_start = float(other_word.get("edited_start", 0.0))
++                        if other_start < acoustic_end - CROSS_LANE_HANDOFF_EPSILON:
++                            continue
++                        if other_start >= end:
++                            break
++                        if other_start > start:
++                            end = max(
++                                start + MIN_EVENT_DURATION,
++                                other_start,
++                            )
++                            break
++
++                if end <= start:
++                    continue
++
++                if speaker_render_fail_safe:
++                    lane_free_at[lane_role] = max(lane_free_at[lane_role], end)
++
++                render_group = group
++                if speaker_render_fail_safe:
++                    safe_label = _fail_safe_group_display_label(group)
++                    render_group = [
++                        {
++                            **dict(item),
++                            "speaker_label": safe_label,
++                        }
++                        for item in group
++                    ]
++
++                caption_text = build_caption_text(
++                    group=render_group,
++                    active_index=active_index,
+                     emphasis_markers=emphasis_markers,
+                 )
+-            )
+ 
+-            style_name = (
+-                "ViralSecondary"
+-                if str(group[0].get("speaker_role", "main")) == "secondary"
+-                else "ViralMain"
+-            )
+-
+-            events.append(
+-                "Dialogue: "
+-                "0,"
+-                f"{ass_time(start)},"
+-                f"{ass_time(end)},"
+-                f"{style_name},"
+-                ","
+-                "0,"
+-                "0,"
+-                "0,"
+-                ","
+-                f"{caption_text}"
+-            )
++                style_name = (
++                    "ViralSecondary"
++                    if lane_role == "secondary"
++                    else "ViralMain"
++                )
++
++                event_text = (
++                    "Dialogue: "
++                    "0,"
++                    f"{ass_time(start)},"
++                    f"{ass_time(end)},"
++                    f"{style_name},"
++                    ","
++                    "0,"
++                    "0,"
++                    "0,"
++                    ","
++                    f"{caption_text}"
++                )
++                event_rows.append((start, lane_index, event_text))
++
++    # Keep the ASS deterministic while allowing simultaneous rows on two lanes.
++    event_rows.sort(key=lambda row: (row[0], row[1]))
++    events = [row[2] for row in event_rows]
+ 
+     with output_path.open(
+         "w",
