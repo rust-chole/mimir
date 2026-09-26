@@ -1,18 +1,22 @@
-﻿.env
+.env
 .env.*
+!.env.example
 .venv/
 venv/
 __pycache__/
 *.pyc
 *.pyo
 
-vod_output/
+workspace/
+output/
 *.mp4
 *.mov
 *.mkv
 *.avi
 *.wav
 *.mp3
+!sfx_library/**/*.wav
+!sfx_library/**/*.mp3
 
 *.zip
 *.7z
@@ -21,6 +25,8 @@ vod_output/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+tests/synth/.speech_cache/
+tests/synth/.media_cache/
 
 .vscode/
 .idea/
