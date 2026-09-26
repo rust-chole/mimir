@@ -53,6 +53,24 @@ def test_measured_overlap_puts_the_whole_interrupting_turn_on_the_second_lane():
     assert windows and windows[0][0] <= 0.9 and windows[0][1] >= 3.2
 
 
+def test_interleaved_overlap_is_one_episode_with_one_interrupter():
+    # S1 holds the floor, S2 cuts in; word times genuinely overlap and alternate
+    def rows():
+        return [rw("a1", "please", 0.00, 0.50, "S1"), rw("a2", "say", 0.57, 0.97, "S1"),
+                rw("b1", "the", 0.90, 1.17, "S2"), rw("a3", "me,", 1.04, 1.39, "S1"),
+                rw("b2", "one", 1.24, 1.61, "S2"), rw("a4", "please", 1.46, 1.96, "S1"),
+                rw("b3", "who", 1.68, 2.00, "S2"), rw("b4", "burned", 2.07, 2.48, "S2"),
+                rw("a5", "later", 6.00, 6.40, "S1")]
+    for measured in ([], [(0.90, 2.48, "S2")]):
+        words = rows()
+        windows = assign_lanes(words, measured)
+        lanes = {r.key: r.lane for r in words}
+        assert all(lanes[k] == "main" for k in ("a1", "a2", "a3", "a4", "a5")), (measured, lanes)
+        assert all(lanes[k] == "secondary" for k in ("b1", "b2", "b3", "b4")), (measured, lanes)
+        # every secondary word starts inside a published window (what QC verifies)
+        assert all(any(a <= r.start <= b for a, b in windows) for r in words if r.lane == "secondary")
+
+
 def test_display_holds_never_change_acoustic_times():
     words = [rw("a", "hey", 0.0, 0.05), rw("b", "you", 0.1, 0.2)]
     group = group_words(words, STYLE)[0]

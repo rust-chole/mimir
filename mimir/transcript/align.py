@@ -8,7 +8,11 @@ Contract (ported from the proven CLEAN V3 caption clock):
   if that gap is too small, time is borrowed from the TAIL of the previous
   token - a later measured onset is never pushed;
 * no global offset, no silence snapping, no cumulative drift;
-* the result is audited for monotonicity and fails closed.
+* one lexical word is one token: simultaneous speech keeps both words, each with its
+  own measured interval (coincident onsets and measured overlaps are preserved, never
+  merged into one token and never trimmed away);
+* the result is audited for monotonicity (non-decreasing onsets; overlap only where
+  the timing ear measured it) and fails closed.
 """
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ from mimir.transcript.tokens import canonical_word, tokenize
 
 MIN_WORD = 0.035
 MIN_GAP = 0.005
+OVERLAP_TOLERANCE = 0.010   # boundary jitter below this is trimmed; above it is measured overlap
+MEASURED = ("anchor", "replace")
 
 
 class AlignmentError(RuntimeError):
@@ -32,7 +38,8 @@ class AlignedWord:
     text: str
     start: float
     end: float
-    source: str        # anchor | replace | insert_gap | insert_tail | insert_leading | insert_trailing | *_group
+    source: str        # anchor | replace | insert_gap | insert_tail | insert_leading | insert_trailing
+    overlaps_previous: bool = False   # measured simultaneous speech with the previous token
 
 
 def _r(value: float) -> float:
@@ -63,26 +70,29 @@ def align_text_to_clock(text: str, clock_words: Sequence[TimedWord], duration: f
     ratio = float(matcher.ratio())
     rows: list[AlignedWord] = []
 
-    def append(word: str, start: float, end: float, source: str) -> None:
+    def append(word: str, start: float, end: float, source: str, subdivided: bool = False) -> None:
+        """``subdivided``: a later share of one span split between several words (sequential by
+        construction, never simultaneous speech; no minimum display duration is imposed)."""
         word = word.strip()
         if not word:
             return
         start = max(0.0, min(duration, float(start)))
-        end = max(start + 0.025, min(duration, float(end)))
+        end = max(start + (0.001 if subdivided else 0.025), min(duration, float(end)))
+        overlap = False
         if rows and rows[-1].end > start:
             previous = rows[-1]
-            if start <= previous.start + 0.001:
-                # Coincident measured onsets cannot order two words at ms precision:
-                # group them, never drop text and never move the later onset.
-                previous.text = f"{previous.text} {word}".strip()
-                previous.end = _r(max(previous.end, end))
-                previous.source += "+coincident_group"
-                return
-            safe_end = min(previous.end, start - MIN_GAP)
-            if safe_end <= previous.start:
-                safe_end = start
-            previous.end = _r(min(start, max(previous.start + 0.001, safe_end)))
-        rows.append(AlignedWord(word, _r(start), _r(end), source))
+            measured = source in MEASURED and previous.source in MEASURED and not subdivided
+            if measured and (start <= previous.start + 0.001 or previous.end - start > OVERLAP_TOLERANCE):
+                # Simultaneous speech measured by the timing ear (two voices, one clock):
+                # both words keep their own measured interval and stay separate tokens.
+                start = max(start, previous.start)
+                overlap = True
+            else:
+                safe_end = min(previous.end, start - MIN_GAP)
+                if safe_end <= previous.start:
+                    safe_end = start
+                previous.end = _r(min(start, max(previous.start + 0.001, safe_end)))
+        rows.append(AlignedWord(word, _r(start), _r(end), source, overlap))
 
     def distribute(words: list[str], start: float, end: float, source: str) -> None:
         words = [w for w in words if w.strip()]
@@ -95,7 +105,10 @@ def align_text_to_clock(text: str, clock_words: Sequence[TimedWord], duration: f
             append(words[0], start, end, source)
             return
         if span < MIN_WORD * len(words):
-            append(" ".join(words), start, end, source + "_group")
+            # no room for comfortable durations: equal shares, still one token per word
+            share = span / len(words)
+            for index, word in enumerate(words):
+                append(word, start + index * share, start + (index + 1) * share, source, subdivided=index > 0)
             return
         weights = [max(1, len(canonical_word(w))) for w in words]
         remaining_weight = float(sum(weights))
@@ -108,7 +121,7 @@ def align_text_to_clock(text: str, clock_words: Sequence[TimedWord], duration: f
                 remaining = end - cursor
                 share = remaining * (weight / max(1.0, remaining_weight))
                 token_end = min(end, cursor + max(MIN_WORD, min(share, remaining - rest)))
-            append(word, cursor, token_end, source)
+            append(word, cursor, token_end, source, subdivided=index > 0)
             remaining_weight -= weight
             cursor = token_end
 
@@ -168,8 +181,11 @@ def align_text_to_clock(text: str, clock_words: Sequence[TimedWord], duration: f
         raise AlignmentError("alignment produced no words")
     previous_start = previous_end = -1.0
     for row in rows:
-        if row.start + 1e-9 < previous_start or row.start + 1e-9 < previous_end - 0.010:
+        if row.start + 1e-9 < previous_start or (
+                row.start + 1e-9 < previous_end - OVERLAP_TOLERANCE and not row.overlaps_previous):
             raise AlignmentError("clock monotonicity violated")
+        if len(tokenize(row.text)) != 1:
+            raise AlignmentError(f"token {row.text!r} is not exactly one lexical word")
         if row.end <= row.start:
             raise AlignmentError("zero/negative word duration")
         previous_start, previous_end = row.start, row.end

@@ -34,3 +34,36 @@ def test_pixel_stable_corner_face_over_moving_content_is_a_facecam():
     assert classify_layout([face(corner, 0.012)], 0.09, 2.5, (0.0, 30.0))["class"] != "facecam_gameplay"
     # and a stable corner face over a static picture is not gameplay
     assert classify_layout([face(corner, 0.001)], 0.09, 0.6, (0.0, 30.0))["class"] != "facecam_gameplay"
+
+
+def test_yunet_is_the_production_detector_and_fallback_is_explicit(tmp_path, monkeypatch):
+    from mimir.vision import faces
+
+    monkeypatch.delenv("MIMIR_FACE_MODEL", raising=False)
+    detector, reason = faces.load_detector()
+    assert detector.name == "yunet" and reason == ""
+    assert faces.detector_fingerprint().startswith("yunet:")
+    monkeypatch.setattr(faces, "MODEL_DIR", tmp_path)
+    detector, reason = faces.load_detector()
+    assert detector.name == "haar" and "missing" in reason
+    (tmp_path / faces.YUNET_FILE).write_bytes(b"not a model")
+    detector, reason = faces.load_detector()
+    assert detector.name == "haar" and "SHA-256" in reason
+
+
+def test_small_corner_facecam_over_gameplay_is_detected():
+    import cv2
+    import skimage.data
+
+    from mimir.vision.faces import load_detector
+    from tests.synth import scene
+
+    face = cv2.cvtColor(skimage.data.astronaut(), cv2.COLOR_RGB2BGR)[20:300, 110:340]
+    cam = cv2.resize(face, (89, 108), interpolation=cv2.INTER_AREA)      # face ~40 px tall in 1280x720
+    frame = cv2.resize(scene.gameplay_frame(3.0, 99.0), (1280, 720), interpolation=cv2.INTER_AREA)
+    frame[720 - 120:720 - 12, 1280 - 101:1280 - 12] = cam
+    detector, _ = load_detector()
+    found = detector.detect(frame)
+    assert len(found) == 1
+    assert found[0].cx > 0.9 and found[0].cy > 0.85
+    assert load_detector()[0].detect(cv2.resize(scene.gameplay_frame(5.0, 99.0), (1280, 720))) == []

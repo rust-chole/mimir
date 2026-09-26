@@ -58,3 +58,32 @@ def test_measured_overlaps_name_the_later_starter_and_ignore_boundary_jitter():
     assert [(o["held_by"], o["interrupter"], o["turn"]) for o in overlaps] == [
         ("S1", "S2", [16.2, 18.65]), ("S3", "S1", [21.4, 24.5])]
     assert overlaps[0]["start"] == 16.2 and overlaps[0]["end"] == 18.15
+
+
+def run_identity(participants, names, tmp_path, monkeypatch):
+    import types
+    from mimir.config import Settings
+    from mimir.core.stage import Ledger
+    from mimir.speakers import identity as module
+
+    monkeypatch.setattr(module, "render_preview", lambda source, ranges, output: output)
+    segments = [{"speaker": sid, "start": i * 5.0, "end": i * 5.0 + 4.0, "text": "clean speech sample here"}
+                for i, sid in enumerate(participants)]
+    speakers = {"mode": "dual" if len(participants) == 2 else "single", "segments": segments,
+                "participants": [{"id": sid} for sid in participants]}
+    settings = Settings()
+    settings = settings.with_(identity=settings.identity.__class__(speaker_names=tuple(names.items())))
+    ctx = types.SimpleNamespace(dep=lambda name: types.SimpleNamespace(json=lambda key: speakers),
+                                settings=settings, source=types.SimpleNamespace(path=tmp_path / "v.mp4"),
+                                out_dir=tmp_path, ledger=Ledger())
+    return module.IdentityStage(prompt=None).run(ctx).data["identity"]
+
+
+def test_speaker_preview_only_for_unnamed_voices_when_several_speak(tmp_path, monkeypatch):
+    single = run_identity(["S1"], {}, tmp_path, monkeypatch)
+    assert not single["ambiguous"] and single["previews"] == {} and not single["asked"]
+    named = run_identity(["S1", "S2"], {"S1": "Kai", "S2": "Tyla"}, tmp_path, monkeypatch)
+    assert not named["ambiguous"] and named["previews"] == {}
+    partly = run_identity(["S1", "S2"], {"S1": "Kai"}, tmp_path, monkeypatch)
+    assert partly["ambiguous"] and set(partly["previews"]) == {"S2"}
+    assert partly["speakers"]["S2"] == {"name": "", "confirmed": False, "source": "anonymous"}

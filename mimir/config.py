@@ -307,7 +307,7 @@ def routes_for(settings: Settings, *roles: str) -> dict[str, dict[str, str | Non
 
 
 def parse_speaker_names(raw: str) -> tuple[tuple[str, str], ...]:
-    """``S1=Kai,S2=Tyla`` -> (("S1", "Kai"), ("S2", "Tyla"))."""
+    """``S1=Alex,S2=Sam`` -> (("S1", "Alex"), ("S2", "Sam"))."""
     rows: list[tuple[str, str]] = []
     for part in str(raw or "").split(","):
         if not part.strip():

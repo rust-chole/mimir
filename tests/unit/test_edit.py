@@ -2,6 +2,8 @@ import pytest
 
 from mimir.config import Settings, RepairDirectives
 from mimir.edit.camera import SpanPlan, build_path, center_steps, follow
+from mimir.edit.context import build_spans
+from mimir.timeline.schema import COLD_OPEN, STORY, Timeline, quantize
 from mimir.edit.framing import MARGINS, Geometry, Window, clamp_window, full_frame, solve
 from mimir.edit.intents import Intent
 from mimir.edit.validator import validate_plan
@@ -72,8 +74,8 @@ class TestCameraPath:
         assert max(steps) <= 0.3 / 30 + 1e-9
 
 
-def context(spans):
-    return {"fps": 30, "spans": spans}
+def context(spans, layout="talking_head"):
+    return {"fps": 30, "spans": spans, "layout": {"class": layout}}
 
 
 def span(sid, role, allowed, visible=(), required=(), frames=(0, 60), dominant="S1", actions=()):
@@ -103,6 +105,27 @@ class TestValidator:
         wrong = {"decisions": {"s0": {"intent": "SPEAKER_MEDIUM", "target_id": "face_09", "intensity": "normal"}}}
         assert validate_plan(ctx, wrong, Settings())["corrections"][0]["code"] == "target_not_visible"
 
+    def test_unlinked_face_is_never_guessed_as_the_speaker(self):
+        # one visible face, but mouth activity never linked it to the voice: no speaker target
+        unlinked = {**FACE_A, "speaker": None, "link": 0.0}
+        ctx = context([span("s0", "setup", ["HOLD", "WIDE_CONTEXT", "SPEAKER_MEDIUM"], [unlinked])])
+        plan = {"decisions": {"s0": {"intent": "SPEAKER_MEDIUM", "target_id": "", "intensity": "normal"}}}
+        result = validate_plan(ctx, plan, Settings())
+        assert result["spans"][0]["intent"] == "WIDE_CONTEXT" and result["spans"][0]["target_id"] == ""
+        assert result["corrections"][0]["code"] == "no_target_evidence"
+
+    def test_downgrade_in_gameplay_layout_protects_the_gameplay(self):
+        facecam = {**FACE_A, "box": [0.86, 0.72, 0.92, 0.82], "size": 0.1}
+        ctx = context([span("s0", "reaction", ["HOLD", "WIDE_CONTEXT", "GAMEPLAY_PRIORITY"], [facecam])],
+                      layout="facecam_gameplay")
+        plan = {"decisions": {"s0": {"intent": "SPEAKER_PUNCH", "target_id": "face_00", "intensity": "strong"}}}
+        result = validate_plan(ctx, plan, Settings())
+        assert result["spans"][0]["intent"] == "GAMEPLAY_PRIORITY"
+        assert result["corrections"][-1]["code"] == "layout_protects_content"
+        # an explicit WIDE_CONTEXT choice is respected (the compiler shows the whole frame there)
+        plan = {"decisions": {"s0": {"intent": "WIDE_CONTEXT", "target_id": "", "intensity": "normal"}}}
+        assert validate_plan(ctx, plan, Settings())["spans"][0]["intent"] == "WIDE_CONTEXT"
+
     def test_story_outranks_the_voice(self):
         required = [{"kind": "subject", "id": f["id"], "box": f["box"], "reason": "payoff"} for f in (FACE_A, FACE_B)]
         ctx = context([span("s0", "payoff", ["HOLD", "WIDE_CONTEXT", "TWO_SHOT", "SPEAKER_MEDIUM", "SPEAKER_PUNCH",
@@ -126,3 +149,19 @@ class TestValidator:
         plan = {"decisions": {"s0": {"intent": "SPEAKER_MEDIUM", "target_id": "face_00", "intensity": "normal"}}}
         settings = Settings().with_(repair=RepairDirectives(round=1, widen_spans=("s0",)))
         assert validate_plan(ctx, plan, settings)["spans"][0]["intent"] == "WIDE_CONTEXT"
+
+
+def test_a_source_shot_cut_is_a_hard_boundary_and_never_eased_across():
+    timeline = Timeline(30, quantize([(COLD_OPEN, 20.0, 22.0), (STORY, 10.0, 24.0)], 30), 10.0, 24.0, 20.0, 22.0)
+    story = {"beats": [{"role": "setup", "start": 10.0, "end": 24.0}]}
+    spans = build_spans(timeline, story, {"shot_cuts": [15.0]}, [], 1.0)
+    cut_frame = int(round(timeline.map_time(15.0, kinds=(STORY,))[0] * 30))
+    assert any(s["frames"][0] == cut_frame for s in spans)
+    geo = Geometry(1920, 1080, 1080, 1920, 1.45, 2.6)
+    left, right = Window(0.3, 0.5, geo.h_inside), Window(0.7, 0.5, geo.h_inside)
+    plans = [SpanPlan(f"s{i}", tuple(sp["frames"]), [left if sp["frames"][0] < cut_frame else right]
+                      * (sp["frames"][1] - sp["frames"][0]), sp["frames"][0] == cut_frame, "smooth", 15, False)
+             for i, sp in enumerate(spans)]
+    states, phases = build_path(plans)
+    assert phases[cut_frame] == "cut" and states[cut_frame] == right and states[cut_frame - 1] == left
+    assert "transition" not in phases[cut_frame:cut_frame + 15]

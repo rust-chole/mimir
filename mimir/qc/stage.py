@@ -13,7 +13,7 @@ from mimir.core.stage import StageContext, StageOutput
 from mimir.media.frames import frame_at, frames_at_indices
 from mimir.media.probe import MediaInfo
 from mimir.qc.checks import QCInputs, run_checks
-from mimir.qc.reviewer import review
+from mimir.qc.reviewer import moment_evidence, pick_moments, review, verdict_to_check
 from mimir.timeline.schema import Timeline
 
 ALL_PRIOR = ("source", "probe", "transcript", "vod_evidence", "story", "caption_verify", "speakers", "identity",
@@ -50,7 +50,7 @@ class QCStage:
             checks.append(self._review(ctx, inputs))
         failed = [c for c in checks if not c["passed"] and c["severity"] == "fail"]
         repair: dict[str, Any] = {"widen_spans": [], "conservative_camera": False, "rerender": False}
-        repairable = bool(failed) and all(c["name"] in REPAIRABLE for c in failed)
+        repairable = bool(failed) and all(c["name"] in REPAIRABLE and c.get("repairable", True) for c in failed)
         for check in failed:
             directives = check.get("repair", {})
             repair["widen_spans"] = sorted(set(repair["widen_spans"]) | set(directives.get("widen_spans", [])))
@@ -66,21 +66,20 @@ class QCStage:
     def _review(self, ctx: StageContext, inputs: QCInputs) -> dict[str, Any]:
         tl = inputs.timeline
         n = inputs.plan["frame_count"]
-        picks = sorted({1, tl.main_start_frame + 5, n // 2, (3 * n) // 4, n - 3})
+        moments = pick_moments(tl, inputs.story, inputs.cold_open, n)
         width, height = inputs.plan["output"]
-        rendered = frames_at_indices(inputs.final_video, picks, fps=tl.fps, src_width=width, src_height=height)
-        pairs = [(i, frame_at(inputs.source, tl.source_time(i), src_width=inputs.media.width,
-                              src_height=inputs.media.height, width=640), rendered[i]) for i in picks if i in rendered]
-        verdict = review(ctx.provider, ctx.settings.route("final_reviewer"), pairs, inputs.story)
-        spans = []
-        for issue in verdict.get("issues", []):
-            if issue["type"] in ("cropped_subject", "missing_action") and issue["severity"] == "high":
-                try:
-                    frame = int(issue["frame_id"].lstrip("f"))
-                except ValueError:
-                    continue
-                spans += [s["id"] for s in inputs.context["spans"] if s["frames"][0] <= frame < s["frames"][1]]
-        high = any(i["severity"] == "high" for i in verdict.get("issues", []))
-        return {"name": "final_review", "passed": verdict.get("verdict") == "pass" or not high,
-                "severity": "fail" if high else "warn", "details": verdict,
-                "repair": {"widen_spans": sorted(set(spans)), "conservative_camera": bool(spans)}}
+        rendered = frames_at_indices(inputs.final_video, [m.frame for m in moments], fps=tl.fps,
+                                     src_width=width, src_height=height)
+        pairs = []
+        for moment in moments:
+            if moment.frame not in rendered:
+                continue
+            evidence = moment_evidence(moment, tl, inputs.story, inputs.context, inputs.plan, inputs.captions,
+                                       inputs.truth)
+            source = frame_at(inputs.source, tl.source_time(moment.frame), src_width=inputs.media.width,
+                              src_height=inputs.media.height, width=640)
+            pairs.append((evidence, source, rendered[moment.frame]))
+        verdict = review(ctx.provider, ctx.settings.route("final_reviewer"), pairs, inputs.story, inputs.cold_open)
+        check = verdict_to_check(verdict, inputs.context)
+        check["details"]["frames"] = [e["frame_id"] + ":" + e["moment"] for e, _, _ in pairs]
+        return check

@@ -4,7 +4,8 @@ Every correction is recorded with a reason code; nothing is silently replaced:
 * intents the span's evidence does not allow walk down the downgrade ladder;
 * the story outranks the voice: a single-subject intent is widened when the
   span REQUIRES several participants / actions to stay visible;
-* targets must be visible subjects / actions of the span;
+* a downgraded shot in a gameplay / screen layout lands on that content's priority intent;
+* targets must be visible subjects / actions of the span (speaker targets only when linked);
 * restraint: limited punches per 10 s, no punch on very short spans;
 * repair directives from a failed QC (at most one round) widen named spans.
 """
@@ -17,13 +18,14 @@ from mimir.core.stage import StageContext, StageOutput
 from mimir.edit.intents import DOWNGRADE, SINGLE_SUBJECT, Intent
 
 MIN_PUNCH_SECONDS = 0.6
+LAYOUT_PRIORITY = {"facecam_gameplay": Intent.GAMEPLAY_PRIORITY, "gameplay": Intent.GAMEPLAY_PRIORITY,
+                   "screen_content": Intent.SCREEN_PRIORITY}
 
 
 def _default_target(span: dict[str, Any], intent: Intent) -> str:
     if intent in (Intent.SPEAKER_MEDIUM, Intent.SPEAKER_PUNCH):
+        # only the face linked to the dominant voice; never a guess
         face = next((v for v in span["visible"] if v["speaker"] and v["speaker"] == span["dominant_speaker"]), None)
-        if face is None and len(span["visible"]) == 1:
-            face = span["visible"][0]
         return face["id"] if face else ""
     if intent is Intent.REACTION:
         others = [v for v in span["visible"] if v["speaker"] != span["dominant_speaker"]]
@@ -62,6 +64,12 @@ def validate_plan(context: dict[str, Any], plan: dict[str, Any], settings: Setti
             lower = DOWNGRADE[intent]
             correct(span["id"], "evidence_does_not_allow", intent.value, lower.value)
             intent = lower
+        protected = LAYOUT_PRIORITY.get(context["layout"]["class"])
+        if intent is Intent.WIDE_CONTEXT and original is not Intent.WIDE_CONTEXT and protected \
+                and protected.value in span["allowed"]:
+            # a downgraded shot lands on the layout's content priority (gameplay / screen stays whole)
+            correct(span["id"], "layout_protects_content", intent.value, protected.value)
+            intent = protected
         required_subjects = [r for r in span["required"] if r["kind"] == "subject"]
         if intent in SINGLE_SUBJECT and len(required_subjects) >= 2:
             wider = Intent.TWO_SHOT if Intent.TWO_SHOT.value in span["allowed"] else Intent.WIDE_CONTEXT

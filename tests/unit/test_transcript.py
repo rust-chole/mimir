@@ -129,3 +129,42 @@ def test_segments_break_on_pauses_and_sentences():
              enumerate([("hi.", 0.0), ("you", 0.3), ("there.", 0.6), ("next", 0.9), ("one", 2.5)])]
     segments = build_segments(words)
     assert [s["text"] for s in segments][-1] == "one"
+
+
+def tw(text, start, end):
+    return TimedWord(text, start, end)
+
+
+def test_simultaneous_speech_keeps_one_token_per_word_with_measured_times():
+    # S3 "I burned the kitchen" and S1 "No, that is not" overlap on one timing clock;
+    # "burned" (S3) and "that" (S1) share an onset, "is" starts inside "burned".
+    clock = [tw("No,", 1.400, 1.503), tw("I", 1.508, 1.811), tw("burned", 1.881, 2.303), tw("that", 1.881, 2.052),
+             tw("is", 2.200, 2.368), tw("the", 2.373, 2.688), tw("kitchen!", 2.758, 3.100), tw("not", 3.120, 3.300)]
+    rows, ratio = align_text_to_clock("No, I burned that is the kitchen! not", clock, 10.0)
+    assert ratio == 1.0
+    assert [r.text for r in rows] == ["No,", "I", "burned", "that", "is", "the", "kitchen!", "not"]
+    by_text = {r.text: r for r in rows}
+    # measured intervals survive exactly: nothing merged, nothing trimmed
+    assert (by_text["burned"].start, by_text["burned"].end) == (1.881, 2.303)
+    assert (by_text["that"].start, by_text["that"].end) == (1.881, 2.052)
+    assert (by_text["is"].start, by_text["is"].end) == (2.200, 2.368)
+    assert by_text["that"].overlaps_previous and not by_text["burned"].overlaps_previous
+    assert all(" " not in r.text for r in rows)
+
+
+def test_partial_overlap_is_preserved_but_boundary_jitter_is_trimmed():
+    rows, _ = align_text_to_clock("wait stop now", [tw("wait", 1.00, 1.40), tw("stop", 1.20, 1.60),
+                                                   tw("now", 1.595, 1.90)], 5.0)
+    assert (rows[0].start, rows[0].end) == (1.00, 1.40)          # "wait" keeps its measured end
+    assert rows[1].start == 1.20 and rows[1].overlaps_previous    # "stop" overlaps it (two voices)
+    # 5 ms of boundary jitter is not simultaneous speech: the tail yields, the onset stays
+    assert rows[2].start == 1.595 and rows[1].end == 1.59 and not rows[2].overlaps_previous
+
+
+def test_lexical_only_words_in_a_tight_span_stay_separate_tokens():
+    # the lexical ear heard three words where the timing ear measured one short token
+    rows, _ = align_text_to_clock("so I was", [tw("so", 0.50, 0.56)], 2.0)
+    assert [r.text for r in rows] == ["so", "I", "was"]
+    starts = [r.start for r in rows]
+    assert starts == sorted(starts) and rows[0].start == 0.50
+    assert all(r.end > r.start for r in rows)

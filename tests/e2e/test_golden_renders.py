@@ -95,6 +95,21 @@ def test_multi_speaker_interruption_gets_a_temporary_second_lane(e2e_root):
     assert captions["overlap_windows"]
     assert any(w["lane"] == "secondary" for w in captions["words"])
     assert artifact(result, "speakers", "speakers")["mode"] in ("triple", "crowd")
+    # simultaneous speech: one token per word, each keeps its own speaker and measured interval
+    words = artifact(result, "caption_truth", "caption_truth")["words"]
+    assert all(len(w["text"].split()) == 1 for w in words)
+    overlapping = [(a, b) for i, a in enumerate(words) for b in words[i + 1:i + 4]
+                   if a["speaker"] and b["speaker"] and a["speaker"] != b["speaker"]
+                   and min(a["end"], b["end"]) - max(a["start"], b["start"]) >= 0.1]
+    assert overlapping, "measured overlap between two speakers must survive into caption truth"
+    # two voices with the same measured onset ("burned" / "that") stay two tokens, two owners
+    coincident = [(a["text"], b["text"]) for i, a in enumerate(words) for b in words[i + 1:i + 3]
+                  if abs(a["start"] - b["start"]) <= 0.005 and a["speaker"] != b["speaker"]]
+    assert coincident
+    # every secondary-lane word is the interrupter inside a published overlap window
+    for row in captions["words"]:
+        if row["lane"] == "secondary":
+            assert any(a <= row["start"] <= b for a, b in captions["overlap_windows"])
 
 
 def test_gameplay_facecam_uses_the_stacked_layout(e2e_root):

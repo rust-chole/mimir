@@ -5,7 +5,7 @@
                                never part of the final video) are written; in an
                                interactive terminal the user may name each voice,
                                otherwise stable anonymous ids are kept;
-* names given up front (``--speaker-names S1=Kai``) are user-confirmed.
+* names given up front (``--speaker-names S1=Alex``) are user-confirmed.
 
 Only confirmed names are ever printed on screen.
 """
@@ -94,11 +94,13 @@ class IdentityStage:
                                    f"participant (have {participants})")
                 continue
             identities[speaker_id] = {"name": name, "confirmed": True, "source": "user_declared"}
-        ambiguous = len(participants) > 1
+        # identity is ambiguous only with several voices of which some are still unnamed
+        unnamed = [sid for sid in participants if not identities[sid]["confirmed"]]
+        ambiguous = len(participants) > 1 and bool(unnamed)
         files: dict[str, Path] = {}
         asked = False
         if ambiguous:
-            for speaker_id in participants:
+            for speaker_id in unnamed:
                 ranges = preview_ranges(speaker_id, speakers["segments"])
                 if not ranges:
                     ctx.ledger.info("no_clean_preview", f"no clean non-overlapping sample for {speaker_id}")

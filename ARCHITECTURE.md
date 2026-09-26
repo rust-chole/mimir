@@ -33,7 +33,7 @@ Source Video
 | truth | owner | rule |
 | --- | --- | --- |
 | what was said | `transcript.verify` + `transcript.name_lock` | ASR consensus; micro-window votes (3/3, then 4/5); never auto-deletes; verified names only with evidence |
-| when it was said | `transcript.align` (timing ear) + `transcript.clock_guard` | lexical corrections are re-aligned to the same immutable clock; PCM guard only moves late phrase starts earlier |
+| when it was said | `transcript.align` (timing ear) + `transcript.clock_guard` | lexical corrections are re-aligned to the same immutable clock; one token per word, simultaneous speech keeps each word's measured interval; PCM guard only moves late phrase starts earlier |
 | who said it | `speakers` | diarization census + per-segment text/timing evidence; unresolved stays unresolved; measured overlaps name the interrupter (their turn gets the second caption lane) |
 | real identity | `speakers.identity` | only user-confirmed names; single confident speaker never asks |
 | which story | `story` | complete causal chain; protected ranges; beats with minimum durations |
@@ -45,7 +45,9 @@ speaker only when mouth activity correlates with that speaker's speech (Fisher-z
 
 ## Visual evidence (selected Short only)
 
-`vision` analyses the story window at 1280 px / 10 fps: face detection + optical-flow tracking,
+`vision` analyses the story window at 1280 px / 10 fps: YuNet face detection (bundled, checksum
+verified; a missing model falls back to Haar with a recorded `face_detector_fallback` warning) +
+optical-flow tracking,
 mouth activity, speaker linking, action regions (motion not explained by people), static UI/HUD
 regions and a layout class (`talking_head`, `multi_person`, `facecam_gameplay`, `screen_content`,
 `gameplay`, `scene`), plus one bounded observer call. A shot cut must persist: every picture shortly
@@ -59,7 +61,9 @@ pixel-stable corner face over moving content is a composited facecam.
 
 * Intents: `HOLD, WIDE_CONTEXT, TWO_SHOT, SPEAKER_MEDIUM, SPEAKER_PUNCH, REACTION, ACTION_REGION,
   GAMEPLAY_PRIORITY, SCREEN_PRIORITY`. The director never returns coordinates or commands.
-* Evidence decides which intents a span allows; validation walks disallowed intents down a ladder,
+* Evidence decides which intents a span allows: speaker shots only on a face whose mouth activity is
+  linked to the voice (never a guessed lone face); no face-only framing of a facecam overlay; validation
+  walks disallowed intents down a ladder (landing on gameplay/screen priority in those layouts),
   widens single-subject intents when several participants/actions are REQUIRED (the story outranks the
   voice), limits punches and records every correction.
 * One virtual-camera window per frame: `(cx, cy, h)` in source-normalized units. Crop and "fit with
@@ -93,8 +97,13 @@ peak, the peak recurs in the story), main-story restart, caption text/timing vs 
 burned ASS, speaker ownership/labels/lanes, required content in frame, crop validity, camera stability,
 no half-cut faces, the plan reached the pixels (structure correlation against a re-composed prediction),
 captions reached the pixels, A/V sync per segment, cold-open audio = peak audio, no degraded stage.
-An optional multimodal reviewer (one call) compares source and output frames. A failure produces
-deterministic repair directives; the driver runs at most ONE repair round, then fails loudly.
+The optional multimodal reviewer (`--reviewer`, one call) gets a SOURCE/RENDERED frame pair for each
+story moment (cold-open peak, main restart, setup, escalation, payoff, reaction; at most 8) with the
+evidence for that moment: beat, planned intent, REQUIRED content drawn as boxes, linked speaker, burned
+captions and caption truth. It reports only fixed failure types (missing beat, weak/wrong cold open,
+causal damage, cropped required visual, speaker/camera mismatch, caption contradiction, plan not in
+pixels). Visual failures map to deterministic repairs (widen that span); story and caption failures stop
+the gate. The driver runs at most ONE repair round, then fails loudly.
 
 ## Model routing
 

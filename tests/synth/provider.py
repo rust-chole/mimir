@@ -40,6 +40,8 @@ class ScriptedProvider(ModelProvider):
         self.truth = truth
         self.calls: Counter[str] = Counter()
         self.inputs: dict[str, list[str]] = {}
+        self.review_requests: list[dict[str, Any]] = []
+        self.review_script: list[Any] = []
 
     # ------------------------------------------------------------------ ASR
 
@@ -258,4 +260,15 @@ class ScriptedProvider(ModelProvider):
             "confidence": 0.8, "reason": "disbelief punctuation"}]}
 
     def _final_reviewer(self, text: str, schema, images) -> dict[str, Any]:
-        return {"verdict": "pass", "issues": []}
+        """Checks the request is a real source-vs-render comparison; verdicts come from ``review_script``
+        (one callable per QC round, fed the frame ids and evidence lines) or pass by default."""
+        frame_ids = schema["properties"]["issues"]["items"]["properties"]["frame_id"]["enum"]
+        labels = [image.label for image in images]
+        assert labels == [f"{fid} {kind}" for fid in frame_ids for kind in ("SOURCE", "RENDERED")], labels
+        evidence = {line.split(" | ")[0].split("=", 1)[1]: line for line in text.splitlines()
+                    if line.startswith("frame_id=")}
+        assert set(evidence) == set(frame_ids)
+        self.review_requests.append({"frame_ids": frame_ids, "evidence": evidence, "images": len(images)})
+        script = self.review_script[len(self.review_requests) - 1] if len(self.review_requests) <= len(
+            self.review_script) else None
+        return script(frame_ids, evidence) if script else {"verdict": "pass", "issues": []}

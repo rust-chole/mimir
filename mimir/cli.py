@@ -97,6 +97,10 @@ def cmd_doctor(_: argparse.Namespace) -> int:
 
         print(f"opencv     {cv2.__version__} (numpy {numpy.__version__})")
         ok &= hasattr(cv2, "CascadeClassifier")
+        from mimir.vision.faces import load_detector
+
+        detector, fallback = load_detector()
+        print(f"faces      {detector.name}" + (f" (FALLBACK: {fallback})" if fallback else ""))
     except ImportError as error:
         print(f"opencv     MISSING ({error})")
         ok = False
@@ -112,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--workspace")
     run.add_argument("--output")
     run.add_argument("--story-index", type=int, default=None, help="force the Nth ranked story candidate")
-    run.add_argument("--speaker-names", help="confirmed names, e.g. S1=Kai,S2=Tyla")
+    run.add_argument("--speaker-names", help="confirmed names, e.g. S1=Alex,S2=Sam")
     run.add_argument("--entities", help="verified names/terms for caption spelling, comma separated")
     run.add_argument("--creator", help="verified creator name")
     run.add_argument("--interactive", action="store_true", help="ask for speaker names using speaker_preview audio")

@@ -19,6 +19,7 @@ from mimir.timeline.schema import COLD_OPEN, STORY, Timeline
 MIN_VISIBLE_FRACTION = 0.6
 MIN_TRUE_OVERLAP = 0.045
 OVERLAP_PAD = 0.12
+EPISODE_GAP = 0.35     # overlapping pairs closer than this belong to one overlap episode
 MAX_TWO_LANE_EVENT = 1.15
 
 
@@ -97,13 +98,21 @@ def assign_lanes(rows: Sequence[RenderWord], measured: Sequence[tuple[float, flo
                  ) -> list[tuple[float, float]]:
     """A second lane only for the INTERRUPTING speaker inside measured simultaneous speech.
 
-    Sequential turn-taking stays on one lane; when two voices overlap, the one who started
-    later moves to the secondary position. ``measured`` are diarization overlaps already mapped
-    to output time as (start, end, interrupter) covering the interrupter's whole turn (a single
-    ASR clock serializes simultaneous words, so word times alone rarely overlap).
+    Sequential turn-taking stays on one lane. Overlap is decided per EPISODE, never per word
+    pair (in interleaved speech both voices alternately "start later"):
+
+    * ``measured``: diarization overlaps mapped to output time as (start, end, interrupter),
+      covering the interrupter's whole turn - authoritative;
+    * elsewhere, overlapping words of two speakers form an episode whose interrupter is the
+      speaker who cut in at its first overlapping pair.
+
+    A word moves to the secondary lane only when its onset lies inside a window of its own
+    speaker; the held speaker stays on the main lane throughout.
     """
     windows: list[tuple[float, float, str]] = [(a - OVERLAP_PAD, b + OVERLAP_PAD, speaker)
                                                for a, b, speaker in measured]
+    measured_windows = list(windows)
+    episodes: list[dict[str, Any]] = []
     for i, first in enumerate(rows):
         for second in rows[i + 1:]:
             if second.start >= first.end:
@@ -111,9 +120,20 @@ def assign_lanes(rows: Sequence[RenderWord], measured: Sequence[tuple[float, flo
             if not first.speaker or not second.speaker or first.speaker == second.speaker or \
                     first.segment_index != second.segment_index:
                 continue
-            if min(first.end, second.end) - max(first.start, second.start) >= MIN_TRUE_OVERLAP:
-                late = second if second.start >= first.start else first
-                windows.append((late.start - OVERLAP_PAD, late.end + OVERLAP_PAD, late.speaker))
+            if min(first.end, second.end) - max(first.start, second.start) < MIN_TRUE_OVERLAP:
+                continue
+            early, late = (first, second) if first.start <= second.start else (second, first)
+            if any(a <= late.start <= b for a, b, _ in measured_windows):
+                continue  # diarization already measured this overlap
+            speakers = {early.speaker, late.speaker}
+            episode = episodes[-1] if episodes else None
+            if episode and episode["speakers"] == speakers and late.start <= episode["end"] + EPISODE_GAP:
+                episode["end"] = max(episode["end"], *(w.end for w in (early, late)
+                                                       if w.speaker == episode["interrupter"]))
+            else:
+                episodes.append({"speakers": speakers, "interrupter": late.speaker, "start": late.start,
+                                 "end": late.end})
+    windows += [(e["start"] - OVERLAP_PAD, e["end"] + OVERLAP_PAD, e["interrupter"]) for e in episodes]
     merged: list[tuple[float, float, str]] = []
     for a, b, speaker in sorted(windows):
         if merged and merged[-1][2] == speaker and a <= merged[-1][1] + 0.12:
@@ -121,7 +141,7 @@ def assign_lanes(rows: Sequence[RenderWord], measured: Sequence[tuple[float, flo
         else:
             merged.append((a, b, speaker))
     for row in rows:
-        if any(speaker == row.speaker and min(row.end, b) - max(row.start, a) > 0 for a, b, speaker in merged):
+        if any(speaker == row.speaker and a <= row.start <= b for a, b, speaker in merged):
             row.lane = "secondary"
     return [(a, b) for a, b, _ in merged]
 

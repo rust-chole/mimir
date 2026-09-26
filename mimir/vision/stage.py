@@ -13,7 +13,7 @@ from mimir.media.frames import frame_at, iter_frames
 from mimir.media.motion import (SETTLED_RATIO, MotionSample, color_hist, dedupe_cuts, hist_distance,
                                 settled_distances, shot_boundaries, visual_peaks)
 from mimir.media.probe import MediaInfo
-from mimir.vision.faces import load_detector
+from mimir.vision.faces import detector_fingerprint, load_detector
 from mimir.vision.observer import observe
 from mimir.vision.regions import RegionAccumulator, action_regions, classify_layout, static_text_regions
 from mimir.vision.speaker_link import associate
@@ -64,7 +64,8 @@ class VisionStage:
     deps = ("source", "probe", "story", "speakers")
 
     def params(self, settings: Settings) -> Any:
-        return {"vision": section(settings, "vision"), "routes": routes_for(settings, "visual_observer")}
+        return {"vision": section(settings, "vision"), "routes": routes_for(settings, "visual_observer"),
+                "detector": detector_fingerprint()}
 
     def run(self, ctx: StageContext) -> StageOutput:
         info = MediaInfo.from_dict(ctx.dep("probe").json("media"))
@@ -73,7 +74,10 @@ class VisionStage:
         cfg = ctx.settings.vision
         start = max(0.0, float(story["start"]) - WINDOW_PAD)
         end = min(info.duration, float(story["end"]) + WINDOW_PAD)
-        detector = load_detector()
+        detector, fallback = load_detector()
+        if fallback:
+            ctx.ledger.warning("face_detector_fallback", f"{fallback}; using the OpenCV Haar cascades "
+                               "(lower recall on small, turned and partly covered faces)")
         tracker = FaceTracker(detector, cfg.detect_every)
         regions = RegionAccumulator()
         times: list[float] = []

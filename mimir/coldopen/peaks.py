@@ -118,7 +118,8 @@ def compute_window(peak: dict[str, Any], story: dict[str, Any], words: Sequence[
     start, end = snap_to_words(start, end, words, cfg.max_duration)
     start, end = max(s_start, start), min(s_end, end)
     if not (start <= float(peak["start"]) + 0.05 and end >= min(float(peak["end"]), start + cfg.max_duration) - 0.05):
-        # the peak must be inside the cold open: fall back to the core itself, bounded
+        # the peak must be inside the cold open: re-centre on the core itself, bounded (recorded)
         start = max(s_start, float(peak["center"]) - cfg.max_duration * lead)
         end = min(s_end, start + max(minimum, min(cfg.max_duration, float(peak["end"]) - start + 0.4)))
+        policy += "+recentred_on_core"
     return round(start, 3), round(end, 3), policy

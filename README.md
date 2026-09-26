@@ -20,9 +20,9 @@ Useful options:
 
 | option | effect |
 | --- | --- |
-| `--speaker-names S1=Kai,S2=Tyla` | confirmed names (only confirmed names are ever printed) |
+| `--speaker-names S1=Alex,S2=Sam` | confirmed names (only confirmed names are ever printed) |
 | `--interactive` | when several voices are ambiguous, play `speaker_preview` audio and ask for names |
-| `--entities "Tyla,Valorant"` / `--creator NAME` | verified spellings for caption truth |
+| `--entities "Alex,Valorant"` / `--creator NAME` | verified spellings for caption truth |
 | `--story-index N` | use the N-th ranked story candidate |
 | `--rerun captions,render` | re-run named stages (dependents follow through signatures) |
 | `--record DIR` / `--replay DIR` | record every model response / replay them (regression runs, no live calls) |

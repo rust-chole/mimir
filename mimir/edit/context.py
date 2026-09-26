@@ -148,8 +148,10 @@ class EditContextStage:
                          "importance": e["importance"]}
                         for o in observations if src_a - 0.5 <= o["t"] <= src_b + 0.5
                         for e in o["elements"] if e["importance"] in ("high", "medium")]
+            # a face is "the speaker" only when mouth activity linked it to the dominant voice;
+            # without that evidence the camera stays conservative (never guesses a lone face)
             speaking_face = next((v for v in visible if v["speaker"] and v["speaker"] == dominant), None)
-            single_on_screen = len(visible) == 1 and mode == "single"
+            overlay_face = layout["class"] == "facecam_gameplay"
             required = []
             if role in MULTI_SUBJECT_ROLES and len(visible) >= 2:
                 required += [{"kind": "subject", "id": v["id"], "box": v["box"],
@@ -163,13 +165,15 @@ class EditContextStage:
                          for k, e in enumerate(el for el in elements if el["importance"] == "high"
                                                and el["kind"] in ("object", "action", "gameplay", "screen", "text"))]
             allowed = [Intent.HOLD.value, Intent.WIDE_CONTEXT.value]
-            if len(visible) >= 2:
+            # facecam overlays stay visible in the stacked panel; face-only framings would drop the
+            # gameplay and upscale a small overlay, so they are not offered there
+            if len(visible) >= 2 and not overlay_face:
                 allowed.append(Intent.TWO_SHOT.value)
-            if (speaking_face and speaking_face["link"] >= WEAK_LINK) or single_on_screen:
+            if speaking_face and speaking_face["link"] >= WEAK_LINK and not overlay_face:
                 allowed.append(Intent.SPEAKER_MEDIUM.value)
-            if (speaking_face and speaking_face["link"] >= STRONG_LINK) or single_on_screen:
+            if speaking_face and speaking_face["link"] >= STRONG_LINK and not overlay_face:
                 allowed.append(Intent.SPEAKER_PUNCH.value)
-            if visible and role in ("payoff", "reaction", "cold_open", "escalation"):
+            if visible and role in ("payoff", "reaction", "cold_open", "escalation") and not overlay_face:
                 allowed.append(Intent.REACTION.value)
             if actions or any(e["kind"] in ("object", "action") for e in elements):
                 allowed.append(Intent.ACTION_REGION.value)

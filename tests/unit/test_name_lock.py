@@ -65,3 +65,13 @@ def test_confident_independent_ear_hearing_another_word_vetoes():
 def test_alias_confirmed_by_strong_evidence_resolves_later_mentions():
     out, _ = lock_names(words(["Tyler,", "you", "rock.", "Tyler", "said", "yes"]), ROSTER)
     assert out[0]["text"] == "Tyla," and out[3]["text"] == "Tyla"
+
+
+def test_name_lock_invariants_reject_any_timing_or_speaker_change():
+    import pytest as _pytest
+    from mimir.transcript.name_lock import verify_invariants
+    before = [{"id": "c1", "text": "Tyler", "start": 1.0, "end": 1.3, "speaker": "S2"}]
+    verify_invariants(before, [{**before[0], "text": "Tyla"}])          # spelling may change
+    for key, value in (("start", 1.01), ("end", 1.31), ("speaker", "S1"), ("id", "c2")):
+        with _pytest.raises(AssertionError):
+            verify_invariants(before, [{**before[0], "text": "Tyla", key: value}])

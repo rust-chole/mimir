@@ -35,6 +35,7 @@ from mimir.timeline.schema import COLD_OPEN, STORY, Timeline
 
 REACTION_ZOOM = 1.15
 ACTION_ZOOM = 1.10
+FULL_FRAME_LAYOUTS = ("facecam_gameplay", "gameplay", "screen_content")
 
 
 def _required_boxes(span: dict[str, Any]) -> list[list[float]]:
@@ -117,7 +118,9 @@ class Compiler:
             intent = Intent.WIDE_CONTEXT
         if intent is Intent.GAMEPLAY_PRIORITY and self.layout["class"] == "facecam_gameplay":
             goals: list[State] = [self._stack_state(span)] * len(frames)
-        elif intent in (Intent.GAMEPLAY_PRIORITY, Intent.SCREEN_PRIORITY):
+        elif intent in (Intent.GAMEPLAY_PRIORITY, Intent.SCREEN_PRIORITY) or (
+                intent is Intent.WIDE_CONTEXT and self.layout["class"] in FULL_FRAME_LAYOUTS):
+            # gameplay / screen content: "everything visible" is the whole frame
             goals = [full_frame(self.geo)] * len(frames)
         elif intent is Intent.WIDE_CONTEXT:
             boxes = list(required) + [v["box"] for v in span["visible"]] + [a["box"] for a in span["actions"]] + \
