@@ -85,6 +85,7 @@ class CaptionTruthStage:
             "words": locked,
             "signature": truth_signature(locked),
             "speaker_mode": speakers["mode"],
+            "overlaps": speakers.get("overlaps", []),
             "confirmed_names": names,
             "name_lock": audit,
             "quality": caption.get("quality", {}),

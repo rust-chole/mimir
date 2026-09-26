@@ -9,6 +9,7 @@ from mimir.captions.layout import Group, RenderWord
 HOOK_START_SCALE, HOOK_LAND, HOOK_BOUNCE = 142, 94, 106
 HOOK_LAND_MS, HOOK_BOUNCE_MS, HOOK_SETTLE_MS = 85, 145, 225
 HOOK_FADE_OUT_MS = 90
+CAPS_ADVANCE = 0.62  # average advance of a bold capital, in font sizes (conservative for Arial Bold)
 
 
 def ass_time(seconds: float) -> str:
@@ -97,7 +98,9 @@ def hook_events(text: str, start: float, end: float, style: CaptionStyle, width:
     if not text:
         return []
     shown = text.upper()
-    first, second = split_two_lines(shown) if len(shown) > 18 else (shown, "")
+    # one line only when it fits inside the side margins even at the bounce overshoot
+    line_chars = int((width - 2 * style.margin_h) / (style.hook_size * CAPS_ADVANCE * HOOK_BOUNCE / 100))
+    first, second = split_two_lines(shown) if len(shown) > line_chars else (shown, "")
     body = escape(first) + (("\\N" + escape(second)) if second else "")
     duration_ms = int(round((end - start) * 1000))
     fade_start = max(0, duration_ms - HOOK_FADE_OUT_MS)

@@ -1,5 +1,5 @@
 from mimir.models.provider import DiarizedSegment
-from mimir.speakers.assign import assign_speakers
+from mimir.speakers.assign import assign_speakers, measured_overlaps
 from mimir.speakers.census import classify, normalize_segments, speaker_stats
 from mimir.speakers.identity import preview_ranges
 
@@ -48,3 +48,13 @@ def test_preview_uses_only_clean_non_overlapping_speech():
                 {"speaker": "S1", "start": 4.0, "end": 6.5}]
     ranges = preview_ranges("S1", segments)
     assert ranges and all(a >= 4.0 for a, _ in ranges)
+
+
+def test_measured_overlaps_name_the_later_starter_and_ignore_boundary_jitter():
+    segments = [{"speaker": "S1", "start": 15.3, "end": 18.15}, {"speaker": "S2", "start": 16.2, "end": 18.65},
+                {"speaker": "S3", "start": 18.5, "end": 20.0},     # 0.15 s jitter with S2: not an overlap
+                {"speaker": "S3", "start": 20.2, "end": 23.2}, {"speaker": "S1", "start": 21.4, "end": 24.5}]
+    overlaps = measured_overlaps(segments)
+    assert [(o["held_by"], o["interrupter"], o["turn"]) for o in overlaps] == [
+        ("S1", "S2", [16.2, 18.65]), ("S3", "S1", [21.4, 24.5])]
+    assert overlaps[0]["start"] == 16.2 and overlaps[0]["end"] == 18.15

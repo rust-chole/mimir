@@ -51,6 +51,15 @@ def test_stage_specific_invalidation(tmp_path):
     assert b.runs == 2 and report.executed == []
 
 
+def test_resumed_report_runs_only_the_remaining_stages(tmp_path):
+    a, b, c = Echo("a", ("source",), None), Echo("b", ("a",), "size"), Echo("c", ("b",), None)
+    runner = make(tmp_path, [a, b, c])
+    report = runner.run(until="b")
+    assert report.executed == ["a", "b"] and "c" not in report.artifacts
+    report = runner.run(report=report)
+    assert (a.runs, b.runs, c.runs) == (1, 1, 1) and report.executed == ["a", "b", "c"]
+
+
 def test_tampered_artifacts_are_not_reused(tmp_path):
     a = Echo("a", ("source",), None)
     report = make(tmp_path, [a]).run()

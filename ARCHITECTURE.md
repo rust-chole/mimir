@@ -34,7 +34,7 @@ Source Video
 | --- | --- | --- |
 | what was said | `transcript.verify` + `transcript.name_lock` | ASR consensus; micro-window votes (3/3, then 4/5); never auto-deletes; verified names only with evidence |
 | when it was said | `transcript.align` (timing ear) + `transcript.clock_guard` | lexical corrections are re-aligned to the same immutable clock; PCM guard only moves late phrase starts earlier |
-| who said it | `speakers` | diarization census + per-segment text/timing evidence; unresolved stays unresolved |
+| who said it | `speakers` | diarization census + per-segment text/timing evidence; unresolved stays unresolved; measured overlaps name the interrupter (their turn gets the second caption lane) |
 | real identity | `speakers.identity` | only user-confirmed names; single confident speaker never asks |
 | which story | `story` | complete causal chain; protected ranges; beats with minimum durations |
 | source vs output time | `timeline` | explicit segments, frame quantized; source timestamps never rewritten |

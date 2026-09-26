@@ -79,11 +79,17 @@ class PipelineRunner:
             raise ValueError(f"--rerun names unknown stages: {sorted(unknown)}")
 
     def run(self, until: str | None = None, report: RunReport | None = None) -> RunReport:
+        """Resolve stages in order. A ``report`` from an earlier call with the SAME settings is resumed:
+        stages it already resolved are kept and only the remaining ones run."""
         report = report or RunReport()
         dep_ids: dict[str, str] = {SOURCE: self.source.identity}
         for artifact_name, artifact in report.artifacts.items():
             dep_ids[artifact_name] = artifact.content_id
         for stage in self.stages:
+            if stage.name in report.artifacts:
+                if until is not None and stage.name == until:
+                    break
+                continue
             params = stage.params(self.settings)
             signature = stage_signature(stage, params, {dep: dep_ids[dep] for dep in stage.deps})
             artifact = None

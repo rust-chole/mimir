@@ -13,7 +13,7 @@ from mimir.config import Settings, routes_for
 from mimir.core.stage import StageContext, StageOutput
 from mimir.media.audio import extract_wav
 from mimir.models.provider import AudioMeta
-from mimir.speakers.assign import assign_speakers
+from mimir.speakers.assign import assign_speakers, measured_overlaps
 from mimir.speakers.census import classify, normalize_segments, speaker_stats
 
 
@@ -31,7 +31,8 @@ class SpeakerStage:
         words = caption["words"]
         if not words:
             return StageOutput(data={"speakers": {"mode": "silent", "participants": [], "background": [],
-                                                  "segments": [], "assignment": {}, "metrics": {}}})
+                                                  "segments": [], "assignment": {}, "metrics": {},
+                                                  "overlaps": []}})
         temp = ctx.out_dir / "tmp"
         audio = extract_wav(ctx.source.path, temp / "window.wav", start=window_start,
                             duration=window_end - window_start)
@@ -72,6 +73,7 @@ class SpeakerStage:
                          for s in participant_segments],
             "background_segments": [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in segments
                                     if s["raw_speaker"] not in anon],
+            "overlaps": measured_overlaps(participant_segments) if mode != "single" else [],
             "assignment": {word["id"]: row for word, row in zip(words, rows)},
             "metrics": metrics,
         }})

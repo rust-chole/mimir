@@ -93,6 +93,16 @@ class TestValidator:
         assert result["spans"][0]["intent"] == "SPEAKER_MEDIUM"
         assert result["corrections"][0]["code"] == "evidence_does_not_allow"
 
+    def test_empty_target_is_resolved_from_evidence_not_counted_as_disagreement(self):
+        ctx = context([span("s0", "setup", ["HOLD", "WIDE_CONTEXT", "SPEAKER_MEDIUM"], [FACE_A])])
+        plan = {"decisions": {"s0": {"intent": "SPEAKER_MEDIUM", "target_id": "", "intensity": "normal"}}}
+        result = validate_plan(ctx, plan, Settings())
+        assert result["spans"][0]["target_id"] == "face_00"
+        assert result["corrections"] == [] and result["correction_ratio"] == 0
+        assert result["resolved_targets"] == [{"span": "s0", "intent": "SPEAKER_MEDIUM", "target": "face_00"}]
+        wrong = {"decisions": {"s0": {"intent": "SPEAKER_MEDIUM", "target_id": "face_09", "intensity": "normal"}}}
+        assert validate_plan(ctx, wrong, Settings())["corrections"][0]["code"] == "target_not_visible"
+
     def test_story_outranks_the_voice(self):
         required = [{"kind": "subject", "id": f["id"], "box": f["box"], "reason": "payoff"} for f in (FACE_A, FACE_B)]
         ctx = context([span("s0", "payoff", ["HOLD", "WIDE_CONTEXT", "TWO_SHOT", "SPEAKER_MEDIUM", "SPEAKER_PUNCH",

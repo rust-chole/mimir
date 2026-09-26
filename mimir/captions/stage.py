@@ -57,7 +57,9 @@ class CaptionStage:
         payoff_out = [(a, b) for a, b, _ in timeline.map_interval(story["payoff"]["start"], story["payoff"]["end"],
                                                                   kinds=(STORY, COLD_OPEN))]
         mark_emphasis(rows, story.get("caption_highlights", []), payoff_out, names)
-        overlap_windows = assign_lanes(rows)
+        measured = [(a, b, overlap["interrupter"]) for overlap in truth.get("overlaps", [])
+                    for a, b, _ in timeline.map_interval(*overlap["turn"], kinds=(STORY, COLD_OPEN))]
+        overlap_windows = assign_lanes(rows, measured)
         groups = group_words(rows, style)
         events = []
         two_lane = bool(overlap_windows)

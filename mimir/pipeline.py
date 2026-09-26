@@ -109,7 +109,7 @@ def run_job(video: str | Path, settings: Settings, provider: ModelProvider, *, f
             round=1, widen_spans=tuple(directives["widen_spans"]),
             conservative_camera=bool(directives["conservative_camera"]), rerender=bool(directives["rerender"])))
         runner = PipelineRunner(stages, settings=settings, provider=provider, store=store, source=source)
-        report = runner.run(until="qc", report=RunReport())
+        report = runner.run(until="qc", report=RunReport(executed=list(report.executed)))
         qc = report.artifacts["qc"].json("qc")
     summary_path = write_json(store.job_dir / "run_summary.json", {
         "job_id": job_id, "source": str(path), "executed": report.executed, "reused": report.reused,
@@ -118,13 +118,13 @@ def run_job(video: str | Path, settings: Settings, provider: ModelProvider, *, f
     if not qc["passed"]:
         raise QualityGateError(f"final quality gate failed after {qc['repair_round']} repair round(s): {qc['failed']}",
                                str(report.artifacts["qc"].path("qc")))
-    runner = PipelineRunner(stages, settings=settings, provider=provider, store=store, source=source)
-    report = runner.run()
+    report = runner.run(report=report)  # same settings as the passing QC run: only publish remains
     published = report.artifacts["publish"].json("published")
     if not Path(published["video"]).is_file():  # the output folder was cleaned: publish again
+        del report.artifacts["publish"]
         runner = PipelineRunner(stages, settings=settings, provider=provider, store=store, source=source,
                                 rerun=("publish",))
-        report = runner.run()
+        report = runner.run(report=report)
         published = report.artifacts["publish"].json("published")
     log.info(f"published {published['video']} (summary {summary_path})")
     return JobResult(Path(published["video"]), Path(published["manifest"]), qc, store.job_dir, report)

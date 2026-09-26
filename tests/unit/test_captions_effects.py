@@ -41,6 +41,18 @@ def test_second_lane_only_for_the_interrupter():
     assert windows
 
 
+def test_measured_overlap_puts_the_whole_interrupting_turn_on_the_second_lane():
+    # one ASR clock serialized the simultaneous words: no two word times overlap
+    rows = [rw("a1", "please", 0.0, 0.5, "S1"), rw("b1", "the", 0.9, 1.0, "S2"), rw("a2", "me", 1.0, 1.2, "S1"),
+            rw("b2", "one", 1.2, 1.4, "S2"), rw("b3", "kitchen.", 2.8, 3.2, "S2"), rw("a3", "later", 5.0, 5.4, "S1")]
+    assert assign_lanes([rw(r.key, r.text, r.start, r.end, r.speaker) for r in rows]) == []
+    windows = assign_lanes(rows, [(0.9, 3.2, "S2")])
+    lanes = {r.key: r.lane for r in rows}
+    assert lanes == {"a1": "main", "b1": "secondary", "a2": "main", "b2": "secondary", "b3": "secondary",
+                     "a3": "main"}
+    assert windows and windows[0][0] <= 0.9 and windows[0][1] >= 3.2
+
+
 def test_display_holds_never_change_acoustic_times():
     words = [rw("a", "hey", 0.0, 0.05), rw("b", "you", 0.1, 0.2)]
     group = group_words(words, STYLE)[0]

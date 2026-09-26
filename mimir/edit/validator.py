@@ -41,6 +41,7 @@ def validate_plan(context: dict[str, Any], plan: dict[str, Any], settings: Setti
     decisions = plan["decisions"]
     rows: list[dict[str, Any]] = []
     corrections: list[dict[str, Any]] = []
+    resolved: list[dict[str, Any]] = []
     punches: list[float] = []
 
     def correct(span_id: str, code: str, before: str, after: str, detail: str = "") -> None:
@@ -72,8 +73,12 @@ def validate_plan(context: dict[str, Any], plan: dict[str, Any], settings: Setti
         if intent in SINGLE_SUBJECT | {Intent.ACTION_REGION}:
             if target not in valid_targets:
                 fixed = _default_target(span, intent)
-                if fixed:
-                    correct(span["id"], "target_not_visible", target or "-", fixed)
+                if fixed and not target:
+                    # the director may leave the subject to the evidence: a resolution, not a disagreement
+                    resolved.append({"span": span["id"], "intent": intent.value, "target": fixed})
+                    target = fixed
+                elif fixed:
+                    correct(span["id"], "target_not_visible", target, fixed)
                     target = fixed
                 else:
                     correct(span["id"], "no_target_evidence", intent.value, Intent.WIDE_CONTEXT.value)
@@ -99,7 +104,7 @@ def validate_plan(context: dict[str, Any], plan: dict[str, Any], settings: Setti
         rows.append({"id": span["id"], "intent": intent.value, "target_id": target,
                      "intensity": raw.get("intensity", "normal"), "reason": raw.get("reason", ""),
                      "director_intent": original.value})
-    return {"spans": rows, "corrections": corrections,
+    return {"spans": rows, "corrections": corrections, "resolved_targets": resolved,
             "correction_ratio": round(len({c["span"] for c in corrections}) / max(1, len(rows)), 3)}
 
 

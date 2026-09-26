@@ -185,3 +185,26 @@ def assign_speakers(words: Sequence[dict[str, Any]], segments: Sequence[dict[str
     return rows, {"text_timing_agreements": agree, "text_timing_disagreements": disagree,
                   "absorbed_words": absorbed, "turns": len(runs),
                   "unresolved_words": sum(1 for r in rows if not r["speaker"])}
+
+
+MIN_MEASURED_OVERLAP = 0.35  # diarization boundary jitter stays below this
+
+
+def measured_overlaps(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Simultaneous speech measured by diarization: two participants' turns overlapping for at
+    least MIN_MEASURED_OVERLAP. The speaker who started later is the interrupter; their whole
+    overlapping turn is recorded so captions never switch lanes mid-sentence."""
+    ordered = sorted(segments, key=lambda s: (s["start"], s["end"]))
+    out: list[dict[str, Any]] = []
+    for i, first in enumerate(ordered):
+        for second in ordered[i + 1:]:
+            if second["start"] >= first["end"]:
+                break
+            if second["speaker"] == first["speaker"]:
+                continue
+            both = min(first["end"], second["end"]) - second["start"]
+            if both >= MIN_MEASURED_OVERLAP:
+                out.append({"start": round(second["start"], 3), "end": round(min(first["end"], second["end"]), 3),
+                            "held_by": first["speaker"], "interrupter": second["speaker"],
+                            "turn": [round(second["start"], 3), round(second["end"], 3)]})
+    return out

@@ -93,13 +93,17 @@ def mark_emphasis(rows: Sequence[RenderWord], highlights: Sequence[str], payoff_
             row.emphasis = False
 
 
-def assign_lanes(rows: Sequence[RenderWord]) -> list[tuple[float, float]]:
+def assign_lanes(rows: Sequence[RenderWord], measured: Sequence[tuple[float, float, str]] = ()
+                 ) -> list[tuple[float, float]]:
     """A second lane only for the INTERRUPTING speaker inside measured simultaneous speech.
 
-    Sequential turn-taking stays on one lane; when two voices overlap, the one who
-    started later moves to the secondary position for that overlap only.
+    Sequential turn-taking stays on one lane; when two voices overlap, the one who started
+    later moves to the secondary position. ``measured`` are diarization overlaps already mapped
+    to output time as (start, end, interrupter) covering the interrupter's whole turn (a single
+    ASR clock serializes simultaneous words, so word times alone rarely overlap).
     """
-    windows: list[tuple[float, float, str]] = []
+    windows: list[tuple[float, float, str]] = [(a - OVERLAP_PAD, b + OVERLAP_PAD, speaker)
+                                               for a, b, speaker in measured]
     for i, first in enumerate(rows):
         for second in rows[i + 1:]:
             if second.start >= first.end:
