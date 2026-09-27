@@ -114,6 +114,7 @@ def run_job(video: str | Path, settings: Settings, provider: ModelProvider, *, f
     summary_path = write_json(store.job_dir / "run_summary.json", {
         "job_id": job_id, "source": str(path), "executed": report.executed, "reused": report.reused,
         "timings": report.timings, "notes": report.notes(), "qc_passed": qc["passed"], "qc_failed": qc["failed"],
+        "qc_warnings": [c["name"] for c in qc["checks"] if not c["passed"] and c["severity"] == "warn"],
         "repair_round": qc["repair_round"]})
     if not qc["passed"]:
         raise QualityGateError(f"final quality gate failed after {qc['repair_round']} repair round(s): {qc['failed']}",

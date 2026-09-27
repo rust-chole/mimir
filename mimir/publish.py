@@ -46,7 +46,10 @@ class PublishStage:
             "timeline": {"fps": timeline["fps"], "frames": timeline["frame_count"], "duration": timeline["duration"],
                          "segments": timeline["segments"]},
             "render": render, "qc": {"passed": qc["passed"], "checks": [(c["name"], c["passed"]) for c in qc["checks"]],
+                                     "warnings": [c["name"] for c in qc["checks"]
+                                                  if not c["passed"] and c["severity"] == "warn"],
                                      "repair_round": qc["repair_round"]},
+            "speakers": next((c["details"] for c in qc["checks"] if c["name"] == "speaker_resolution"), {}),
         }
         manifest_path = write_json(folder / f"{slug(story['title'])}.json", manifest)
         return StageOutput(data={"published": {"video": str(target), "manifest": str(manifest_path)}})

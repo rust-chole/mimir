@@ -1,6 +1,7 @@
 """Diarization segments -> participant census (single / dual / triple / crowd)."""
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Sequence
 
@@ -25,10 +26,17 @@ def looks_like_noise(text: str) -> bool:
 
 
 def normalize_segments(segments: Sequence[DiarizedSegment], offset: float, limit: float) -> list[dict[str, Any]]:
+    """Usable segments only: finite times with positive duration inside the window and a speaker label."""
     rows = []
     for index, segment in enumerate(segments):
-        start = max(0.0, float(segment.start)) + offset
-        end = min(limit, float(segment.end) + offset)
+        try:
+            raw_start, raw_end = float(segment.start), float(segment.end)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(raw_start) and math.isfinite(raw_end)) or not str(segment.speaker or "").strip():
+            continue  # checked before max()/min(), which would silently turn NaN into a bound
+        start = max(0.0, raw_start) + offset
+        end = min(limit, raw_end + offset)
         if end <= start:
             continue
         text = " ".join(str(segment.text).split())
@@ -84,13 +92,17 @@ def strong_third(item: dict[str, Any]) -> bool:
 
 
 def classify(stats: Sequence[dict[str, Any]]) -> tuple[str, list[str], list[str]]:
-    """(mode, participant raw ids in order, background raw ids)."""
+    """(mode, participant raw ids in order, background raw ids).
+
+    ``unresolved``: the diarizer produced segments but none of them is participant-like speech
+    (noise, one-off fragments). That is no evidence of a single speaker.
+    """
     if not stats:
         return "silent", [], []
     participants = [s for s in stats if participant_like(s)]
     background = [s["raw_speaker"] for s in stats if s not in participants]
     if not participants:
-        return "single", [stats[0]["raw_speaker"]], [s["raw_speaker"] for s in stats[1:]]
+        return "unresolved", [], [s["raw_speaker"] for s in stats]
     primary = participants[0]["raw_speaker"]
     if len(participants) == 1:
         return "single", [primary], background

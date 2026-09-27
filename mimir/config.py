@@ -174,6 +174,8 @@ class ColdOpenSettings:
     weak_peak_min: float = 3.2
     moderate_peak_min: float = 2.85
     strong_peak_min: float = 2.35
+    extreme_peak_max: float = 2.0      # an extreme compact peak is shown in ~1.2-2.0 s (no padding to a quota)
+    min_understandable: float = 1.2    # no cold open is ever shorter than this
     hook_min_words: int = 2
     hook_max_words: int = 7
     hook_max_chars: int = 46

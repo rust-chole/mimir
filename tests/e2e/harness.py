@@ -34,10 +34,10 @@ def settings_for(scenario: Scenario, root: Path, **changes: Any) -> Settings:
     )
 
 
-def run_scenario(scenario: Scenario, root: Path, settings: Settings | None = None, **kwargs: Any
-                 ) -> tuple[JobResult, ScriptedProvider, dict[str, Any]]:
+def run_scenario(scenario: Scenario, root: Path, settings: Settings | None = None, make_provider: Any = None,
+                 **kwargs: Any) -> tuple[JobResult, ScriptedProvider, dict[str, Any]]:
     video, truth = build.build(scenario, MEDIA_CACHE)
-    provider = ScriptedProvider(scenario, truth)
+    provider = (make_provider or ScriptedProvider)(scenario, truth)
     result = run_job(video, settings or settings_for(scenario, root), provider, **kwargs)
     return result, provider, truth
 

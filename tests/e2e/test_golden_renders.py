@@ -117,6 +117,8 @@ def test_gameplay_facecam_uses_the_stacked_layout(e2e_root):
     common(scenario, result)
     vision = artifact(result, "vision", "vision")
     assert vision["layout"]["class"] == "facecam_gameplay"
+    cold = artifact(result, "cold_open", "cold_open")          # the explosion: extreme peak, very short open
+    assert cold["policy"].startswith("extreme_peak") and 1.2 <= cold["window"]["duration"] <= 2.0
     plan = artifact(result, "edit_compile", "render_plan")
     assert sum(plan["layout"]) > 0.5 * plan["frame_count"]
 
@@ -129,6 +131,7 @@ def test_irl_visual_only_payoff_is_found_and_kept_in_frame(e2e_root):
     assert any(e["type"] == "object_break" and e["required_review"] for e in evidence["visual_events"])
     assert story["start"] < fall < story["end"]
     assert cold["peak"]["start"] - 1.0 <= fall <= cold["peak"]["end"] + 1.0
+    assert cold["policy"].startswith("extreme_peak") and 1.2 <= cold["window"]["duration"] <= 2.0
     context = artifact(result, "edit_context", "edit_context")
     assert any(r["kind"] in ("action", "element") for s in context["spans"] if s["role"] in ("payoff", "cold_open")
                for r in s["required"])
@@ -138,6 +141,8 @@ def test_ui_screen_content_is_never_cropped(e2e_root):
     scenario, result, provider, truth = run("ui_screen", e2e_root)
     common(scenario, result)
     assert artifact(result, "vision", "vision")["layout"]["class"] == "screen_content"
+    cold = artifact(result, "cold_open", "cold_open")          # an ordinary, context-dependent peak
+    assert not cold["policy"].startswith("extreme_peak") and cold["window"]["duration"] >= 2.35
     plan = artifact(result, "edit_compile", "render_plan")
     geo = Geometry(1920, 1080, 1080, 1920, 1.45, 2.6)
     screen = [s for s in plan["spans"] if s["intent"] == "SCREEN_PRIORITY"]

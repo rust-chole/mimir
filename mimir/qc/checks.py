@@ -158,7 +158,7 @@ def check_cold_open(inputs: QCInputs) -> Check:
         problems.append("first segment is not the cold open")
     if abs(first.source_start - window["start"]) > 1.0 / tl.fps + 1e-6:
         problems.append("cold open segment does not start at the planned window")
-    if not (0.9 <= duration <= cfg.max_duration + 1.0 / tl.fps):
+    if not (cfg.min_understandable - 0.05 <= duration <= cfg.max_duration + 1.0 / tl.fps):
         problems.append(f"cold open duration {duration:.2f}s outside policy")
     core_a, core_b = peak["start"], min(peak["end"], first.source_start + cfg.max_duration)
     if not (first.source_start <= peak["start"] + 0.05 and first.source_end >= core_b - 0.05):
@@ -269,6 +269,31 @@ def check_speakers(inputs: QCInputs) -> Check:
         if len(labels) > 1:
             problems.append(f"group {group['index']} mixes visible speaker labels {labels}")
     return Check("speaker_ownership", not problems, details={"problems": problems[:12]})
+
+
+SPEAKER_EMPHASIS = {"SPEAKER_MEDIUM", "SPEAKER_PUNCH", "REACTION"}
+
+
+def check_speaker_resolution(inputs: QCInputs) -> Check:
+    """Confirmed speaker evidence vs an unresolved diarization, and no fabricated ownership."""
+    resolution = inputs.truth.get("speaker_resolution") or {"status": "confirmed"}
+    status = resolution.get("status", "confirmed")
+    details = {**resolution, "mode": inputs.truth.get("speaker_mode", ""), "violations": []}
+    if status == "confirmed":
+        return Check("speaker_resolution", True, details=details)
+    violations = details["violations"]
+    owned = [w["id"] for w in inputs.truth["words"] if w.get("speaker")]
+    if owned:
+        violations.append(f"{len(owned)} words carry a speaker although diarization is unresolved")
+    if inputs.truth.get("confirmed_names") or any(r.get("label") for r in inputs.captions["words"]):
+        violations.append("a speaker name is shown although no speaker was resolved")
+    emphasis = sorted({s["intent"] for s in inputs.plan["spans"]} & SPEAKER_EMPHASIS)
+    if emphasis:
+        violations.append(f"speaker-focused framing {emphasis} without resolved speakers")
+    if any(r.get("lane") == "secondary" for r in inputs.captions["words"]):
+        violations.append("an interrupter caption lane without resolved speakers")
+    # unresolved but handled conservatively: visible in the report, not a failure
+    return Check("speaker_resolution", False, "fail" if violations else "warn", details=details)
 
 
 def _window_for(inputs: QCInputs, index: int, geo: Geometry) -> tuple[Window, Geometry]:
@@ -539,12 +564,12 @@ def check_ledger(inputs: QCInputs) -> Check:
 
 CHECKS: Sequence[Callable[[QCInputs], Check]] = (
     check_file, check_story, check_cold_open, check_main_restart, check_captions, check_speakers,
-    check_required_content, check_crops, check_stability, check_broken_faces, check_caption_pixels,
+    check_speaker_resolution, check_required_content, check_crops, check_stability, check_broken_faces, check_caption_pixels,
     check_av_sync, check_cold_open_audio, check_ledger,
 )
 
 
 def run_checks(inputs: QCInputs) -> list[Check]:
     results = [check(inputs) for check in CHECKS]
-    results.insert(10, check_pixels(inputs, inputs.settings.qc.pixel_samples))
+    results.insert(11, check_pixels(inputs, inputs.settings.qc.pixel_samples))
     return results

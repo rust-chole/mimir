@@ -3,6 +3,14 @@
 Diarizer labels become stable anonymous ids ordered by speaking time
 (S1 = most speech). Background clusters (crowd, game audio, one-off shouts)
 are kept as evidence but never become caption speakers.
+
+``resolution.status`` separates evidence from absence of evidence:
+
+* ``confirmed`` - usable participant segments; one voice counts as a single speaker
+  only when it covers most of the transcribed speech;
+* ``unresolved`` - the diarizer returned nothing, only unusable/noise segments, or a lone
+  voice that covers too little of the speech. Words then keep NO speaker (never a
+  fabricated S1), no identity can be attached, and the camera stays conservative.
 """
 from __future__ import annotations
 
@@ -15,6 +23,20 @@ from mimir.media.audio import extract_wav
 from mimir.models.provider import AudioMeta
 from mimir.speakers.assign import assign_speakers, measured_overlaps
 from mimir.speakers.census import classify, normalize_segments, speaker_stats
+
+SINGLE_MIN_COVERAGE = 0.6    # share of transcribed words a lone diarized voice must cover
+COVERAGE_SLACK = 0.25        # seconds of diarization boundary tolerance around a word
+
+
+def speech_coverage(words: list[dict[str, Any]], segments: list[dict[str, Any]]) -> float:
+    """Share of words whose midpoint lies inside some participant segment (with boundary slack)."""
+    if not words:
+        return 0.0
+    inside = 0
+    for word in words:
+        mid = (float(word["start"]) + float(word["end"])) / 2
+        inside += any(s["start"] - COVERAGE_SLACK <= mid <= s["end"] + COVERAGE_SLACK for s in segments)
+    return inside / len(words)
 
 
 class SpeakerStage:
@@ -32,7 +54,9 @@ class SpeakerStage:
         if not words:
             return StageOutput(data={"speakers": {"mode": "silent", "participants": [], "background": [],
                                                   "segments": [], "assignment": {}, "metrics": {},
-                                                  "overlaps": []}})
+                                                  "overlaps": [], "resolution": {
+                                                      "status": "confirmed", "reason": "no speech in the window",
+                                                      "raw_segments": 0, "usable_segments": 0, "coverage": 0.0}}})
         temp = ctx.out_dir / "tmp"
         audio = extract_wav(ctx.source.path, temp / "window.wav", start=window_start,
                             duration=window_end - window_start)
@@ -48,22 +72,43 @@ class SpeakerStage:
         anon = {raw: f"S{index + 1}" for index, raw in enumerate(participants)}
         participant_segments = [{**s, "speaker": anon[s["raw_speaker"]]} for s in segments
                                 if s["raw_speaker"] in anon]
-        if mode == "silent" or not participant_segments:
-            # diarization heard no participant: one anonymous speaker owns the words (recorded, not guessed away)
-            ctx.ledger.warning("diarization_empty", "diarizer returned no participant speech; single speaker S1 assumed")
-            mode, anon = "single", {}
-            participant_segments = [{"raw_speaker": "", "speaker": "S1", "start": window_start, "end": window_end,
-                                     "duration": window_end - window_start, "text": "", "word_count": 0}]
-            rows = [{"speaker": "S1", "confidence": 0.5, "source": "single_speaker_default"} for _ in words]
+        coverage = speech_coverage(words, participant_segments)
+        resolution = {"status": "confirmed", "reason": "", "raw_segments": len(raw_segments),
+                      "usable_segments": len(segments), "coverage": round(coverage, 3)}
+        if not raw_segments:
+            resolution.update(status="unresolved", reason="diarizer returned no segments")
+        elif not segments:
+            resolution.update(status="unresolved", reason="diarizer returned only unusable segments "
+                              "(no finite, positive, labelled time range inside the window)")
+        elif mode in ("silent", "unresolved") or not participant_segments:
+            resolution.update(status="unresolved", reason="no diarized voice is participant-like speech")
+        elif mode == "single" and coverage < SINGLE_MIN_COVERAGE:
+            resolution.update(status="unresolved", reason=f"the only diarized voice covers {coverage:.0%} of the "
+                              f"transcribed words (needs {SINGLE_MIN_COVERAGE:.0%})")
+        if resolution["status"] == "unresolved":
+            ctx.ledger.warning("diarization_unresolved", f"{resolution['reason']}; caption words keep no speaker, "
+                               "no identity is attached and framing stays conservative")
+            return StageOutput(data={"speakers": {
+                "mode": "unresolved", "resolution": resolution, "participants": [], "background": [],
+                "segments": [], "overlaps": [],
+                "background_segments": [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in segments],
+                "assignment": {w["id"]: {"speaker": "", "confidence": 0.0, "source": "diarization_unresolved"}
+                               for w in words},
+                "metrics": {"unresolved_words": len(words)},
+            }})
+        if mode == "single":
+            rows = []
+            for word in words:
+                covered = speech_coverage([word], participant_segments) == 1.0
+                rows.append({"speaker": "S1", "confidence": 0.95 if covered else 0.7,
+                             "source": "single_participant" if covered else "single_participant_uncovered"})
             metrics: dict[str, Any] = {"unresolved_words": 0}
-        elif mode == "single":
-            rows = [{"speaker": "S1", "confidence": 0.95, "source": "single_participant"} for _ in words]
-            metrics = {"unresolved_words": 0}
         else:
             rows, metrics = assign_speakers(words, participant_segments)
         by_id = {s["raw_speaker"]: s for s in stats}
         return StageOutput(data={"speakers": {
             "mode": mode,
+            "resolution": resolution,
             "participants": [{"id": anon[raw], "raw_speaker": raw, **{k: by_id[raw][k] for k in (
                 "speaking_seconds", "share", "word_count", "substantial_segment_count")}}
                 for raw in participants if raw in anon],

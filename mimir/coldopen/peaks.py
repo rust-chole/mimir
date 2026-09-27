@@ -10,6 +10,11 @@ MERGE_DISTANCE = 0.65
 MAX_CANDIDATES = 8
 WEAK_PEAK = 0.62
 STRONG_PEAK = 0.78
+# EXTREME PEAK = VERY SHORT COLD OPEN: an unmistakable, compact moment needs no context
+EXTREME_PEAK = 0.90          # combined strength when both channels agree
+EXTREME_CHANNEL = 0.85       # one decisive channel is enough (visual-only physical event, vocal reaction)
+EXTREME_MAX_CORE = 1.35      # the whole event must be compact (core + breathing room stays ~2 s)
+EXTREME_PRE, EXTREME_POST = 0.25, 0.40   # breathing room around the core (never padding to a quota)
 
 
 def story_audio_peaks(source: str, start: float, end: float) -> list[dict[str, Any]]:
@@ -23,6 +28,7 @@ def build_candidates(story: dict[str, Any], audio: Sequence[dict[str, Any]], vis
                      ) -> list[dict[str, Any]]:
     start, end = float(story["start"]), float(story["end"])
     payoff_start, payoff_end = float(story["payoff"]["start"]), float(story["payoff"]["end"])
+    reactions = [(float(b["start"]), float(b["end"])) for b in story.get("beats", []) if b["role"] == "reaction"]
     rows: list[dict[str, Any]] = []
     for peak in audio:
         if start <= peak["center"] <= end:
@@ -51,13 +57,14 @@ def build_candidates(story: dict[str, Any], audio: Sequence[dict[str, Any]], vis
     for row in merged:
         row["multimodal"] = row["audio_score"] > 0 and row["visual_score"] > 0
         row["in_payoff"] = payoff_start - 0.5 <= row["center"] <= payoff_end + 0.5
+        row["in_reaction"] = any(a - 0.3 <= row["center"] <= b for a, b in reactions)
         row["combined_score"] = round(min(1.0, max(row["audio_score"], row["visual_score"])
                                           + (0.15 if row["multimodal"] else 0.0)
                                           + (0.10 if row["in_payoff"] else 0.0)), 3)
     payoff = {"start": payoff_start, "end": payoff_end, "center": (payoff_start + payoff_end) / 2,
               "audio_score": max([r["audio_score"] for r in merged if r["in_payoff"]], default=0.0),
               "visual_score": max([r["visual_score"] for r in merged if r["in_payoff"]], default=0.0),
-              "signals": ["story_payoff"], "multimodal": False, "in_payoff": True}
+              "signals": ["story_payoff"], "multimodal": False, "in_payoff": True, "in_reaction": False}
     payoff["combined_score"] = round(max(0.6, min(1.0, 0.25 + max(payoff["audio_score"], payoff["visual_score"]))), 3)
     candidates = [payoff] + sorted(merged, key=lambda r: -r["combined_score"])[:MAX_CANDIDATES - 1]
     for index, row in enumerate(candidates):
@@ -66,8 +73,22 @@ def build_candidates(story: dict[str, Any], audio: Sequence[dict[str, Any]], vis
     return candidates
 
 
+def is_extreme(peak: dict[str, Any]) -> bool:
+    """An unmistakable compact peak: both channels strongly agree, OR one channel is decisive at the
+    story's payoff/reaction (a visual-only physical event or a vocal reaction qualifies on its own)."""
+    if float(peak["end"]) - float(peak["start"]) > EXTREME_MAX_CORE + 1e-6:
+        return False
+    audio, visual = float(peak.get("audio_score", 0.0)), float(peak.get("visual_score", 0.0))
+    if peak.get("multimodal") and audio >= 0.72 and visual >= 0.72 \
+            and float(peak.get("combined_score", 0.0)) >= EXTREME_PEAK:
+        return True
+    return max(audio, visual) >= EXTREME_CHANNEL and bool(peak.get("in_payoff") or peak.get("in_reaction"))
+
+
 def minimum_duration(peak: dict[str, Any], cfg: ColdOpenSettings) -> tuple[float, float, str]:
     """(minimum seconds, lead fraction, policy): stronger compact peaks get shorter cold opens."""
+    if is_extreme(peak):
+        return cfg.min_understandable, 0.35, "extreme_peak"
     strength = float(peak.get("combined_score", 0.0))
     if strength < WEAK_PEAK:
         return cfg.weak_peak_min, 0.62, "weak_peak_more_context"
@@ -100,6 +121,8 @@ def compute_window(peak: dict[str, Any], story: dict[str, Any], words: Sequence[
         core_start, core_end = center - (cfg.max_duration - 0.5) / 2, center + (cfg.max_duration - 0.5) / 2
     minimum, lead, policy = minimum_duration(peak, cfg)
     start, end = core_start, core_end
+    if policy == "extreme_peak":
+        start, end = core_start - EXTREME_PRE, core_end + EXTREME_POST
     if phrase is not None:
         start, end = min(start, phrase[0] - 0.08), max(end, phrase[1] + 0.18)
     if end - start < minimum:
@@ -110,16 +133,28 @@ def compute_window(peak: dict[str, Any], story: dict[str, Any], words: Sequence[
         start = max(start, core_end - cfg.max_duration)
         end = start + cfg.max_duration
     start, end = max(s_start, start), min(s_end, end)
-    for cut in cuts:  # avoid a one-frame flash of the previous shot at the cold open edges
-        if start < cut < start + 0.35 and end - cut >= minimum * 0.8:
+    for cut in cuts:  # avoid a one-frame flash of the previous shot at the edges, never inside the action
+        if start < cut < min(start + 0.35, core_start) and end - cut >= minimum * 0.8:
             start = cut + 0.02
-        if end - 0.35 < cut < end and cut - start >= minimum * 0.8:
+        if max(end - 0.35, core_end) < cut < end and cut - start >= minimum * 0.8:
             end = cut - 0.02
     start, end = snap_to_words(start, end, words, cfg.max_duration)
     start, end = max(s_start, start), min(s_end, end)
+    if end - start < cfg.min_understandable - 1e-6:
+        # never too short to understand: grow forward first (the reaction), then back, inside the story
+        missing = cfg.min_understandable - (end - start)
+        end = min(s_end, end + missing)
+        start = max(s_start, end - cfg.min_understandable)
+        start, end = snap_to_words(start, end, words, cfg.max_duration)
+        start, end = max(s_start, start), min(s_end, end)
+        policy += "+understandable_floor"
     if not (start <= float(peak["start"]) + 0.05 and end >= min(float(peak["end"]), start + cfg.max_duration) - 0.05):
         # the peak must be inside the cold open: re-centre on the core itself, bounded (recorded)
-        start = max(s_start, float(peak["center"]) - cfg.max_duration * lead)
-        end = min(s_end, start + max(minimum, min(cfg.max_duration, float(peak["end"]) - start + 0.4)))
+        if policy.startswith("extreme_peak"):
+            start = max(s_start, float(peak["start"]) - EXTREME_PRE)
+            end = min(s_end, max(float(peak["end"]) + EXTREME_POST, start + minimum))
+        else:
+            start = max(s_start, float(peak["center"]) - cfg.max_duration * lead)
+            end = min(s_end, start + max(minimum, min(cfg.max_duration, float(peak["end"]) - start + 0.4)))
         policy += "+recentred_on_core"
     return round(start, 3), round(end, 3), policy

@@ -144,8 +144,8 @@ class ColdOpenStage:
             if first and last and first["start"] <= last["end"] and last["end"] - first["start"] <= cfg.max_duration:
                 phrase = (float(first["start"]), float(last["end"]))
         start, end, policy = compute_window(peak, story, words, cfg, phrase, vision.get("shot_cuts", []))
-        if end - start < 0.9:
-            raise StageError(self.name, f"cold open window too short ({end - start:.2f}s)")
+        if end - start < cfg.min_understandable - 0.05:
+            raise StageError(self.name, f"cold open window too short to understand ({end - start:.2f}s)")
         hook = self._hook(ctx, choice, peak, story, words, start, end)
         return StageOutput(data={"cold_open": {
             "peak": {k: peak[k] for k in ("peak_id", "start", "end", "center", "combined_score", "audio_score",

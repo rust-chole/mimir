@@ -6,6 +6,9 @@ Evidence per word:
 * timing evidence - overlap with a diarized segment (weaker, capped).
 Then impossible single-word ping-pong is absorbed; unresolved words stay
 UNRESOLVED across real gaps (no identity is ever invented to look tidy).
+A word that two voices' own diarized text both claim at that time, or that only
+timing places inside two voices' simultaneous turns, is AMBIGUOUS: it stays
+unresolved (source ``ambiguous_overlap``) instead of getting a confident owner.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ MAX_FILL_GAP = 0.48
 MAX_SINGLE_WORD_FLIP = 0.48
 MIN_STABLE_TURN_WORDS = 2
 MIN_STABLE_TURN_SECONDS = 0.42
+AMBIGUOUS_TIMING_SHARE = 0.5   # a word this much inside two voices' turns has no timing owner
 
 
 def _norm(value: str) -> str:
@@ -58,13 +62,27 @@ def _timing_evidence(word: dict[str, Any], segments: Sequence[dict[str, Any]]) -
     return "", 0.0
 
 
-def _text_evidence(words: Sequence[dict[str, Any]], segments: Sequence[dict[str, Any]]) -> dict[int, tuple[str, float]]:
+def _timing_ambiguous(word: dict[str, Any], segments: Sequence[dict[str, Any]]) -> bool:
+    start, end = float(word["start"]), float(word["end"])
+    duration = max(0.04, end - start)
+    inside: dict[str, float] = {}
+    for segment in segments:
+        share = _overlap(start, end, segment["start"], segment["end"]) / duration
+        inside[segment["speaker"]] = max(inside.get(segment["speaker"], 0.0), share)
+    return sum(1 for share in inside.values() if share >= AMBIGUOUS_TIMING_SHARE) >= 2
+
+
+def _text_evidence(words: Sequence[dict[str, Any]], segments: Sequence[dict[str, Any]]
+                   ) -> tuple[dict[int, tuple[str, float]], set[int]]:
     """Align each diarized segment's own text to the caption words in its time range.
 
     Local (per segment) alignment keeps interleaved speech from two voices apart;
-    a word claimed by several segments goes to the best time fit.
+    a word claimed by segments of one speaker goes to the best time fit. A word claimed
+    within normal drift by two DIFFERENT speakers is returned as ambiguous: the position
+    estimate inside a segment is too weak to decide who said it.
     """
     claims: dict[int, tuple[float, str, float]] = {}
+    firm: dict[int, set[str]] = {}
     norms = [_norm(w["text"]) for w in words]
     for segment in segments:
         tokens = [_norm(t) for t in segment["text"].split() if _norm(t)]
@@ -87,9 +105,13 @@ def _text_evidence(words: Sequence[dict[str, Any]], segments: Sequence[dict[str,
                     continue
                 fit = drift + 0.25 * abs(mid - approx) / span
                 confidence = TEXT_MATCH_CONFIDENCE if drift <= TEXT_SOFT_DRIFT else 0.80
+                if drift <= TEXT_SOFT_DRIFT:
+                    firm.setdefault(wi, set()).add(segment["speaker"])
                 if wi not in claims or fit < claims[wi][0]:
                     claims[wi] = (fit, segment["speaker"], confidence)
-    return {wi: (speaker, confidence) for wi, (_, speaker, confidence) in claims.items()}
+    ambiguous = {wi for wi, speakers in firm.items() if len(speakers) >= 2}
+    return ({wi: (speaker, confidence) for wi, (_, speaker, confidence) in claims.items() if wi not in ambiguous},
+            ambiguous)
 
 
 def _runs(rows: Sequence[dict[str, Any]]) -> list[tuple[int, int, str]]:
@@ -108,13 +130,15 @@ def assign_speakers(words: Sequence[dict[str, Any]], segments: Sequence[dict[str
 
     Returns one row per word: {"speaker", "confidence", "source"} plus metrics.
     """
-    text_map = _text_evidence(words, segments)
+    text_map, text_ambiguous = _text_evidence(words, segments)
     rows: list[dict[str, Any]] = []
     agree = disagree = 0
     for index, word in enumerate(words):
         timing_speaker, timing_conf = _timing_evidence(word, segments)
         text_speaker, text_conf = text_map.get(index, ("", 0.0))
-        if text_speaker and text_speaker == timing_speaker:
+        if index in text_ambiguous or (not text_speaker and _timing_ambiguous(word, segments)):
+            rows.append({"speaker": "", "confidence": 0.0, "source": "ambiguous_overlap"})
+        elif text_speaker and text_speaker == timing_speaker:
             rows.append({"speaker": text_speaker, "confidence": min(0.99, max(text_conf, timing_conf) + 0.05),
                          "source": "text+timing"})
             agree += 1
@@ -128,8 +152,8 @@ def assign_speakers(words: Sequence[dict[str, Any]], segments: Sequence[dict[str
 
     # local continuity fill across tiny gaps only
     for index, row in enumerate(rows):
-        if row["speaker"]:
-            continue
+        if row["speaker"] or row["source"] == "ambiguous_overlap":
+            continue  # ambiguity is not a gap to paper over
         left = next((j for j in range(index - 1, -1, -1) if rows[j]["speaker"]), None)
         right = next((j for j in range(index + 1, len(rows)) if rows[j]["speaker"]), None)
         start, end = float(words[index]["start"]), float(words[index]["end"])
@@ -184,7 +208,8 @@ def assign_speakers(words: Sequence[dict[str, Any]], segments: Sequence[dict[str
     runs = _runs(rows)
     return rows, {"text_timing_agreements": agree, "text_timing_disagreements": disagree,
                   "absorbed_words": absorbed, "turns": len(runs),
-                  "unresolved_words": sum(1 for r in rows if not r["speaker"])}
+                  "unresolved_words": sum(1 for r in rows if not r["speaker"]),
+                  "ambiguous_words": sum(1 for r in rows if r["source"] == "ambiguous_overlap")}
 
 
 MIN_MEASURED_OVERLAP = 0.35  # diarization boundary jitter stays below this

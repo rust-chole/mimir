@@ -1,6 +1,6 @@
 import pytest
 
-from mimir.coldopen.peaks import build_candidates, compute_window, minimum_duration
+from mimir.coldopen.peaks import build_candidates, compute_window, is_extreme, minimum_duration
 from mimir.config import ColdOpenSettings, PacingSettings, StorySettings
 from mimir.story.causal import enforce_causal_flow, validate_candidate, validate_moments
 from mimir.story.package import build_package, completeness
@@ -136,3 +136,68 @@ class TestColdOpen:
                                       {"visual_peaks": [{"t": 30.4, "score": 0.8}], "action_regions": []})
         assert candidates[0]["signals"] == ["story_payoff"]
         assert any(c["in_payoff"] and "visual_motion_burst" in c["signals"] for c in candidates)
+
+
+
+class TestExtremeColdOpen:
+    """EXTREME PEAK = VERY SHORT COLD OPEN (about 1.2-2.0 s), ordinary peaks keep their context."""
+    story = {"start": 10.0, "end": 40.0, "payoff": {"start": 30.0, "end": 31.0},
+             "beats": [{"role": "payoff", "start": 30.0, "end": 31.0}, {"role": "reaction", "start": 31.0,
+                                                                          "end": 33.0}]}
+    cfg = ColdOpenSettings()
+
+    def window(self, peak, words=(), cuts=(), story=None):
+        start, end, policy = compute_window(peak, story or self.story, list(words), self.cfg, None, list(cuts))
+        assert start <= peak["start"] + 1e-6 and end >= peak["end"] - 1e-6, "the action must never be cut"
+        return start, end, policy
+
+    def peak(self, start, end, audio, visual, **flags):
+        multimodal = audio > 0 and visual > 0
+        combined = min(1.0, max(audio, visual) + (0.15 if multimodal else 0) + (0.1 if flags.get("in_payoff") else 0))
+        return {"start": start, "end": end, "center": (start + end) / 2, "audio_score": audio, "visual_score": visual,
+                "multimodal": multimodal, "combined_score": combined, "in_payoff": False, "in_reaction": False,
+                **flags}
+
+    def test_extreme_multimodal_peak_gets_a_very_short_cold_open(self):
+        peak = self.peak(30.1, 31.0, 0.9, 0.88, in_payoff=True)
+        start, end, policy = self.window(peak)
+        assert is_extreme(peak) and policy == "extreme_peak"
+        assert 1.2 <= end - start <= 2.0
+
+    def test_extreme_visual_only_event_qualifies_without_loud_audio(self):
+        peak = self.peak(30.2, 30.9, 0.0, 0.9, in_payoff=True)          # a silent fall / break
+        start, end, policy = self.window(peak)
+        assert policy == "extreme_peak" and 1.2 <= end - start <= 2.0
+        reaction = self.peak(31.3, 32.1, 0.9, 0.0, in_reaction=True)   # a scream at the reaction
+        assert is_extreme(reaction) and 1.2 <= self.window(reaction)[1] - self.window(reaction)[0] <= 2.0
+
+    def test_a_payoff_span_of_exactly_the_compact_limit_is_extreme(self):
+        # the story's own payoff (1.3 s, measured as 31.3 - 30.0 in floating point) with a decisive event
+        payoff = {"start": 30.0, "end": 31.3, "center": 30.65, "audio_score": 0.99, "visual_score": 1.0,
+                  "multimodal": False, "combined_score": 1.0, "in_payoff": True, "in_reaction": False}
+        start, end, policy = self.window(payoff)
+        assert policy == "extreme_peak" and 1.2 <= end - start <= 2.0
+
+    def test_strong_but_off_story_or_long_peaks_are_not_extreme(self):
+        assert not is_extreme(self.peak(20.0, 20.8, 0.0, 0.9))            # decisive, but not the payoff/reaction
+        assert not is_extreme(self.peak(29.5, 31.5, 0.9, 0.9, in_payoff=True))  # not compact
+
+    def test_normal_contextual_peak_keeps_a_longer_cold_open(self):
+        peak = self.peak(30.2, 30.9, 0.7, 0.0, in_payoff=True)
+        start, end, policy = self.window(peak)
+        assert policy == "contextual_peak" and end - start >= self.cfg.moderate_peak_min - 1e-6
+
+    def test_a_cold_open_is_never_too_short_to_understand(self):
+        blip = self.peak(30.40, 30.50, 0.95, 0.9, in_payoff=True)      # a 0.1 s impact
+        start, end, policy = self.window(blip)
+        assert end - start >= self.cfg.min_understandable - 1e-6 and end - start <= 2.0
+        at_end = {**self.story, "end": 30.6}                             # the story ends right after the impact
+        start, end, policy = self.window(blip, story=at_end)
+        assert end <= 30.6 + 1e-6 and end - start >= self.cfg.min_understandable - 1e-6
+
+    def test_extreme_cold_open_never_cuts_a_word_or_the_action(self):
+        peak = self.peak(30.1, 31.0, 0.9, 0.88, in_payoff=True)
+        words = [{"id": "w1", "text": "NO!", "start": 31.2, "end": 31.8}]
+        start, end, _ = self.window(peak, words=words, cuts=[29.95])     # a shot cut just before the action
+        assert not (31.2 < end < 31.8)
+        assert start >= 29.95                                            # no flash of the previous shot

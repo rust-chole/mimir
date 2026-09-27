@@ -111,6 +111,8 @@ class EditContextStage:
         cuts = vision.get("shot_cuts", [])
         layout = vision["layout"]
         mode = truth.get("speaker_mode", "single")
+        # unresolved diarization: nobody owns the speech, so no single-person emphasis at all
+        speakers_certain = truth.get("speaker_resolution", {}).get("status", "confirmed") == "confirmed"
         observations = vision.get("observations", [])
         rows = []
         for index, span in enumerate(spans):
@@ -173,7 +175,8 @@ class EditContextStage:
                 allowed.append(Intent.SPEAKER_MEDIUM.value)
             if speaking_face and speaking_face["link"] >= STRONG_LINK and not overlay_face:
                 allowed.append(Intent.SPEAKER_PUNCH.value)
-            if visible and role in ("payoff", "reaction", "cold_open", "escalation") and not overlay_face:
+            if visible and role in ("payoff", "reaction", "cold_open", "escalation") and not overlay_face \
+                    and speakers_certain:
                 allowed.append(Intent.REACTION.value)
             if actions or any(e["kind"] in ("object", "action") for e in elements):
                 allowed.append(Intent.ACTION_REGION.value)
