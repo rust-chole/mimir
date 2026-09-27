@@ -1,8 +1,17 @@
-openai>=3.8.0,<4.0.0
-python-dotenv>=1.2.3,<2.0.0
-# Pro Edit local face tracking (optional at runtime: without it framing stays center-safe).
-# 4.10-4.13 load under Windows 11 Smart App Control; 4.14.0.94's unsigned cv2.pyd is refused
-# ("DLL load failed ... Application Control policy"); 4.9 does not import with numpy 2.
+# MIMIR runtime
+numpy>=1.26
+# Face detection/tracking, motion, compositing. 4.10-4.13 keep the Haar cascades and FaceDetectorYN
+# (and load under Windows Smart App Control; 4.14.0.94's unsigned cv2.pyd is refused there).
 opencv-python-headless>=4.10,<4.14
-# Optional caption shaping backend (MIMIR_CAPTION_SHAPER=auto); not required:
-# uharfbuzz>=0.39
+# Production model provider (Responses API structured outputs + audio transcription).
+openai>=1.60,<3
+# Optional: read OPENAI_API_KEY and MIMIR_* settings from .env
+python-dotenv>=1.0
+
+# External tools (not pip): FFmpeg + ffprobe built with libass (ass filter), sidechaincompress and loudnorm.
+# Run `python -m mimir doctor` to verify the toolchain.
+
+# Tests only
+pytest>=8
+scikit-image>=0.22   # public-domain test imagery for the synthetic golden VODs
+# espeak-ng (system package) synthesizes real speech for the golden VODs
