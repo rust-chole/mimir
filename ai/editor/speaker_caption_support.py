@@ -77,6 +77,13 @@ CAPTION_UNKNOWN_MAX_WORDS = max(1, min(3, int(os.getenv("MIMIR_CAPTION_UNKNOWN_M
 CAPTION_SUSPECT_MAX_WORDS = max(CAPTION_UNKNOWN_MAX_WORDS, min(8, int(os.getenv("MIMIR_CAPTION_SUSPECT_MAX_WORDS", "6") or 6)))
 CAPTION_REFINEMENT_MIN_LEXICAL_COVERAGE = max(0.60, min(0.95, float(os.getenv("MIMIR_CAPTION_REFINEMENT_MIN_LEXICAL_COVERAGE", "0.78") or 0.78)))
 
+# Low-confidence suspicion. Two ears can AGREE and both be unsure (names, slang,
+# mumbled words). The model-diverse cross-check already runs; asking it for
+# token log-probabilities costs no extra call and flags content words the
+# model itself doubts. A flag only LOCATES a span for the strict acoustic
+# micro-vote (3/3, then 4/5) - it can never change a word on its own.
+CAPTION_LOW_CONFIDENCE_PROB = max(0.05, min(0.95, float(os.getenv("MIMIR_CAPTION_LOW_CONFIDENCE_PROB", "0.45") or 0.45)))
+
 # V3 local acoustic clock guard. Whisper remains the primary clock, but an
 # isolated phrase-start anchor is no longer treated as infallible when the exact
 # final 48 kHz PCM proves that the anchor sits in a quiet region and a nearby
@@ -462,6 +469,81 @@ def _known_name_suspicions(text: str, names: list[str] | None) -> list[dict[str,
 
 
 
+
+
+def _token_word_probabilities(tokens: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """(word, min token probability) for the whitespace words a token stream spells."""
+    text = ""
+    spans: list[tuple[int, int, float]] = []
+    for token, probability in tokens:
+        start = len(text)
+        text += str(token)
+        spans.append((start, len(text), float(probability)))
+    words: list[tuple[str, float]] = []
+    for match in re.finditer(r"\S+", text):
+        probs = [p for a, b, p in spans if a < match.end() and match.start() < b]
+        words.append((match.group(0), min(probs) if probs else 1.0))
+    return words
+
+
+def _crosscheck_with_confidence(audio_path: Path) -> tuple[str, list[tuple[str, float]], str]:
+    """Model-diverse cross-check text + per-word confidence (logprobs when the backend offers them).
+
+    Returns (text, [(word, probability)], confidence_status). Any logprob
+    failure falls back to the plain cross-check call: suspicion is additive
+    evidence, never a reason to lose the second ear."""
+    model = vod_processor.CAPTION_CROSSCHECK_MODEL
+    kwargs: dict[str, Any] = {"model": model, "response_format": "json", "include": ["logprobs"]}
+    if vod_processor.TRANSCRIPTION_LANGUAGE:
+        kwargs["language"] = vod_processor.TRANSCRIPTION_LANGUAGE
+    try:
+        with Path(audio_path).open("rb") as handle:
+            response = client.audio.transcriptions.create(file=handle, **kwargs)
+        data = _as_dict(response)
+        text = str(data.get("text") or getattr(response, "text", "") or "").strip()
+        raw = data.get("logprobs") if data else getattr(response, "logprobs", None)
+        tokens: list[tuple[str, float]] = []
+        for item in raw or []:
+            token = item.get("token") if isinstance(item, dict) else getattr(item, "token", None)
+            logprob = item.get("logprob") if isinstance(item, dict) else getattr(item, "logprob", None)
+            try:
+                tokens.append((str(token), math.exp(float(logprob))))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if text:
+            return text, _token_word_probabilities(tokens), "logprobs" if tokens else "no_logprobs_returned"
+    except Exception as error:  # SDK/backend without logprobs: same ear, text only
+        status = f"logprobs_unavailable: {type(error).__name__}"
+    else:
+        status = "empty_logprob_response"
+    return str(vod_processor.transcribe_caption_crosscheck_text(audio_path) or "").strip(), [], status
+
+
+def _low_confidence_spans(primary_text: str, reference_words: list[tuple[str, float]]) -> list[dict[str, Any]]:
+    """Primary tokens the cross-check heard the SAME way but with low confidence."""
+    if not reference_words:
+        return []
+    base_tokens = _caption_tokens(primary_text)
+    base = [vod_processor.canonical_word(token) for token in base_tokens]
+    reference = [vod_processor.canonical_word(word) for word, _ in reference_words]
+    rows: list[dict[str, Any]] = []
+    matcher = SequenceMatcher(None, base, reference, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue   # disagreements are located by _asr_disagreement_spans
+        for offset in range(i2 - i1):
+            word = base[i1 + offset]
+            probability = float(reference_words[j1 + offset][1])
+            content = len(word) >= 3 or any(ch.isdigit() for ch in word)
+            if content and probability < CAPTION_LOW_CONFIDENCE_PROB:
+                rows.append({
+                    "start": i1 + offset,
+                    "end": i1 + offset + 1,
+                    "severity": round(0.55 + 0.4 * (1.0 - probability), 4),
+                    "reason": f"both ears agree but cross-check confidence {probability:.2f}: {base_tokens[i1 + offset]}",
+                    "source": "low_confidence",
+                })
+    return rows
 
 
 def _asr_disagreement_spans(text: str, refs: list[str]) -> list[dict[str, Any]]:
@@ -1150,7 +1232,7 @@ def _transcribe_edited_words(
                 known_names=known_names,
             )
         crosscheck_future = executor.submit(
-            vod_processor.transcribe_caption_crosscheck_text,
+            _crosscheck_with_confidence,
             audio_path,
         )
         timing_future = executor.submit(
@@ -1164,10 +1246,13 @@ def _transcribe_edited_words(
                 primary_text = str(primary_future.result() or "").strip()
             except Exception as error:
                 verification_errors.append(f"primary gpt-transcribe: {error}")
+        crosscheck_words: list[tuple[str, float]] = []
+        crosscheck_confidence_status = "not_run"
         try:
-            crosscheck_text = str(crosscheck_future.result() or "").strip()
+            crosscheck_text, crosscheck_words, crosscheck_confidence_status = crosscheck_future.result()
+            crosscheck_text = str(crosscheck_text or "").strip()
         except Exception as error:
-            verification_errors.append(f"crosscheck gpt-4o-transcribe: {error}")
+            verification_errors.append(f"crosscheck {vod_processor.CAPTION_CROSSCHECK_MODEL}: {error}")
         try:
             timing_data = dict(timing_future.result() or {})
         except Exception as error:
@@ -1205,8 +1290,9 @@ def _transcribe_edited_words(
     refs = [crosscheck_text] if crosscheck_text and _canon_text(crosscheck_text) != _canon_text(primary_text) else []
     disagreement_rows = _asr_disagreement_spans(primary_text, refs)
     known_name_rows = _known_name_suspicions(primary_text, known_names)
+    low_confidence_rows = _low_confidence_spans(primary_text, crosscheck_words)
     suspect_spans = _merge_suspect_spans(
-        disagreement_rows + known_name_rows,
+        disagreement_rows + known_name_rows + low_confidence_rows,
         len(_caption_tokens(primary_text)),
     )
 
@@ -1303,6 +1389,8 @@ def _transcribe_edited_words(
         "full_asr_passes": 2,
         "timing_passes": 1,
         "suspect_spans": len(suspect_spans),
+        "low_confidence_flagged_spans": len(low_confidence_rows),
+        "crosscheck_confidence": crosscheck_confidence_status,
         "local_corrections": int(micro_meta.get("corrected_spans", 0) or 0),
         "unresolved_local_conflicts": int(micro_meta.get("unresolved_spans", 0) or 0),
         "known_name_flagged_spans": known_name_rows,

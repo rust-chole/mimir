@@ -141,7 +141,7 @@ def decode_frames(path: Path, frames: Iterable[int], width: int, height: int) ->
     select = "+".join(f"eq(n,{f})" for f in wanted)
     command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(path), "-an", "-sn",
                "-vf", f"select='{select}',scale={width}:{height}:flags=area,format=gray", "-fps_mode", "passthrough",
-               "-f", "rawvideo", "-"]
+               "-frames:v", str(len(wanted)), "-f", "rawvideo", "-"]   # stop after the last wanted frame
     completed = subprocess.run(command, capture_output=True, timeout=DECODE_TIMEOUT_S, check=False)
     if completed.returncode != 0:
         raise RuntimeError("frame decode failed: " + completed.stderr.decode("utf-8", "replace")[-300:])
