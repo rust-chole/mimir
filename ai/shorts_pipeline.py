@@ -19,9 +19,13 @@ from typing import Any, Callable, Iterable
 from ai import model_config, vod_processor
 from ai.editor import (
     caption_renderer,
+    caption_truth,
     clip_analyzer,
     captions,
+    final_qc,
+    final_review,
     intro_analyzer,
+    intro_bounds,
     intro_peak_support,
     intro_renderer,
     meme_audio_support,
@@ -36,6 +40,7 @@ from ai.editor import (
     speaker_role_judge,
     teaser_analyzer,
     timeline,
+    v6_runtime,
 )
 
 
@@ -46,6 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 VOD_OUTPUT_DIR = PROJECT_ROOT / "vod_output"
 STATE_DIR = VOD_OUTPUT_DIR / "pipeline"
 PUBLISHED_DIR = VOD_OUTPUT_DIR / "final"
+REJECTED_DIR = VOD_OUTPUT_DIR / "rejected"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ts"}
 MIN_VIDEO_BYTES = 1024
@@ -56,37 +62,15 @@ PREFERRED_SHORT_DURATION = 32.0
 SAFE_PIPELINE_PARALLEL = str(os.getenv("MIMIR_SAFE_PIPELINE_PARALLEL", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _pro_edit_requested(override: bool | None) -> bool:
-    """Pro Edit feature switch. Default OFF: MIMIR_PRO_EDIT=0|1 or --pro-edit."""
-    if override is not None:
-        return bool(override)
-    return str(os.getenv("MIMIR_PRO_EDIT", "0")).strip().lower() in {"1", "true", "yes", "on"}
+def _load_pro_edit() -> tuple[Any, Any]:
+    """Pro Edit is the production presentation layer (caption presentation over
+    frozen truth, evidence-directed camera, pixel proof). It is always on; an
+    import/config failure stops the run loudly instead of silently rendering
+    the legacy caption path."""
+    from ai.editor import pro_edit as pro_edit_pkg
 
-
-def _v6_requested(override: bool | None) -> bool:
-    """MIMIR V6 switch. Default OFF: MIMIR_V6=0|1, --v6 / --force-v6.
-
-    Checked without importing any V6 module, so the disabled path stays the
-    existing pipeline."""
-    if override is not None:
-        return bool(override)
-    return str(os.getenv("MIMIR_V6", "0")).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _load_pro_edit(override: bool | None, v6: bool = False) -> tuple[Any | None, Any | None, str | None]:
-    """Return (package, config, error). The package is not even imported when
-    the feature is off, so the disabled path is byte-for-byte the old pipeline.
-    An import/config failure disables Pro Edit instead of failing the short.
-    ``v6``: the pipeline's MIMIR V6 decision (evidence director + pixel proof)."""
-    if not _pro_edit_requested(override):
-        return None, None, None
-    try:
-        from ai.editor import pro_edit as pro_edit_pkg
-
-        config = pro_edit_pkg.config.load_config(override_enabled=True, v6=bool(v6))
-        return pro_edit_pkg, config, None
-    except Exception as error:  # explicit: reported as a warning by run_pipeline
-        return None, None, f"Pro Edit yüklenemedi; mevcut MIMIR yolu kullanılıyor. Detay: {type(error).__name__}: {error}"
+    config = pro_edit_pkg.config.load_config(override_enabled=True, v6=True)
+    return pro_edit_pkg, config
 
 
 def _speaker_profile_path(edited_clip_path: Path, clip_index: int) -> Path | None:
@@ -257,7 +241,10 @@ def _print_friendly_result(result: dict[str, Any]) -> None:
     warning_count = len(warnings) if isinstance(warnings, list) else 0
 
     print()
-    print("✅ SHORT HAZIR")
+    if result.get("status") == "published_degraded":
+        print("⚠️ SHORT HAZIR — QC geçti, DEGRADED uyarılarla (aşağıya bak)")
+    else:
+        print("✅ SHORT HAZIR — render edilmiş MP4 final QC'den geçti")
     print("────────────────────────────────────────")
     print(f"🎬 {title}")
     print()
@@ -303,7 +290,7 @@ def _print_friendly_result(result: dict[str, Any]) -> None:
             print(f"      ↳ {text}")
     v6 = result.get("v6")
     if isinstance(v6, dict) and v6:
-        print(f"   MIMIR V6    : {v6.get('status', '?')}")
+        print(f"   Final gate  : {v6.get('status', '?')}")
         for name in (v6.get("failed_checks") or [])[:6]:
             print(f"      ↳ gate: {name}")
         for row in (v6.get("fallback_rows") or [])[:4]:
@@ -379,12 +366,30 @@ def _file_fingerprint(path: str | Path) -> dict[str, Any]:
     }
 
 
+_MODULE_HASHES: dict[tuple[str, int, int], str] = {}
+
+
 def _module_fingerprint(module: Any) -> dict[str, Any]:
+    """Code identity by CONTENT, not by path/mtime.
+
+    A fresh checkout, a re-extracted archive or a moved project directory must
+    not re-bill paid stages whose code is byte-identical; any real change to a
+    module's source still invalidates every stage that fingerprints it."""
     raw = getattr(module, "__file__", None)
-    return {
-        "module": str(getattr(module, "__name__", "<unknown>")),
-        "file": _file_fingerprint(raw) if raw else None,
-    }
+    name = str(getattr(module, "__name__", "<unknown>"))
+    if not raw:
+        return {"module": name, "sha256": None}
+    path = Path(raw).resolve()
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"module": name, "sha256": None}
+    key = (str(path), int(stat.st_size), int(stat.st_mtime_ns))
+    digest = _MODULE_HASHES.get(key)
+    if digest is None:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        _MODULE_HASHES[key] = digest
+    return {"module": name, "sha256": digest}
 
 
 def _hash(payload: dict[str, Any]) -> str:
@@ -1021,7 +1026,13 @@ def _deterministic_peak_candidate(
     clip: dict[str, Any],
     clip_duration: float,
     peak_support: dict[str, Any],
+    restart_floor: float = 0.0,
 ) -> dict[str, Any]:
+    """The strongest MEASURED peak, or the editor's payoff region; never a guessed position.
+
+    The cold open must preview a future event that recurs in the story, so a
+    candidate before the story restart (it would be trimmed away) is never used.
+    """
     candidates = peak_support.get("candidates", [])
     valid: list[dict[str, Any]] = []
     if isinstance(candidates, list):
@@ -1029,24 +1040,19 @@ def _deterministic_peak_candidate(
             if not isinstance(item, dict):
                 continue
             try:
-                start = float(item.get("teaser_start", item.get("start", 0.0)))
-                end = float(item.get("teaser_end", item.get("end", start)))
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", start))
             except (TypeError, ValueError):
                 continue
-            if end - start < 0.45:
-                continue
-            if start < 0.0 or end > clip_duration + 0.15:
+            if end <= start or start < restart_floor - 1e-3 or end > clip_duration + 0.15:
                 continue
             valid.append(item)
 
     if valid:
         # Cold-open must feel like a preview of a future event, not a duplicate
         # of the first frame. Prefer a later real peak when one exists.
-        later_floor = min(1.0, max(0.55, clip_duration * 0.08))
-        later = [
-            item for item in valid
-            if float(item.get("teaser_start", item.get("start", 0.0))) >= later_floor
-        ]
+        later_floor = max(restart_floor, min(1.0, max(0.55, clip_duration * 0.08)))
+        later = [item for item in valid if float(item.get("start", 0.0)) >= later_floor]
         pool = later or valid
 
         def _rank(item: dict[str, Any]) -> tuple[float, float, float]:
@@ -1054,65 +1060,38 @@ def _deterministic_peak_candidate(
                 combined = float(item.get("combined_score", 0.0))
             except (TypeError, ValueError):
                 combined = 0.0
-            tier = str(item.get("intro_tier", "normal")).strip().casefold()
-            tier_bonus = 0.12 if tier == "extreme" else 0.07 if tier == "strong" else 0.0
             multimodal_bonus = 0.05 if bool(item.get("multimodal")) else 0.0
-            try:
-                focus = float(item.get("focus_time", item.get("start", 0.0)))
-            except (TypeError, ValueError):
-                focus = 0.0
-            return combined + tier_bonus + multimodal_bonus, combined, focus
+            return combined + multimodal_bonus, combined, float(item.get("start", 0.0))
 
         return dict(max(pool, key=_rank))
 
-    # No measured peak survived. Use the known payoff region when available;
-    # otherwise choose a compact later window. This is deliberately a last
-    # resort so the pipeline can never silently publish a main-only Short.
-    focus: float | None = None
+    # No measured peak survived: the editor's own payoff region is the event.
     payoff = clip.get("payoff", {})
     if isinstance(payoff, dict):
         try:
-            source_start = float(payoff.get("source_start"))
-            source_end = float(payoff.get("source_end"))
-            if source_end >= source_start >= 0.0:
-                midpoint = (source_start + source_end) / 2.0
-                focus = teaser_analyzer.source_to_edited_time(
-                    midpoint,
-                    teaser_analyzer.normalize_cut_ranges(clip),
-                )
+            cuts = teaser_analyzer.normalize_cut_ranges(clip)
+            core_start = teaser_analyzer.source_to_edited_time(float(payoff.get("source_start")), cuts)
+            core_end = teaser_analyzer.source_to_edited_time(float(payoff.get("source_end")), cuts)
         except (TypeError, ValueError, KeyError):
-            focus = None
-
-    if focus is None:
-        focus = clip_duration * 0.68
-
-    target = min(1.28, max(0.60, clip_duration * 0.10))
-    pre = min(0.44, target * 0.40)
-    start = max(0.0, focus - pre)
-    end = min(clip_duration, start + target)
-    if end - start < target and clip_duration > target:
-        start = max(0.0, end - target)
-
-    # On normal-length clips, keep deterministic fallback away from frame zero.
-    if clip_duration >= 4.0 and start < 0.75:
-        start = min(max(0.75, clip_duration * 0.55), max(0.0, clip_duration - target))
-        end = min(clip_duration, start + target)
-
-    return {
-        "peak_id": 999001,
-        "start": round(start, 3),
-        "end": round(end, 3),
-        "teaser_start": round(start, 3),
-        "teaser_end": round(end, 3),
-        "focus_time": round((start + end) / 2.0, 3),
-        "audio_score": 0.0,
-        "visual_score": 0.0,
-        "combined_score": 0.0,
-        "multimodal": False,
-        "intro_tier": "normal",
-        "signals": ["mandatory_cold_open_fallback"],
-        "visual_description": "deterministic future-event fallback window",
-    }
+            core_start = core_end = -1.0
+        if core_end > core_start >= restart_floor:
+            return {
+                "peak_id": 999001,
+                "start": round(core_start, 3),
+                "end": round(min(clip_duration, core_end), 3),
+                "teaser_start": round(core_start, 3),
+                "teaser_end": round(min(clip_duration, core_end), 3),
+                "audio_score": 0.0,
+                "visual_score": 0.0,
+                "combined_score": 0.0,
+                "multimodal": False,
+                "signals": ["editor_payoff_region"],
+                "visual_description": "editor-marked payoff region (no measured audio/visual peak)",
+            }
+    raise ShortsPipelineError(
+        "Cold open için ölçülebilir bir peak ya da editör payoff bölgesi yok; tahmini bir an "
+        "cold open yapılmaz."
+    )
 
 
 def _write_fallback_teaser(
@@ -1125,15 +1104,16 @@ def _write_fallback_teaser(
     *,
     edited_video_path: str | Path | None = None,
     video_report_path: str | Path | None = None,
+    caption_profile_path: str | Path | None = None,
+    caption_path: str | Path | None = None,
 ) -> Path:
-    """Write a REAL mandatory cold-open instead of a no-teaser package."""
+    """Write a REAL cold open (measured peak, evidence-bounded) when the teaser model failed."""
     clip = _timeline_clip(timeline_data, clip_index)
     transcript_data = _load_json(transcript_path)
     try:
         available_words = teaser_analyzer.build_available_words(transcript_data, clip)
     except Exception:
-        # A non-verbal physical peak is still a valid cold-open. Transcript
-        # failure must not silently turn the whole Short into main-only video.
+        # A non-verbal physical peak is still a valid cold-open.
         available_words = []
     clip_duration = _clip_edited_duration(
         timeline_data,
@@ -1144,17 +1124,31 @@ def _write_fallback_teaser(
         raise ShortsPipelineError(
             "Mandatory intro fallback için edited clip süresi bulunamadı."
         )
+    caption_profile = None
+    if caption_profile_path and Path(caption_profile_path).is_file():
+        try:
+            caption_profile = _load_json(caption_profile_path)
+        except Exception:
+            caption_profile = None
+    boundary_words = teaser_analyzer.boundary_words_for(available_words, caption_profile)
+    envelope = intro_bounds.audio_envelope(edited_video_path)
+    restart_floor, _ = intro_renderer.calculate_main_restart_seconds(
+        caption_path=caption_path, main_duration=clip_duration,
+        protected_ranges=intro_renderer.protected_edited_ranges(clip))
 
     peak_support = intro_peak_support.build_peak_support(
         edited_video_path=edited_video_path,
         video_report_path=video_report_path,
         clip_duration=clip_duration,
+        envelope=envelope,
+        words=boundary_words,
     )
     intro_peak_support.attach_nearby_words(peak_support, available_words)
     chosen = _deterministic_peak_candidate(
         clip=clip,
         clip_duration=clip_duration,
         peak_support=peak_support,
+        restart_floor=restart_floor,
     )
 
     candidates = peak_support.get("candidates", [])
@@ -1185,6 +1179,9 @@ def _write_fallback_teaser(
             "spoiler_risk": "medium",
         },
         peak_support=peak_support,
+        boundary_words=boundary_words,
+        envelope=envelope,
+        media_path=edited_video_path,
     )
     result["recommended"] = True
     result["ai_recommended"] = False
@@ -1193,14 +1190,8 @@ def _write_fallback_teaser(
     warnings = result.get("warnings", [])
     if not isinstance(warnings, list):
         warnings = []
-    warnings.append("V27.1 mandatory fallback: main-only publish yasak; gerçek future-event window kullanıldı.")
+    warnings.append("Deterministic cold open: strongest measured peak, evidence-bounded (teaser model unavailable).")
     result["warnings"] = warnings
-    result["render_plan"] = {
-        "input": "captioned_preview",
-        "prepend_teaser": True,
-        "restart_main_clip": True,
-        "remove_teaser_from_main_clip": False,
-    }
 
     return _write_json_atomic(
         teaser_path,
@@ -1219,20 +1210,6 @@ def _write_fallback_teaser(
     )
 
 
-def _fallback_intro_text(timeline_data: dict[str, Any], clip_index: int) -> str:
-    clip = _timeline_clip(timeline_data, clip_index)
-    hook = clip.get("hook", {})
-    text = ""
-    if isinstance(hook, dict):
-        text = str(hook.get("text", "")).strip()
-    if not text:
-        text = str(clip.get("title", "")).strip()
-    if not text:
-        text = "WATCH WHAT HAPPENS"
-    # Keep deterministic emergency copy readable on a sub-2s cold-open.
-    return " ".join(text.split()[:8]).upper()
-
-
 def _write_fallback_intro(
     intro_path: Path,
     teaser_path: Path,
@@ -1242,12 +1219,12 @@ def _write_fallback_intro(
     clip_index: int,
     reason: str,
 ) -> Path:
-    text = _fallback_intro_text(timeline_data, clip_index)
+    """Cold open WITHOUT a headline: a strong peak with no text beats generic copy."""
     return _write_json_atomic(
         intro_path,
         {
             "version": 1,
-            "mode": "mandatory_intro_fallback",
+            "mode": "no_headline_intro",
             "inputs": {
                 "teaser": str(teaser_path),
                 "timeline": str(timeline_path),
@@ -1260,54 +1237,24 @@ def _write_fallback_intro(
                     "title": _selected_title(timeline_data, clip_index),
                     "recommended": True,
                     "ai_recommended": False,
+                    "headline_status": "none",
                     "score": 0.0,
-                    "intro_text": text,
-                    "tone": "curiosity",
-                    "copy_strategy": "mandatory_metadata_fallback",
-                    "creator": {"verified_name": None, "used_in_copy": False},
+                    "intro_text": "",
                     "reason": reason,
-                    "curiosity_target": "how the previewed peak happened",
                     "quality_gate": {
                         "threshold": MIN_INTRO_ACCEPT_SCORE,
                         "accepted": True,
-                        "locked_intro_override": True,
-                        "mandatory_cold_open": True,
-                        "candidate_count": 1,
-                        "selected_candidate_index": 1,
-                        "candidate_scores": [],
-                        "repair_rounds_used": 0,
-                        "rejection_reason": "",
+                        "no_headline": True,
+                        "rejection_reason": reason,
                     },
-                    "candidates": [
-                        {
-                            "candidate_index": 1,
-                            "intro_text": text,
-                            "tone": "curiosity",
-                            "copy_strategy": "mandatory_metadata_fallback",
-                            "curiosity_target": "how the previewed peak happened",
-                            "uses_specific_name": False,
-                        }
-                    ],
-                    "intro": {
-                        "duration": 0.9,
-                        "word_count": len(text.split()),
-                        "character_count": len(text),
-                    },
-                    "background": {
-                        "source": "edited_clip",
-                        "freeze_frame_time": 0.0,
-                        "style": "moving_teaser",
-                    },
-                    "sequence": [
-                        "moving_teaser_with_hook",
-                        "smooth_main_clip_restart",
-                    ],
+                    "intro": {"duration": 0.0, "word_count": 0, "character_count": 0},
+                    "background": {"source": "edited_clip", "freeze_frame_time": 0.0, "style": "moving_teaser"},
+                    "sequence": ["moving_peak_without_headline", "hard_main_clip_restart"],
                     "render_plan": {
                         "intro_background": "moving_teaser",
-                        "intro_duration": 0.9,
                         "then_play": "main_clip_restart",
                         "restart_main_clip_after_teaser": True,
-                        "transition": "short_smooth_crossfade",
+                        "transition": "hard_cut",
                     },
                 }
             ],
@@ -1623,6 +1570,22 @@ def _publish_final(source: Path, video_path: Path) -> Path:
     return output
 
 
+def _reject_candidate(candidate: Path, video_path: Path, gate: dict[str, Any], state: dict[str, Any]) -> Path:
+    """Keep a rejected candidate for inspection OUTSIDE vod_output/final, with its QC report."""
+    REJECTED_DIR.mkdir(parents=True, exist_ok=True)
+    target = (REJECTED_DIR / f"{_safe_name(video_path.stem)}_short_REJECTED.mp4").resolve()
+    if _valid_file(candidate, MIN_VIDEO_BYTES) and candidate.resolve() != target:
+        temp = target.with_suffix(target.suffix + ".tmp")
+        shutil.copy2(candidate, temp)
+        os.replace(temp, target)
+    _write_json_atomic(target.with_suffix(".qc.json"), {
+        "status": "rejected", "source": str(video_path), "candidate": str(candidate),
+        "failed": gate.get("failed"), "warnings": gate.get("warnings"), "gate": gate,
+        "final_qc": state.get("final_qc"), "at": _now(),
+    })
+    return target
+
+
 def _inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -1687,6 +1650,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         participant_name_lock,
         pacing_cutter,
         caption_renderer,
+        caption_truth,
         teaser_analyzer,
         intro_peak_support,
         intro_analyzer,
@@ -1694,6 +1658,9 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         meme_analyzer,
         meme_discovery,
         meme_renderer,
+        final_qc,
+        final_review,
+        v6_runtime,
     ]
 
     payload: dict[str, Any] = {
@@ -1718,8 +1685,7 @@ def _request_signature(
     enable_memes: bool,
     enable_video_brain: bool,
     video_brain_model: str,
-    pro_edit_signature: str | None = None,
-    v6_signature: str | None = None,
+    presentation_signature: str,
 ) -> str:
     payload: dict[str, Any] = {
         "pipeline_version": PIPELINE_VERSION,
@@ -1731,12 +1697,7 @@ def _request_signature(
         "video_brain_model": video_brain_model if enable_video_brain else "",
         "code_signature": _code_signature(enable_video_brain, video_brain_model),
     }
-    # Only present when Pro Edit is enabled: the disabled request signature is
-    # identical to the pre-Pro-Edit pipeline (fast-resume stays valid).
-    if pro_edit_signature is not None:
-        payload["pro_edit"] = pro_edit_signature
-    if v6_signature is not None:
-        payload["v6"] = v6_signature
+    payload["presentation"] = presentation_signature
     return _hash(payload)
 
 
@@ -1778,6 +1739,7 @@ def _fast_resume(
         "stats": state.get("summary_stats", {}),
         "profile": state.get("profile", {}),
         "fast_resume": True,
+        "status": str(state.get("publish_status", "published")),
         **({"v6": state["v6"].get("summary", {})} if isinstance(state.get("v6"), dict) else {}),
     }
 
@@ -1816,9 +1778,10 @@ def _verify_pro_edit_intro(
         teaser_record = _package_clip(teaser_path, "teasers", clip_index) or {}
         clean_info = media_mod.probe_media(clean_clip)
         main_info = media_mod.probe_media(main_preview)
+        clip_timeline = _timeline_clip(_load_json(prep.timeline_path), clip_index) if prep.timeline_path else None
         after = timeline_mod.build_intro_timeline(
             teaser_record, caption_path=caption_path, clean_duration=media_mod.probe_media(intro_source).duration_s,
-            main_duration=main_info.duration_s)
+            main_duration=main_info.duration_s, clip_timeline=clip_timeline, fps=clean_info.fps.fps)
         frame = clean_info.fps.frame_duration
         timeline_mod.verify_handoff(prep.intro_timeline, after, frame_duration=frame)
         final_info = media_mod.probe_media(final_preview)
@@ -1951,6 +1914,47 @@ def _run_caption_truth_v6(
         return caption_path, None
 
 
+def _verified_names(profile_path: Path | None, creator_name: str | None, entities: Iterable[str]) -> list[str]:
+    """Names a human confirmed: creator, human-confirmed speakers, user-verified entities."""
+    names: list[str] = []
+    if creator_name:
+        names.append(creator_name)
+    if profile_path is not None:
+        try:
+            from ai.editor.pro_edit.caption_guard import load_profile, trusted_display_names
+
+            names.extend(trusted_display_names(load_profile(profile_path)).values())
+        except Exception:
+            pass
+    names.extend(entities)
+    result: list[str] = []
+    for name in names:
+        value = " ".join(str(name).split())
+        if value and value.casefold() not in {n.casefold() for n in result}:
+            result.append(value)
+    return result
+
+
+def _truth_text(truth_path: Path | None) -> str:
+    """The frozen caption words as plain text (headline grounding evidence)."""
+    if truth_path is None or not Path(truth_path).is_file():
+        return ""
+    try:
+        rows = _load_json(truth_path).get("words", [])
+    except Exception:
+        return ""
+    return " ".join(str(row[1]) for row in rows if isinstance(row, list) and len(row) > 1)
+
+
+def _final_caption_bands(burned_ass: Path | None) -> list[tuple[float, float]]:
+    """Vertical bands (normalized) where the burned speech captions live."""
+    if burned_ass is None or not Path(burned_ass).is_file():
+        return []
+    from ai.editor.pro_edit.caption_guard import caption_safe_region
+
+    return sorted({(round(b.y0, 4), round(b.y1, 4)) for b in caption_safe_region(burned_ass).bands})
+
+
 def _record_pro_edit_v6(run: Any, prep: Any) -> None:
     """Expose every V6-relevant Pro Edit degradation as an explicit fallback."""
     from ai.editor.pro_edit.vision.cv_runtime import opencv_status
@@ -2017,8 +2021,12 @@ def _finish_v6(
     truth_path: Path | None,
     artifact_dir: Path,
     clip_index: int,
+    qc_rows: list[dict[str, Any]] | None = None,
+    review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Final pixel proof + deterministic quality gate + compact manifest (runs before temp cleanup)."""
+    """Final pixel proof + deterministic quality gate + compact manifest (runs BEFORE publishing).
+
+    ``published_path`` is the CANDIDATE that would be published."""
     final_proof = None
     story = (False, "Pro Edit was not prepared")
     labels: list[str] = []
@@ -2043,7 +2051,7 @@ def _finish_v6(
         run=run, final_output=published_path, profile_path=profile_path, truth_path=truth_path,
         burned_ass=burned_ass, prep=prep, main_proof=main_proof, final_proof=final_proof, intro_proof=intro_proof,
         story_intact=story, intro_handoff=(state.get("pro_edit") or {}).get("intro_verification"),
-        render_status=render_status, display_labels=labels)
+        render_status=render_status, display_labels=labels, qc_rows=qc_rows or (), review=review)
     run.gate = gate
     artifacts = getattr(prep, "artifacts", None)
     proof_path = getattr(artifacts, "render_proof", None)
@@ -2067,7 +2075,9 @@ def _finish_v6(
     for line in run.console_lines():
         print(line)
     if gate.get("status") == v6_mod.GATE_FAILED:
-        book.warn("MIMIR V6 final kalite kapısı başarısız: " + ", ".join(gate.get("failed") or []))
+        book.warn("Final kalite kapısı başarısız: " + ", ".join(gate.get("failed") or []))
+    elif gate.get("warnings"):
+        book.warn("Final kalite kapısı DEGRADED uyarılarla geçti: " + ", ".join(gate.get("warnings") or []))
     book.save()
     return summary
 
@@ -2081,10 +2091,16 @@ def run_pipeline(
     enable_memes: bool = True,
     enable_video_brain: bool | None = None,
     keep_temp: bool = False,
-    enable_pro_edit: bool | None = None,
-    enable_v6: bool | None = None,
+    rerender: bool = False,
     force_v6: bool = False,
 ) -> dict[str, Any]:
+    """The one production path: VOD -> story -> truth-locked captions -> cold
+    open -> directed presentation -> effects -> rendered-MP4 QC -> publish.
+
+    ``rerender`` (legacy alias ``force_v6``) recomputes only the presentation,
+    render, QC and publish stages; transcription, story discovery, caption ASR
+    and the other paid upstream stages keep their caches."""
+    rerender = bool(rerender or force_v6)
     run_started = time.perf_counter()
     runtime_profiler = RuntimeProfiler()
     video_path = resolve_video_path(video_path)
@@ -2098,44 +2114,23 @@ def run_pipeline(
     previous = _load_state(state_path)
     same_source = _same_source(previous, source)
 
-    # MIMIR V6 (default OFF). V6 runs through Pro Edit, so it turns Pro Edit on;
-    # its own modules are imported only when it is requested.
-    v6_active = bool(force_v6) or _v6_requested(enable_v6)
-    v6_mod: Any = None
-    caption_truth_mod: Any = None
-    v6_run: Any = None
-    if v6_active:
-        from ai.editor import caption_truth as caption_truth_mod, v6_runtime as v6_mod
-
-        v6_run = v6_mod.V6Run(enabled=True, force=bool(force_v6))
-    pro_edit_pkg, pro_edit_cfg, pro_edit_load_error = _load_pro_edit(
-        True if v6_active else enable_pro_edit, v6=v6_active)
-    pro_edit_active = pro_edit_pkg is not None and pro_edit_cfg is not None
-    pro_edit_request_sig: str | None = None
-    if pro_edit_active:
-        pro_edit_request_sig = _hash(
-            {
-                "version": int(getattr(pro_edit_pkg, "PRO_EDIT_VERSION", 1)),
-                "config": pro_edit_cfg.signature_payload(),
-                "modules": [_module_fingerprint(module) for module in pro_edit_pkg.MODULES],
-            }
-        )
-
-    v6_request_sig: str | None = None
-    v6_entities: list[str] = []
-    if v6_active:
-        v6_entities = v6_mod.caption_entities_from_env()
-        v6_request_sig = _hash(
-            {
-                "version": int(getattr(v6_mod, "V6_VERSION", 1)),
-                "entities": v6_entities,
-                "modules": [
-                    _module_fingerprint(module)
-                    for module in (caption_truth_mod, v6_mod, participant_name_lock,
-                                   *getattr(pro_edit_pkg, "VERIFY_MODULES", ()))
-                ],
-            }
-        )
+    v6_mod: Any = v6_runtime
+    caption_truth_mod: Any = caption_truth
+    v6_run: Any = v6_runtime.V6Run(enabled=True, force=rerender)
+    pro_edit_pkg, pro_edit_cfg = _load_pro_edit()
+    v6_entities = v6_runtime.caption_entities_from_env()
+    presentation_sig = _hash(
+        {
+            "version": int(getattr(pro_edit_pkg, "PRO_EDIT_VERSION", 1)),
+            "config": pro_edit_cfg.signature_payload(),
+            "entities": v6_entities,
+            "modules": [
+                _module_fingerprint(module)
+                for module in (*pro_edit_pkg.MODULES, caption_truth, v6_runtime, participant_name_lock,
+                               *getattr(pro_edit_pkg, "VERIFY_MODULES", ()))
+            ],
+        }
+    )
 
     request_sig = _request_signature(
         source,
@@ -2144,14 +2139,13 @@ def run_pipeline(
         enable_memes=bool(enable_memes),
         enable_video_brain=resolved_vb,
         video_brain_model=video_brain_model,
-        pro_edit_signature=pro_edit_request_sig,
-        v6_signature=v6_request_sig,
+        presentation_signature=presentation_sig,
     )
 
-    if not force and not force_v6 and same_source:
+    if not force and not rerender and same_source:
         resumed = _fast_resume(previous, request_sig, state_path)
         if resumed is not None:
-            print(f"\n⚡ Optimal V9 fast-resume\n📂 {resumed['final_output']}")
+            print(f"\n⚡ MIMIR fast-resume (hazır, doğrulanmış çıktı)\n📂 {resumed['final_output']}")
             return resumed
 
     source_changed = previous is not None and not same_source
@@ -2166,15 +2160,12 @@ def run_pipeline(
         "enable_memes": bool(enable_memes),
         "enable_video_brain": resolved_vb,
         "keep_temp": bool(keep_temp),
+        "rerender": rerender,
     }
-    if pro_edit_active or pro_edit_load_error:
-        state["options"]["enable_pro_edit"] = True
-    if v6_active:
-        state["options"]["enable_v6"] = True
-        if force_v6:
-            state["options"]["force_v6"] = True
     state.pop("pro_edit", None)
     state.pop("v6", None)
+    state.pop("final_qc", None)
+    state.pop("publish_status", None)
     state["warnings"] = []
     state["video_brain_source_report"] = None
     state["video_brain_report"] = None
@@ -2185,7 +2176,7 @@ def run_pipeline(
         state_path,
         state,
         effective_force,
-        rerun=v6_mod.FORCE_V6_STAGES if (v6_active and force_v6) else (),
+        rerun=v6_runtime.FORCE_V6_STAGES if rerender else (),
     )
     book.save()
 
@@ -2198,17 +2189,9 @@ def run_pipeline(
         pro_edit=(
             f"planner={pro_edit_cfg.planner}, style={pro_edit_cfg.style}, "
             f"profile={pro_edit_cfg.output_profile.value}"
-            if pro_edit_active
-            else None
         ),
-        v6=("force-v6: V6 aşamaları yeniden" if force_v6 else "caption truth + kamera + piksel kanıtı")
-        if v6_active
-        else None,
+        v6="rerender: sunum/render/QC yeniden" if rerender else "caption truth + kamera + piksel QC + final gate",
     )
-    if pro_edit_load_error:
-        book.warn(pro_edit_load_error)
-        if v6_run is not None:
-            v6_run.fallback("pro_edit", pro_edit_load_error, "baseline_caption_render")
 
     temp_candidates: list[Path | None] = []
 
@@ -2975,8 +2958,8 @@ def run_pipeline(
             ).strip()
             # Accuracy is mandatory: never silently publish legacy transcript
             # timing after the exact-final-48k profile failed. That fallback was
-            # the direct cause of Kaityla losing both V3 timing corrections and
-            # the human KAI/TYLA display mapping. Fail BEFORE caption render so
+            # the direct cause of a real two-speaker short losing both V3 timing
+            # corrections and the human name display mapping. Fail BEFORE caption render so
             # the defect is visible and downstream media is not mislabeled.
             raise RuntimeError(
                 "Mandatory exact-final caption profile failed; legacy timing fallback disabled. "
@@ -3060,118 +3043,27 @@ def run_pipeline(
     # caption ASS is regenerated from the corrected truth. Local and cheap:
     # the paid caption stage above is never re-run for it.
     name_lock_profile = _speaker_profile_path(edited_clip_path, selected_clip_index)
-    name_lock_started = time.perf_counter()
-    if v6_active:
-        print(f"\n[7b/{TOTAL_STAGES}] Caption Truth V6 (resolve → targeted escalation → freeze)")
-    else:
-        print(f"\n[7b/{TOTAL_STAGES}] Verified participant name lock")
+    print(f"\n[7b/{TOTAL_STAGES}] Caption truth (verified names → targeted escalation → freeze)")
     print("-" * 60)
-
-    def _name_lock_signature() -> str:
-        return _stage_signature(
-            "caption_name_lock",
-            inputs=[path for path in (name_lock_profile, caption_path, timeline_path, transcript_path) if path],
-            modules=[participant_name_lock, captions],
-            options={
-                "clip_index": selected_clip_index,
-                "version": int(getattr(participant_name_lock, "NAME_LOCK_VERSION", 1)),
-            },
-        )
-
-    def _name_lock_state(audit: dict[str, Any] | None) -> None:
-        if isinstance(audit, dict):
-            state["caption_name_lock"] = {
-                key: audit.get(key)
-                for key in ("status", "corrections", "rejected", "new_corrections", "version")
-                if key in audit
-            }
-            book.save()
-
     caption_truth_path: Path | None = None
-    if v6_active:
-        caption_path, caption_truth_path = _run_caption_truth_v6(
-            book=book,
-            run=v6_run,
-            truth_mod=caption_truth_mod,
-            profile_path=name_lock_profile,
-            caption_path=caption_path,
-            transcript_path=transcript_path,
-            timeline_path=timeline_path,
-            edited_clip_path=edited_clip_path,
-            clip_index=selected_clip_index,
-            creator_name=creator_name,
-            entities=v6_entities,
+    caption_path, caption_truth_path = _run_caption_truth_v6(
+        book=book,
+        run=v6_run,
+        truth_mod=caption_truth_mod,
+        profile_path=name_lock_profile,
+        caption_path=caption_path,
+        transcript_path=transcript_path,
+        timeline_path=timeline_path,
+        edited_clip_path=edited_clip_path,
+        clip_index=selected_clip_index,
+        creator_name=creator_name,
+        entities=v6_entities,
+    )
+    if caption_truth_path is None:
+        raise ShortsPipelineError(
+            "Caption truth dondurulamadı; doğrulanmamış altyazıyla Short yayınlanmaz. "
+            "Ayrıntı yukarıdaki Caption Truth uyarısında."
         )
-    elif name_lock_profile is None:
-        print("⏭️ Final speaker profile yok; participant name lock atlandı.")
-        book.record(
-            "caption_name_lock",
-            "skipped",
-            None,
-            note="final speaker profile not found",
-            elapsed=time.perf_counter() - name_lock_started,
-        )
-    elif book.reusable(
-        "caption_name_lock",
-        _name_lock_signature(),
-        lambda: _valid_file(caption_path, MIN_CAPTION_BYTES) and _valid_json(name_lock_profile),
-        output=caption_path,
-    ):
-        _stage_skip(name_lock_profile)
-        try:
-            _name_lock_state((_load_json(name_lock_profile) or {}).get("participant_name_lock"))
-        except Exception:
-            pass
-        book.record(
-            "caption_name_lock",
-            "skipped",
-            _name_lock_signature(),
-            path=name_lock_profile,
-            elapsed=time.perf_counter() - name_lock_started,
-        )
-    else:
-        try:
-            name_lock_audit = participant_name_lock.apply_to_profile_file(name_lock_profile)
-            if name_lock_audit.get("changed"):
-                caption_path = Path(
-                    captions.create_clip_captions(
-                        transcript_path=transcript_path,
-                        timeline_path=timeline_path,
-                        clip_index=selected_clip_index,
-                        speaker_profile_path=name_lock_profile,
-                    )
-                ).resolve()
-            name_lock_rows = list(name_lock_audit.get("corrections") or [])
-            for row in name_lock_rows:
-                print(
-                    f"🔤 Name lock: {row.get('from')} → {row.get('to')} "
-                    f"(participant {row.get('participant')}; {', '.join(row.get('evidence') or [])})"
-                )
-            if not name_lock_rows:
-                print(f"🔤 Name lock: düzeltme yok ({name_lock_audit.get('status')})")
-            _name_lock_state(name_lock_audit)
-            _stage_done(name_lock_profile)
-            book.record(
-                "caption_name_lock",
-                "done",
-                _name_lock_signature(),
-                path=name_lock_profile,
-                note=f"{len(name_lock_rows)} correction(s); status={name_lock_audit.get('status')}",
-                elapsed=time.perf_counter() - name_lock_started,
-            )
-        except Exception as error:
-            # Fail closed: the unmodified caption truth (and ASS) stay in use.
-            book.warn(
-                "Participant name lock uygulanamadı; ASR yazımı korundu. "
-                f"Detay: {type(error).__name__}: {error}"
-            )
-            book.record(
-                "caption_name_lock",
-                "fallback",
-                None,
-                note=f"{type(error).__name__}: {error}",
-                elapsed=time.perf_counter() - name_lock_started,
-            )
 
     # V14: caption rendering is deterministic FFmpeg work and does not feed
     # visual/teaser/intro analysis. Start the exact same render now and join it
@@ -3233,18 +3125,6 @@ def run_pipeline(
     caption_render_future = None
     caption_render_started = time.perf_counter()
     pro_render_outcome: dict[str, Any] = {}
-    if not pro_edit_active:
-        (
-            caption_render_cached,
-            caption_render_executor,
-            caption_render_future,
-            caption_render_started,
-        ) = _start_caption_render(
-            captioned_preview_path,
-            caption_render_sig,
-            [caption_renderer],
-            caption_render_job,
-        )
 
     # --------------------------------------------------------
     # 7. VIDEO BRAIN SUPPORT
@@ -3343,11 +3223,14 @@ def run_pipeline(
     ]
     if video_brain_report_path is not None:
         teaser_analysis_inputs.append(video_brain_report_path)
+    # The cold-open boundaries are measured on the frozen caption word clock.
+    if name_lock_profile is not None:
+        teaser_analysis_inputs.append(name_lock_profile)
 
     teaser_sig = _stage_signature(
         "teaser_analysis",
         inputs=teaser_analysis_inputs,
-        modules=[teaser_analyzer, intro_peak_support, model_config],
+        modules=[teaser_analyzer, intro_peak_support, intro_bounds, model_config],
         options={
             "clip_index": selected_clip_index,
             "model": model_config.TEASER_MODEL,
@@ -3390,6 +3273,7 @@ def run_pipeline(
                 clip_index=selected_clip_index,
                 edited_video_path=edited_clip_path,
                 video_report_path=video_brain_report_path,
+                caption_profile_path=name_lock_profile,
             )
             if not _contains_clip(teaser_path, "teasers", selected_clip_index, 1):
                 raise RuntimeError("Teaser package seçilen klibi içermiyor.")
@@ -3418,6 +3302,8 @@ def run_pipeline(
                     reason,
                     edited_video_path=edited_clip_path,
                     video_report_path=video_brain_report_path,
+                    caption_profile_path=name_lock_profile,
+                    caption_path=caption_path,
                 )
             except Exception as fallback_error:
                 raise ShortsPipelineError(
@@ -3484,9 +3370,9 @@ def run_pipeline(
             teaser_record,
             dict,
         )
-        and 0.45
+        and intro_bounds.MIN_INTRO_S - 0.05
         <= teaser_duration
-        <= 6.5
+        <= intro_bounds.MAX_INTRO_S + 0.05
     )
 
     if not teaser_usable:
@@ -3505,6 +3391,8 @@ def run_pipeline(
                 reason,
                 edited_video_path=edited_clip_path,
                 video_report_path=video_brain_report_path,
+                caption_profile_path=name_lock_profile,
+                caption_path=caption_path,
             )
             teaser_record = _package_clip(
                 teaser_path,
@@ -3516,7 +3404,7 @@ def run_pipeline(
             teaser_recommended = bool(teaser_record and teaser_record.get("recommended") is True)
             teaser_usable = bool(
                 isinstance(teaser_record, dict)
-                and 0.45 <= teaser_duration <= 6.5
+                and intro_bounds.MIN_INTRO_S - 0.05 <= teaser_duration <= intro_bounds.MAX_INTRO_S + 0.05
             )
         except Exception as fallback_error:
             raise ShortsPipelineError(
@@ -3553,6 +3441,10 @@ def run_pipeline(
         intro_analysis_inputs.append(
             video_brain_report_path
         )
+    # Headline grounding evidence: the frozen caption truth and verified names.
+    intro_analysis_inputs.append(caption_truth_path)
+    headline_verified_names = _verified_names(name_lock_profile, creator_name, v6_entities)
+    headline_caption_text = _truth_text(caption_truth_path)
 
     intro_analysis_sig = _stage_signature(
         "intro_analysis",
@@ -3561,6 +3453,7 @@ def run_pipeline(
         options={
             "clip_index": selected_clip_index,
             "creator_name": creator_name or "",
+            "verified_names": headline_verified_names,
             "quality_threshold": MIN_INTRO_ACCEPT_SCORE,
             "draft_model": model_config.INTRO_DRAFT_MODEL,
             "draft_reasoning_effort": model_config.INTRO_DRAFT_REASONING_EFFORT,
@@ -3571,151 +3464,91 @@ def run_pipeline(
 
     intro_record: dict[str, Any] | None = None
 
-    if teaser_usable:
-        if book.reusable(
-            "intro_analysis",
-            intro_analysis_sig,
-            lambda: _contains_clip(intro_path, "intros", selected_clip_index, 1),
-            output=intro_path,
-            freshness=[
-                teaser_path,
-                *(
-                    [video_brain_report_path]
-                    if video_brain_report_path is not None
-                    else []
-                ),
-                *_module_paths([intro_analyzer]),
-            ],
-        ):
-            _stage_skip(intro_path)
-            book.record(
-                "intro_analysis",
-                "skipped",
-                intro_analysis_sig,
-                path=intro_path,
-            )
-        else:
-            try:
-                intro_analyzer.analyze_intros(
-                    teaser_json_path=teaser_path,
-                    clip_index=selected_clip_index,
-                    manual_creator_name=creator_name,
-                    video_report_path=video_brain_report_path,
-                )
-                if not _contains_clip(intro_path, "intros", selected_clip_index, 1):
-                    raise RuntimeError("Intro package seçilen klibi içermiyor.")
-                book.record(
-                    "intro_analysis",
-                    "done",
-                    intro_analysis_sig,
-                    path=intro_path,
-                )
-            except Exception as error:
-                reason = (
-                    "Intro copy AI yolu üretilemedi; mandatory metadata hook kullanılıyor. "
-                    f"Detay: {error}"
-                )
-                book.warn(reason)
-                _write_fallback_intro(
-                    intro_path,
-                    teaser_path,
-                    timeline_path,
-                    transcript_path,
-                    timeline_data,
-                    selected_clip_index,
-                    reason,
-                )
-                book.record(
-                    "intro_analysis",
-                    "fallback",
-                    intro_analysis_sig,
-                    path=intro_path,
-                    note=reason,
-                )
-
-        intro_record = _package_clip(intro_path, "intros", selected_clip_index)
-
-    else:
+    if not teaser_usable:
         raise ShortsPipelineError(
             "Mandatory intro aşamasına geçildi fakat teaser_usable=false; introsuz çıktı engellendi."
         )
-
-    intro_score = 0.0
-
-    if isinstance(
-        intro_record,
-        dict,
+    if book.reusable(
+        "intro_analysis",
+        intro_analysis_sig,
+        lambda: _contains_clip(intro_path, "intros", selected_clip_index, 1),
+        output=intro_path,
     ):
+        _stage_skip(intro_path)
+        book.record(
+            "intro_analysis",
+            "skipped",
+            intro_analysis_sig,
+            path=intro_path,
+        )
+    else:
         try:
-            intro_score = float(
-                intro_record.get(
-                    "score",
-                    0.0,
-                )
+            intro_analyzer.analyze_intros(
+                teaser_json_path=teaser_path,
+                clip_index=selected_clip_index,
+                manual_creator_name=creator_name,
+                video_report_path=video_brain_report_path,
+                verified_names=headline_verified_names,
+                caption_text=headline_caption_text,
             )
-        except (
-            TypeError,
-            ValueError,
-        ):
+            if not _contains_clip(intro_path, "intros", selected_clip_index, 1):
+                raise RuntimeError("Intro package seçilen klibi içermiyor.")
+            book.record(
+                "intro_analysis",
+                "done",
+                intro_analysis_sig,
+                path=intro_path,
+            )
+        except Exception as error:
+            reason = (
+                "Headline AI yolu üretilemedi; cold open headline'sız (yalnız hareketli peak) çıkacak. "
+                f"Detay: {error}"
+            )
+            book.warn(reason)
+            _write_fallback_intro(
+                intro_path,
+                teaser_path,
+                timeline_path,
+                transcript_path,
+                timeline_data,
+                selected_clip_index,
+                reason,
+            )
+            book.record(
+                "intro_analysis",
+                "fallback",
+                intro_analysis_sig,
+                path=intro_path,
+                note=reason,
+            )
+
+    intro_record = _package_clip(intro_path, "intros", selected_clip_index)
+    intro_score = 0.0
+    if isinstance(intro_record, dict):
+        try:
+            intro_score = float(intro_record.get("score", 0.0))
+        except (TypeError, ValueError):
             intro_score = 0.0
-
-    intro_quality_gate = (
-        intro_record.get(
-            "quality_gate",
-            {},
-        )
-        if isinstance(
-            intro_record,
-            dict,
-        )
-        else {}
+    intro_quality_gate = intro_record.get("quality_gate", {}) if isinstance(intro_record, dict) else {}
+    if not isinstance(intro_quality_gate, dict):
+        intro_quality_gate = {}
+    headline_text = str(intro_record.get("intro_text", "")).strip() if isinstance(intro_record, dict) else ""
+    headline_approved = bool(
+        isinstance(intro_record, dict)
+        and intro_record.get("recommended") is True
+        and intro_quality_gate.get("accepted") is not False
+        and headline_text
+        and intro_score >= MIN_INTRO_ACCEPT_SCORE
+        and not intro_quality_gate.get("locked_intro_override")
     )
-
-    quality_gate_accepted = (
-        intro_quality_gate.get(
-            "accepted"
-        )
-        is not False
-        if isinstance(
-            intro_quality_gate,
-            dict,
-        )
-        else True
-    )
-
-    locked_intro_override = bool(
-        isinstance(intro_quality_gate, dict)
-        and intro_quality_gate.get("locked_intro_override") is True
-        and quality_gate_accepted
-    )
-
-    intro_recommended = bool(
-        teaser_usable
-        and intro_record
-        and intro_record.get(
-            "recommended"
-        )
-        is True
-        and (
-            intro_score >= MIN_INTRO_ACCEPT_SCORE
-            or locked_intro_override
-        )
-        and quality_gate_accepted
-    )
-
-    if locked_intro_override and intro_recommended:
-        print(
-            "🔒 V26 locked intro aktif: eski 8/10 copy gate cold-open'u silemedi; "
-            f"gerçek skor {intro_score:.1f}/10."
-        )
-
-    if not intro_recommended:
+    no_headline = bool(isinstance(intro_record, dict) and intro_quality_gate.get("no_headline") is True
+                       and not headline_text)
+    if not headline_approved and not no_headline:
         reason = (
-            "Intro quality/copy gate cold-open'u kaldırmaya çalıştı; "
-            "V27.1 mandatory metadata hook ile intro korunuyor. "
-            f"Gerçek AI skoru={intro_score:.1f}/10."
+            f"Headline {intro_score:.1f}/10 (< {MIN_INTRO_ACCEPT_SCORE:.1f}) veya onaysız; "
+            "cold open headline'sız çıkacak (kötü headline yerine yalnız hareketli peak)."
         )
-        print("🔒 " + reason)
+        print("ℹ️ " + reason)
         _write_fallback_intro(
             intro_path,
             teaser_path,
@@ -3726,29 +3559,10 @@ def run_pipeline(
             reason,
         )
         intro_record = _package_clip(intro_path, "intros", selected_clip_index)
-        intro_score = float(intro_record.get("score", 0.0)) if isinstance(intro_record, dict) else 0.0
-        intro_quality_gate = intro_record.get("quality_gate", {}) if isinstance(intro_record, dict) else {}
-        quality_gate_accepted = bool(
-            isinstance(intro_quality_gate, dict)
-            and intro_quality_gate.get("accepted") is not False
-        )
-        locked_intro_override = bool(
-            isinstance(intro_quality_gate, dict)
-            and intro_quality_gate.get("locked_intro_override") is True
-            and quality_gate_accepted
-        )
-        intro_recommended = bool(
-            teaser_usable
-            and isinstance(intro_record, dict)
-            and intro_record.get("recommended") is True
-            and locked_intro_override
-            and quality_gate_accepted
-        )
-
-    if not intro_recommended:
-        raise ShortsPipelineError(
-            "Mandatory intro package doğrulanamadı; introsuz Short yayınlanmadı."
-        )
+        headline_text = ""
+    if not isinstance(intro_record, dict):
+        raise ShortsPipelineError("Intro package doğrulanamadı; cold open'sız Short yayınlanmaz.")
+    print(f"🧲 Headline: {headline_text or '(yok — cold open yalnız hareketli peak)'}")
 
     # Intro source defaults to the clean paced clip (existing MIMIR behavior).
     intro_source_path = edited_clip_path
@@ -3758,159 +3572,158 @@ def run_pipeline(
     pro_prep_ref: Any = None
 
     # --------------------------------------------------------
-    # 11B. PRO EDIT DIRECTION (feature-flagged presentation layer)
+    # 11B. PRO EDIT DIRECTION (production presentation layer)
     # --------------------------------------------------------
-    # Runs only with MIMIR_PRO_EDIT=1, AFTER story, pacing, captions and the
+    # Runs AFTER story, pacing, captions and the
     # mandatory intro selection are final (all consumed read-only) and BEFORE
     # caption burn-in and intro composition. The main camera is placed BEFORE
     # the subtitles filter in one FFmpeg graph (captions never zoomed, audio
     # stream-copied). The intro camera, if any, is rendered into a copy of the
     # clean paced clip ONLY on the selected teaser frames; the intro renderer
     # then trims the same range, so selection/order/handoff are unchanged.
-    if pro_edit_active:
-        baseline_preview_path = captioned_preview_path
-        baseline_render_sig = caption_render_sig
-        baseline_render_job = caption_render_job
-        render_modules: list[Any] = [caption_renderer]
-        try:
-            pro_started = time.perf_counter()
-            print(f"\n[11b/{TOTAL_STAGES}] Pro Edit direction (presentation only)")
-            print("-" * 60)
-            pro_stage = pro_edit_pkg.stage
-            pro_intro_output = captioned_preview_path.with_name(
-                f"{captioned_preview_path.stem}_intro_source_pro_edit_v"
-                f"{int(getattr(pro_edit_pkg, 'PRO_EDIT_VERSION', 1))}{captioned_preview_path.suffix}"
+    baseline_preview_path = captioned_preview_path
+    baseline_render_sig = caption_render_sig
+    baseline_render_job = caption_render_job
+    render_modules: list[Any] = [caption_renderer]
+    try:
+        pro_started = time.perf_counter()
+        print(f"\n[11b/{TOTAL_STAGES}] Pro Edit direction (presentation only)")
+        print("-" * 60)
+        pro_stage = pro_edit_pkg.stage
+        pro_intro_output = captioned_preview_path.with_name(
+            f"{captioned_preview_path.stem}_intro_source_pro_edit_v"
+            f"{int(getattr(pro_edit_pkg, 'PRO_EDIT_VERSION', 1))}{captioned_preview_path.suffix}"
+        )
+        pro_speaker_profile = _speaker_profile_path(edited_clip_path, selected_clip_index)
+        pro_output = captioned_preview_path.with_name(
+            f"{captioned_preview_path.stem}_pro_edit_v{int(getattr(pro_edit_pkg, 'PRO_EDIT_VERSION', 1))}"
+            f"{captioned_preview_path.suffix}"
+        )
+        pro_sig = _stage_signature(
+            "pro_edit_plan",
+            inputs=[
+                path
+                for path in (
+                    timeline_path,
+                    edited_clip_path,
+                    caption_path,
+                    analysis_path,
+                    teaser_path,
+                    intro_path,
+                    pro_speaker_profile,
+                    video_brain_report_path,
+                )
+                if path is not None
+            ],
+            modules=list(getattr(pro_edit_pkg, "PLAN_MODULES", pro_edit_pkg.MODULES)),
+            options={
+                "clip_index": selected_clip_index,
+                "config": getattr(pro_edit_cfg, "plan_signature_payload", pro_edit_cfg.signature_payload)(),
+            },
+        )
+        pro_prep = pro_stage.prepare_pro_edit(
+            pro_stage.ProEditRequest(
+                config=pro_edit_cfg,
+                timeline_path=timeline_path,
+                clip_index=selected_clip_index,
+                edited_clip_path=edited_clip_path,
+                caption_path=caption_path,
+                output_path=pro_output,
+                artifact_dir=VOD_OUTPUT_DIR / "pro_edit" / _safe_name(video_path.stem),
+                input_signature=pro_sig,
+                analysis_clip=selected_clip,
+                speaker_profile_path=pro_speaker_profile,
+                video_report_path=video_brain_report_path,
+                teaser_record=teaser_record,
+                intro_record=intro_record,
+                intro_output_path=pro_intro_output,
+                force=effective_force or rerender,
+                reuse_plan_cache=rerender and not effective_force,
             )
-            pro_speaker_profile = _speaker_profile_path(edited_clip_path, selected_clip_index)
-            pro_output = captioned_preview_path.with_name(
-                f"{captioned_preview_path.stem}_pro_edit_v{int(getattr(pro_edit_pkg, 'PRO_EDIT_VERSION', 1))}"
-                f"{captioned_preview_path.suffix}"
-            )
-            pro_sig = _stage_signature(
-                "pro_edit_plan",
-                inputs=[
-                    path
-                    for path in (
-                        timeline_path,
-                        edited_clip_path,
-                        caption_path,
-                        analysis_path,
-                        teaser_path,
-                        intro_path,
-                        pro_speaker_profile,
-                        video_brain_report_path,
-                    )
-                    if path is not None
-                ],
-                modules=list(getattr(pro_edit_pkg, "PLAN_MODULES", pro_edit_pkg.MODULES)),
+        )
+        pro_prep.diagnostics.emit()
+        for warning in pro_prep.warnings:
+            book.warn(warning)
+        plan_artifact = pro_prep.artifacts.plan if pro_prep.artifacts is not None else None
+        book.record(
+            "pro_edit",
+            pro_prep.status,
+            pro_sig,
+            path=plan_artifact if plan_artifact is not None and plan_artifact.is_file() else None,
+            note=pro_prep.reason,
+            elapsed=time.perf_counter() - pro_started,
+        )
+        pro_prep_ref = pro_prep
+        state["pro_edit"] = {
+            **pro_prep.summary(),
+            "planner": pro_edit_cfg.planner,
+            "style": pro_edit_cfg.style,
+            "output_profile": pro_edit_cfg.output_profile.value,
+        }
+        book.save()
+        print(f"🎥 Pro Edit: {pro_prep.status} — {pro_prep.reason}")
+        if v6_run is not None:
+            _record_pro_edit_v6(v6_run, pro_prep)
+
+        if pro_prep.ready:
+            captioned_preview_path = pro_prep.output_path
+            caption_render_sig = _stage_signature(
+                "caption_render",
+                inputs=[edited_clip_path, caption_path, timeline_path],
+                modules=[caption_renderer, *pro_edit_pkg.MODULES],
                 options={
                     "clip_index": selected_clip_index,
-                    "config": getattr(pro_edit_cfg, "plan_signature_payload", pro_edit_cfg.signature_payload)(),
+                    "pro_edit": pro_prep.render_options,
                 },
             )
-            pro_prep = pro_stage.prepare_pro_edit(
-                pro_stage.ProEditRequest(
-                    config=pro_edit_cfg,
-                    timeline_path=timeline_path,
-                    clip_index=selected_clip_index,
-                    edited_clip_path=edited_clip_path,
-                    caption_path=caption_path,
-                    output_path=pro_output,
-                    artifact_dir=VOD_OUTPUT_DIR / "pro_edit" / _safe_name(video_path.stem),
-                    input_signature=pro_sig,
-                    analysis_clip=selected_clip,
-                    speaker_profile_path=pro_speaker_profile,
-                    video_report_path=video_brain_report_path,
-                    teaser_record=teaser_record,
-                    intro_record=intro_record,
-                    intro_output_path=pro_intro_output,
-                    force=effective_force or bool(force_v6),
-                    reuse_plan_cache=bool(force_v6) and not effective_force,
-                )
+            caption_render_job = functools.partial(
+                pro_stage.render_with_fallback,
+                pro_prep,
+                caption_file=caption_path,
+                baseline=caption_render_job,
+                outcome=pro_render_outcome,
             )
-            pro_prep.diagnostics.emit()
-            for warning in pro_prep.warnings:
-                book.warn(warning)
-            plan_artifact = pro_prep.artifacts.plan if pro_prep.artifacts is not None else None
-            book.record(
-                "pro_edit",
-                pro_prep.status,
-                pro_sig,
-                path=plan_artifact if plan_artifact is not None and plan_artifact.is_file() else None,
-                note=pro_prep.reason,
-                elapsed=time.perf_counter() - pro_started,
-            )
-            pro_prep_ref = pro_prep
-            state["pro_edit"] = {
-                **pro_prep.summary(),
-                "planner": pro_edit_cfg.planner,
-                "style": pro_edit_cfg.style,
-                "output_profile": pro_edit_cfg.output_profile.value,
-            }
-            book.save()
-            print(f"🎥 Pro Edit: {pro_prep.status} — {pro_prep.reason}")
-            if v6_run is not None:
-                _record_pro_edit_v6(v6_run, pro_prep)
-
-            if pro_prep.ready:
-                captioned_preview_path = pro_prep.output_path
-                caption_render_sig = _stage_signature(
-                    "caption_render",
-                    inputs=[edited_clip_path, caption_path, timeline_path],
-                    modules=[caption_renderer, *pro_edit_pkg.MODULES],
-                    options={
-                        "clip_index": selected_clip_index,
-                        "pro_edit": pro_prep.render_options,
-                    },
-                )
-                caption_render_job = functools.partial(
-                    pro_stage.render_with_fallback,
-                    pro_prep,
-                    caption_file=caption_path,
-                    baseline=caption_render_job,
-                    outcome=pro_render_outcome,
-                )
-                render_modules = [caption_renderer, *pro_edit_pkg.MODULES]
-            else:
-                # Static plan / fallback: exactly the existing caption render + cache.
-                render_modules = [caption_renderer]
-        except Exception as error:  # Pro Edit must never be a single point of failure
-            captioned_preview_path = baseline_preview_path
-            caption_render_sig = baseline_render_sig
-            caption_render_job = baseline_render_job
+            render_modules = [caption_renderer, *pro_edit_pkg.MODULES]
+        else:
+            # Static plan / fallback: exactly the existing caption render + cache.
             render_modules = [caption_renderer]
-            pro_render_outcome.clear()
-            pro_prep_ref = None
-            state["pro_edit"] = {"status": "fallback", "reason": f"{type(error).__name__}: {error}"}
-            book.warn(
-                "Pro Edit aşaması beklenmedik şekilde başarısız; mevcut MIMIR caption render kullanılıyor. "
-                f"Detay: {type(error).__name__}: {error}"
-            )
-            if v6_run is not None:
-                v6_run.fallback("pro_edit", f"{type(error).__name__}: {error}", "baseline_caption_render")
-        (
-            caption_render_cached,
-            caption_render_executor,
-            caption_render_future,
-            caption_render_started,
-        ) = _start_caption_render(
-            captioned_preview_path,
-            caption_render_sig,
-            render_modules,
-            caption_render_job,
+    except Exception as error:  # Pro Edit must never be a single point of failure
+        captioned_preview_path = baseline_preview_path
+        caption_render_sig = baseline_render_sig
+        caption_render_job = baseline_render_job
+        render_modules = [caption_renderer]
+        pro_render_outcome.clear()
+        pro_prep_ref = None
+        state["pro_edit"] = {"status": "fallback", "reason": f"{type(error).__name__}: {error}"}
+        book.warn(
+            "Pro Edit aşaması beklenmedik şekilde başarısız; mevcut MIMIR caption render kullanılıyor. "
+            f"Detay: {type(error).__name__}: {error}"
         )
-        if pro_prep_ref is not None and pro_prep_ref.intro_ready:
-            # Independent of the caption burn-in: render concurrently, join
-            # right before the intro renderer consumes it.
-            intro_source_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mimir-pro-intro")
-            intro_source_future = intro_source_executor.submit(
-                runtime_profiler.timed,
-                "pro_edit_intro_worker",
-                pro_edit_pkg.stage.render_intro_source,
-                pro_prep_ref,
-                clean_clip=edited_clip_path,
-                outcome=pro_intro_outcome,
-            )
+        if v6_run is not None:
+            v6_run.fallback("pro_edit", f"{type(error).__name__}: {error}", "baseline_caption_render")
+    (
+        caption_render_cached,
+        caption_render_executor,
+        caption_render_future,
+        caption_render_started,
+    ) = _start_caption_render(
+        captioned_preview_path,
+        caption_render_sig,
+        render_modules,
+        caption_render_job,
+    )
+    if pro_prep_ref is not None and pro_prep_ref.intro_ready:
+        # Independent of the caption burn-in: render concurrently, join
+        # right before the intro renderer consumes it.
+        intro_source_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mimir-pro-intro")
+        intro_source_future = intro_source_executor.submit(
+            runtime_profiler.timed,
+            "pro_edit_intro_worker",
+            pro_edit_pkg.stage.render_intro_source,
+            pro_prep_ref,
+            clean_clip=edited_clip_path,
+            outcome=pro_intro_outcome,
+        )
 
     # Join the deterministic caption render at the first true consumer.
     # Teaser and intro analysis above have already overlapped with this encode.
@@ -4025,106 +3838,58 @@ def run_pipeline(
         modules=[intro_renderer],
         options={
             "clip_index": selected_clip_index,
-            "intro_recommended": intro_recommended,
-            "locked_intro_override": locked_intro_override,
-            "post_intro_handoff_policy": "first_caption_preroll_v1",
+            "headline": headline_text,
+            "restart": "hard_cut_protected_restart_v1",
             "post_intro_preroll_seconds": float(
                 getattr(intro_renderer, "POST_INTRO_SPEECH_PREROLL_SECONDS", 0.65)
             ),
         },
     )
 
-    if intro_recommended:
-        expected_intro_video = Path(
-            intro_renderer.get_output_path(
-                timeline=timeline_data,
-                intro=intro_record,
-                clip_index=selected_clip_index,
-            )
-        ).resolve()
-
-        if book.reusable(
-            "intro_final_base",
-            intro_render_sig,
-            lambda: _valid_file(expected_intro_video, MIN_VIDEO_BYTES),
-            output=expected_intro_video,
-            freshness=[
-                intro_path,
-                teaser_path,
-                captioned_preview_path,
-                *_module_paths([intro_renderer]),
-            ],
-        ):
-            final_preview_path = _activate_final_preview(expected_intro_video)
-            _stage_skip(final_preview_path)
-        else:
-            try:
-                rendered = intro_renderer.run_renderer(
-                    intro_json_path=intro_path,
-                    clip_index=selected_clip_index,
-                    edited_clip_path=intro_source_path,
-                    captioned_preview_path=captioned_preview_path,
-                    caption_path=caption_path,
-                )
-                if not rendered:
-                    raise RuntimeError("Intro renderer çıktı döndürmedi.")
-                final_preview_path = _activate_final_preview(rendered[0])
-            except Exception as error:
-                raise ShortsPipelineError(
-                    "Mandatory intro render başarısız; main-only fallback YASAK. "
-                    f"Detay: {error}"
-                ) from error
-    else:
-        raise ShortsPipelineError(
-            "Mandatory intro render aşamasında intro_recommended=false; main-only fallback YASAK."
+    expected_intro_video = Path(
+        intro_renderer.get_output_path(
+            timeline=timeline_data,
+            intro=intro_record,
+            clip_index=selected_clip_index,
         )
+    ).resolve()
+
+    if book.reusable(
+        "intro_final_base",
+        intro_render_sig,
+        lambda: (_valid_file(expected_intro_video, MIN_VIDEO_BYTES)
+                 and intro_renderer.load_final_timeline(expected_intro_video) is not None),
+        output=expected_intro_video,
+    ):
+        final_preview_path = _activate_final_preview(expected_intro_video)
+        _stage_skip(final_preview_path)
+    else:
+        try:
+            rendered = intro_renderer.run_renderer(
+                intro_json_path=intro_path,
+                clip_index=selected_clip_index,
+                edited_clip_path=intro_source_path,
+                captioned_preview_path=captioned_preview_path,
+                caption_path=caption_path,
+            )
+            if not rendered:
+                raise RuntimeError("Intro renderer çıktı döndürmedi.")
+            final_preview_path = _activate_final_preview(rendered[0])
+        except Exception as error:
+            raise ShortsPipelineError(
+                "Mandatory intro render başarısız; main-only fallback YASAK. "
+                f"Detay: {error}"
+            ) from error
 
     if not _valid_file(final_preview_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Final base preview oluşmadı.")
-
-    # Structural contract: final base must be longer than the EFFECTIVE main
-    # actually used by intro_renderer, proving a real cold-open was prepended.
-    #
-    # V7.1 can trim a long dead lead before the first caption. Comparing final
-    # duration against the ORIGINAL untrimmed captioned main creates a false
-    # "main-only" failure even when the intro is really present.
-    #
-    # Reuse intro_renderer's exact restart calculation here. If anything is
-    # uncertain, fall back to restart=0.0 so the guard remains strict/safe.
-    main_duration_check = _probe_video_duration(captioned_preview_path)
-    final_duration_check = _probe_video_duration(final_preview_path)
-
-    main_restart_check = 0.0
-    if main_duration_check > 0.0:
-        try:
-            main_restart_check, _ = intro_renderer.calculate_main_restart_seconds(
-                caption_path=caption_path,
-                main_duration=main_duration_check,
-            )
-        except Exception:
-            main_restart_check = 0.0
-
-    effective_main_duration_check = max(
-        0.0,
-        main_duration_check - main_restart_check,
-    )
-
-    minimum_intro_delta = max(0.20, min(0.45, teaser_duration * 0.35))
-
-    if (
-        effective_main_duration_check > 0.0
-        and final_duration_check > 0.0
-        and final_duration_check
-        < effective_main_duration_check + minimum_intro_delta
-    ):
-        raise ShortsPipelineError(
-            "Mandatory intro structural guard: final video main-only gorunuyor "
-            f"(main_raw={main_duration_check:.3f}s, "
-            f"main_restart={main_restart_check:.3f}s, "
-            f"main_effective={effective_main_duration_check:.3f}s, "
-            f"final={final_duration_check:.3f}s). "
-            "Introsuz cikti yayinlanmadi."
-        )
+    final_timeline_doc = intro_renderer.load_final_timeline(final_preview_path)
+    if final_timeline_doc is None:
+        raise ShortsPipelineError("Final timeline belgesi yok; cold open ve restart doğrulanamaz.")
+    # Structural contract: a real cold open was prepended (the renderer already
+    # verified the composed duration against intro + main to within 2 frames).
+    if float((final_timeline_doc.get("intro") or {}).get("duration", 0.0) or 0.0) < intro_bounds.MIN_INTRO_S - 0.05:
+        raise ShortsPipelineError("Mandatory intro structural guard: cold open eksik; introsuz çıktı yayınlanmaz.")
 
     if pro_prep_ref is not None and pro_prep_ref.intro_timeline is not None:
         final_preview_path = _verify_pro_edit_intro(
@@ -4145,7 +3910,7 @@ def run_pipeline(
     _stage_done(final_preview_path)
     book.record(
         "intro_final_base",
-        "done" if intro_recommended else "fallback",
+        "done",
         intro_render_sig,
         path=final_preview_path,
         elapsed=time.perf_counter() - started,
@@ -4434,6 +4199,8 @@ def run_pipeline(
                 rendered = meme_renderer.render_memes(
                     discovery_json_path=meme_discovery_path,
                     clip_index=selected_clip_index,
+                    base_video_path=final_preview_path,
+                    forbidden_bands=_final_caption_bands(v6_burned_ass),
                 )
                 if not rendered:
                     raise RuntimeError("Meme renderer çıktı döndürmedi.")
@@ -4471,50 +4238,167 @@ def run_pipeline(
         temp_candidates.append(final_source)
 
     # --------------------------------------------------------
-    # 15. PUBLISH
+    # 15. FINAL QC -> (one bounded repair) -> PUBLISH or REJECT
     # --------------------------------------------------------
+    # Nothing reaches vod_output/final before the RENDERED candidate passed
+    # deterministic QC and the gate. The reviewer can trigger at most one
+    # deterministic repair round; the repaired candidate is re-checked by QC
+    # (never re-reviewed in a loop).
 
-    started = _stage_start(15, "Publish final short")
-    published_path = _publish_final(final_source, video_path)
+    started = _stage_start(15, "Final QC + publish")
+    labels = _verified_names(name_lock_profile, None, ())
+    qc_common = dict(
+        intro_source=intro_source_path,
+        burned_ass=v6_burned_ass,
+        truth_path=caption_truth_path,
+        protected_paced=[tuple(r) for r in (final_timeline_doc.get("restart") or {}).get("protected_paced") or []],
+        display_labels=labels,
+    )
 
+    def _effect_windows(candidate: Path) -> list[tuple[float, float]]:
+        if candidate == final_preview_path:
+            return []
+        try:
+            report = _load_json(meme_renderer.get_report_path(timeline_data, selected_clip_index))
+        except Exception:
+            return []
+        event = report.get("event") if isinstance(report.get("event"), dict) else None
+        if not event:
+            return []
+        start = float(event.get("start", 0.0))
+        return [(start, start + float(event.get("duration", 0.0)))]
+
+    def _evaluate(candidate: Path, main_render: Path, doc: dict[str, Any], *, review: bool
+                  ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        context = final_qc.QcContext(candidate=candidate, timeline_doc=doc, main_render=main_render,
+                                     effect_windows=_effect_windows(candidate), **qc_common)
+        rows = final_qc.run_final_qc(context)
+        for row in rows:
+            mark = "✅" if row["status"] == "pass" else ("⚠️" if row["status"] == "warn" else "❌")
+            print(f"   {mark} {row['check']}: {row['detail']}")
+        if not review or any(row["status"] == "fail" for row in rows):
+            return rows, None
+        beats = [float(b) for b in ((doc.get("intro") or {}).get("peak") or {}).values() if b is not None]
+        beats += [float(r[0]) for r in qc_common["protected_paced"]]
+        result = final_review.review_final(final_review.ReviewInput(
+            candidate=candidate, intro_source=intro_source_path, timeline_doc=doc, headline=headline_text,
+            transcript=_truth_text(caption_truth_path), story_beats=beats,
+            effect_windows=_effect_windows(candidate)))
+        print(f"   🧐 final review: {result.status}" + (f" — {result.summary}" if result.summary else "")
+              + (f" ({result.reason})" if result.reason else ""))
+        return rows, result.to_dict()
+
+    candidate = final_source
+    composed_base = final_preview_path
+    main_render_used = captioned_preview_path
+    candidate_doc = final_timeline_doc
+    qc_rows, review_doc = _evaluate(candidate, main_render_used, candidate_doc, review=True)
+
+    repairs: list[str] = []
+    failed_checks = {row["check"] for row in qc_rows if row["status"] == "fail"}
+    if candidate != final_preview_path and failed_checks & {"effects_clear", "main_matches_render", "main_av_sync"}:
+        repairs.append("drop_effects")
+    if "intro_headline" in failed_checks and headline_text:
+        repairs.append("drop_headline")
+    for repair in (review_doc or {}).get("repairs", []) or []:
+        if repair not in repairs:
+            repairs.append(repair)
+    if repairs:
+        print(f"\n🛠️ Bounded repair (tek tur): {', '.join(repairs)}")
+        try:
+            if "static_camera" in repairs and pro_prep_ref is not None and pro_prep_ref.ready:
+                static_path = captioned_preview_path.with_name(captioned_preview_path.stem + "_static"
+                                                               + captioned_preview_path.suffix)
+                main_render_used = pro_edit_pkg.stage.render_static_camera(pro_prep_ref, output_path=static_path)
+                temp_candidates.append(main_render_used)
+                v6_run.fallback("camera_direction", "final review: subject crop -> static camera repair",
+                                "static_camera_repair")
+                v6_main_proof = {"status": "no_camera_ops", "reason": "static camera repair", "samples": []}
+            if "drop_headline" in repairs or "static_camera" in repairs:
+                if "drop_headline" in repairs:
+                    _write_fallback_intro(intro_path, teaser_path, timeline_path, transcript_path, timeline_data,
+                                          selected_clip_index, "bounded repair: headline removed")
+                    intro_record = _package_clip(intro_path, "intros", selected_clip_index)
+                    headline_text = ""
+                rendered = intro_renderer.run_renderer(
+                    intro_json_path=intro_path, clip_index=selected_clip_index,
+                    edited_clip_path=intro_source_path, captioned_preview_path=main_render_used,
+                    caption_path=caption_path)
+                final_preview_path = _activate_final_preview(rendered[0])
+                candidate_doc = intro_renderer.load_final_timeline(final_preview_path) or candidate_doc
+                candidate = final_preview_path
+                if "drop_effects" not in repairs and final_source != composed_base:
+                    candidate = Path(meme_renderer.render_memes(
+                        discovery_json_path=meme_discovery_path, clip_index=selected_clip_index,
+                        base_video_path=final_preview_path,
+                        forbidden_bands=_final_caption_bands(v6_burned_ass))[0]).resolve()
+            elif "drop_effects" in repairs:
+                candidate = final_preview_path
+            if "drop_effects" in repairs:
+                selected_meme_count = 0
+                candidate = final_preview_path
+            qc_rows, _ = _evaluate(candidate, main_render_used, candidate_doc, review=False)
+            if review_doc is not None:
+                review_doc = {**review_doc, "applied_repairs": list(repairs)}
+        except Exception as error:
+            book.warn(f"Bounded repair başarısız: {type(error).__name__}: {error}")
+            qc_rows = [*qc_rows, final_qc._check("bounded_repair", "fail",
+                                                 f"{', '.join(repairs)} failed: {type(error).__name__}: {error}")]
+
+    v6_summary = _finish_v6(
+        v6_mod=v6_mod,
+        run=v6_run,
+        pro_edit_pkg=pro_edit_pkg,
+        prep=pro_prep_ref,
+        book=book,
+        state=state,
+        published_path=candidate,
+        main_render=main_render_used,
+        main_proof=v6_main_proof,
+        intro_source=intro_source_path if intro_source_path != edited_clip_path else None,
+        intro_proof=v6_intro_proof,
+        burned_ass=v6_burned_ass,
+        render_status=v6_render_status,
+        profile_path=name_lock_profile,
+        truth_path=caption_truth_path,
+        artifact_dir=VOD_OUTPUT_DIR / "pro_edit" / _safe_name(video_path.stem),
+        clip_index=selected_clip_index,
+        qc_rows=qc_rows,
+        review=review_doc,
+    )
+    gate = dict(v6_run.gate)
+    state["final_qc"] = {"checks": qc_rows, "review": review_doc, "repairs": repairs}
+    publish_sig = _stage_signature("publish", inputs=[candidate], options={"gate": gate.get("status")})
+    if gate.get("status") == v6_runtime.GATE_FAILED:
+        rejected = _reject_candidate(candidate, video_path, gate, state)
+        book.record("publish", "failed", None, path=rejected, note="final QC rejected the candidate",
+                    elapsed=time.perf_counter() - started)
+        state["run_status"] = "rejected"
+        state["publish_status"] = "rejected"
+        book.save()
+        failed_names = ", ".join(gate.get("failed") or [])
+        raise ShortsPipelineError(
+            "Final QC short'u reddetti; YAYINLANMADI. Başarısız kontroller: " + failed_names
+            + f"\nİnceleme kopyası: {rejected}\nRapor: {rejected.with_suffix('.qc.json')}"
+        )
+
+    published_path = _publish_final(candidate, video_path)
     if not _valid_file(published_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Published final short oluşmadı.")
-
+    _write_json_atomic(published_path.with_suffix(".qc.json"),
+                       {"status": gate.get("status"), "gate": gate, "review": review_doc, "repairs": repairs,
+                        "source": str(video_path), "published": str(published_path), "at": _now()})
+    publish_status = "published" if gate.get("status") == v6_runtime.GATE_PASSED else "published_degraded"
+    state["publish_status"] = publish_status
     _stage_done(published_path)
-    publish_sig = _stage_signature(
-        "publish",
-        inputs=[final_source],
-        options={"name": published_path.name},
-    )
     book.record(
         "publish",
         "done",
         publish_sig,
         path=published_path,
+        note=publish_status,
         elapsed=time.perf_counter() - started,
     )
-
-    v6_summary: dict[str, Any] | None = None
-    if v6_run is not None:
-        v6_summary = _finish_v6(
-            v6_mod=v6_mod,
-            run=v6_run,
-            pro_edit_pkg=pro_edit_pkg,
-            prep=pro_prep_ref,
-            book=book,
-            state=state,
-            published_path=published_path,
-            main_render=captioned_preview_path,
-            main_proof=v6_main_proof,
-            intro_source=intro_source_path if intro_source_path != edited_clip_path else None,
-            intro_proof=v6_intro_proof,
-            burned_ass=v6_burned_ass,
-            render_status=v6_render_status,
-            profile_path=name_lock_profile,
-            truth_path=caption_truth_path,
-            artifact_dir=VOD_OUTPUT_DIR / "pro_edit" / _safe_name(video_path.stem),
-            clip_index=selected_clip_index,
-        )
 
     run_seconds = time.perf_counter() - run_started
 
@@ -4589,6 +4473,8 @@ def run_pipeline(
         "stats": summary_stats,
         "profile": profile,
         "fast_resume": False,
+        "status": state.get("publish_status", "published"),
+        "final_qc": state.get("final_qc"),
     }
     if isinstance(state.get("pro_edit"), dict):
         result["pro_edit"] = dict(state["pro_edit"])
@@ -4597,7 +4483,10 @@ def run_pipeline(
 
     print()
     print("╔════════════════════════════════════════════════════════════╗")
-    print("║                     SHORT HAZIR ✅                        ║")
+    if state.get("publish_status") == "published_degraded":
+        print("║          SHORT HAZIR ⚠️  (QC geçti, DEGRADED uyarılarla)    ║")
+    else:
+        print("║                     SHORT HAZIR ✅                        ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print(f"🏆 {selected_title}")
     print(f"⭐ {selected_score:.1f}/10")
@@ -4630,7 +4519,10 @@ def run_pipeline(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Bir video/VOD ver, MIMIR tüm Shorts pipeline'ını çalıştırsın."
+        description=(
+            "Bir video/VOD ver, MIMIR tek komutla doğrulanmış bir Short üretsin: hikaye seçimi, "
+            "kilitli altyazı doğruluğu, cold open, kamera, efektler ve render edilmiş MP4 üzerinde final QC."
+        )
     )
     parser.add_argument(
         "video",
@@ -4646,7 +4538,15 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Cache kullanmadan ana pipeline'ı yeniden çalıştır.",
+        help="Cache kullanmadan tüm pipeline'ı yeniden çalıştır.",
+    )
+    parser.add_argument(
+        "--rerender",
+        "--force-v6",
+        dest="rerender",
+        action="store_true",
+        help="Yalnız sunum/render/QC/publish aşamalarını yeniden çalıştır; transkripsiyon, hikaye, "
+             "caption ASR ve diğer ücretli upstream cache'ler korunur.",
     )
     parser.add_argument(
         "--no-memes",
@@ -4669,34 +4569,6 @@ def main() -> None:
         help="Başarılı final sonrası ağır ara medya dosyalarını silme.",
     )
     parser.add_argument(
-        "--pro-edit",
-        action="store_true",
-        help="Pro Edit sunum katmanını bu run için aç (MIMIR_PRO_EDIT=1 ile aynı).",
-    )
-    parser.add_argument(
-        "--no-pro-edit",
-        action="store_true",
-        help="MIMIR_PRO_EDIT=1 olsa bile Pro Edit'i bu run için kapat.",
-    )
-    parser.add_argument(
-        "--v6",
-        action="store_true",
-        help="MIMIR V6'yı bu run için aç: Caption Truth V6 + Pro Edit V6 kamera + piksel kanıtı + final kalite kapısı "
-             "(MIMIR_V6=1 ile aynı; Pro Edit'i de açar).",
-    )
-    parser.add_argument(
-        "--no-v6",
-        action="store_true",
-        help="MIMIR_V6=1 olsa bile V6'yı bu run için kapat.",
-    )
-    parser.add_argument(
-        "--force-v6",
-        action="store_true",
-        help="V6'yı açar ve yalnız V6'ya bağlı aşamaları yeniden çalıştırır (caption truth, Pro Edit bağlamı/plan/"
-             "sunum, render, intro render, publish). Transkripsiyon, klip keşfi, hikaye, caption ASR ve diğer "
-             "upstream cache'ler korunur.",
-    )
-    parser.add_argument(
         "--terra-visual",
         action="store_true",
         help="Gemini'yi tamamen bypass et; tüm görsel analizleri Terra frame fallback ile yap.",
@@ -4711,14 +4583,6 @@ def main() -> None:
 
     if args.no_video_brain and args.video_brain:
         parser.error("--video-brain ve --no-video-brain birlikte kullanılamaz.")
-    if args.pro_edit and args.no_pro_edit:
-        parser.error("--pro-edit ve --no-pro-edit birlikte kullanılamaz.")
-    if args.no_v6 and (args.v6 or args.force_v6):
-        parser.error("--no-v6, --v6/--force-v6 ile birlikte kullanılamaz.")
-    if (args.v6 or args.force_v6) and args.no_pro_edit:
-        parser.error("V6 Pro Edit sunum katmanını kullanır; --no-pro-edit ile birlikte kullanılamaz.")
-    requested_pro_edit: bool | None = True if args.pro_edit else False if args.no_pro_edit else None
-    requested_v6: bool | None = True if (args.v6 or args.force_v6) else False if args.no_v6 else None
 
     requested_vb: bool | None
     if args.video_brain:
@@ -4745,35 +4609,23 @@ def main() -> None:
 
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
+    kwargs = dict(
+        video_path=args.video,
+        creator_name=args.creator,
+        force=args.force,
+        clip_index=args.clip,
+        enable_memes=not args.no_memes,
+        enable_video_brain=requested_vb,
+        keep_temp=args.keep_temp,
+        rerender=args.rerender,
+    )
 
     try:
         if args.verbose:
-            result = run_pipeline(
-                video_path=args.video,
-                creator_name=args.creator,
-                force=args.force,
-                clip_index=args.clip,
-                enable_memes=not args.no_memes,
-                enable_video_brain=requested_vb,
-                keep_temp=args.keep_temp,
-                enable_pro_edit=requested_pro_edit,
-                enable_v6=requested_v6,
-                force_v6=args.force_v6,
-            )
+            result = run_pipeline(**kwargs)
         else:
             with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
-                result = run_pipeline(
-                    video_path=args.video,
-                    creator_name=args.creator,
-                    force=args.force,
-                    clip_index=args.clip,
-                    enable_memes=not args.no_memes,
-                    enable_video_brain=requested_vb,
-                    keep_temp=args.keep_temp,
-                    enable_pro_edit=requested_pro_edit,
-                    enable_v6=requested_v6,
-                    force_v6=args.force_v6,
-                )
+                result = run_pipeline(**kwargs)
     except NoStrongClipError as error:
         print()
         print("❌ Güçlü bir Short bulunamadı.")
@@ -4781,12 +4633,14 @@ def main() -> None:
         raise SystemExit(2)
     except Exception as error:
         print()
-        print("❌ MIMIR işlemi tamamlayamadı.")
+        print("❌ MIMIR işlemi tamamlayamadı (hiçbir şey yayınlanmadı).")
         print(f"   {error}")
         print("   Daha fazla detay için aynı komutu --verbose ile çalıştır.")
         raise SystemExit(1)
 
     _print_friendly_result(result)
+    if result.get("status") == "published_degraded":
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":

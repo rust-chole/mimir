@@ -167,28 +167,10 @@ else:
     except Exception as error:
         errors.append(f"V7 verified-name orthography regression failed: {error}")
 
-    # Evidence-backed streamer slang is orthographic only: no evidence => no rewrite.
-    try:
-        candidate_rows = [
-            {"phrase": tuple("Of course Damn you look good shorty".split()), "votes": 3},
-            {"phrase": tuple("Damn you look good shawty".split()), "votes": 1},
-        ]
-        resolved, slang_meta = speaker_caption_support._streamer_slang_evidence_resolution(
-            current_tokens="Of course Damn you look good shorty.".split(),
-            candidate_rows=candidate_rows,
-            context_text="Damn you look good shorty",
-        )
-        if not resolved or resolved[-1].casefold() != "shawty.":
-            errors.append("evidence-backed shorty/shawty spelling resolver failed")
-        unchanged, _ = speaker_caption_support._streamer_slang_evidence_resolution(
-            current_tokens=["shorty."],
-            candidate_rows=[{"phrase": ("shorty.",), "votes": 5}],
-            context_text="you look good shorty",
-        )
-        if unchanged is not None:
-            errors.append("slang resolver rewrote wording without independent evidence")
-    except Exception as error:
-        errors.append(f"streamer slang regression test failed: {error}")
+    # No phrase-specific spelling rules: wording changes only through the strict
+    # independent acoustic micro-vote, never through a per-word alias table.
+    if hasattr(speaker_caption_support, "_streamer_slang_evidence_resolution"):
+        errors.append("phrase-specific caption spelling resolver is back")
 
     # Exact-PCM clock guard: a proven late isolated phrase may move backward,
     # while a correctly timed earlier anchor remains byte-for-byte untouched.
@@ -557,25 +539,35 @@ else:
     except Exception as error:
         errors.append(f"final-clock fail-closed regression failed: {error}")
 
-    # Intro policy contract: editorial strength alone cannot force 2.35s.
+    # Intro policy contract: the cold-open length comes from the EVENT (onset,
+    # decay, phrases, shots), never from a score bucket or a fixed duration.
     try:
-        weak = teaser_analyzer._adaptive_teaser_minimum({"combined_score": 0.40})[0]
-        moderate = teaser_analyzer._adaptive_teaser_minimum({"combined_score": 0.70})[0]
-        sustained = teaser_analyzer._adaptive_teaser_minimum({
-            "combined_score": 1.0, "audio_score": 0.95, "visual_score": 0.95,
-            "multimodal": True, "start": 8.17, "end": 10.48,
-        })[0]
-        compact = teaser_analyzer._adaptive_teaser_minimum({
-            "combined_score": 0.95, "audio_score": 0.90, "visual_score": 0.88,
-            "multimodal": True, "start": 4.0, "end": 4.8,
-        })[0]
-        if (weak, moderate, sustained, compact) != (3.20, 2.85, 2.85, 2.35):
-            errors.append(f"adaptive intro minimum regression: {(weak, moderate, sustained, compact)}")
+        from ai.editor import intro_bounds
+
+        def env(loud):
+            levels = [-50.0] * 1000
+            for start, end, level in loud:
+                for index in range(int(start / 0.02), int(end / 0.02)):
+                    levels[index] = level
+            return intro_bounds.Envelope(tuple(levels))
+
+        tiny = intro_bounds.compute_intro_bounds(intro_bounds.EventEvidence(10.0, 10.3), clip_duration=20.0,
+                                                 envelope=env([(10.0, 10.35, -8.0)]))
+        reaction = intro_bounds.compute_intro_bounds(intro_bounds.EventEvidence(10.0, 10.3), clip_duration=20.0,
+                                                     envelope=env([(10.0, 10.4, -8.0), (10.5, 12.6, -12.0)]))
+        if not (tiny.duration < reaction.duration and reaction.end >= 12.6):
+            errors.append(f"intro bounds ignore the event shape: tiny={tiny.duration}, reaction={reaction.to_dict()}")
+        if "_adaptive_teaser_minimum" in dir(teaser_analyzer):
+            errors.append("score-bucket intro minimum is back")
+        schema = teaser_analyzer.TEASER_SCHEMA
+        if sorted(schema["required"]) != sorted(schema["properties"]):
+            errors.append("teaser strict schema: every property must be required")
     except Exception as error:
         errors.append(f"intro policy test failed: {error}")
 
-# Pro Edit (V1-V5): feature flag default OFF, subsystem imports, unit + caption + render suites.
-# The ~1 min end-to-end run_pipeline suite runs only with MIMIR_VERIFY_E2E=1.
+# Single production path: Pro Edit presentation + caption truth + rendered-MP4
+# QC + final gate always run. Unit / caption / render / QC suites run here;
+# the multi-minute end-to-end run_pipeline suites run only with MIMIR_VERIFY_E2E=1.
 pro_edit_summary = "not run"
 try:
     import contextlib
@@ -586,32 +578,16 @@ try:
     from ai import shorts_pipeline
     from ai.editor import pro_edit
 
-    if "enable_pro_edit" not in inspect.signature(shorts_pipeline.run_pipeline).parameters:
-        errors.append("run_pipeline has no enable_pro_edit switch")
-    saved_flag = os.environ.pop("MIMIR_PRO_EDIT", None)
-    try:
-        if shorts_pipeline._load_pro_edit(None) != (None, None, None):
-            errors.append("Pro Edit is not OFF by default")
-    finally:
-        if saved_flag is not None:
-            os.environ["MIMIR_PRO_EDIT"] = saved_flag
-    if pro_edit.config.load_config(environ={}).enabled:
-        errors.append("Pro Edit config enabled without MIMIR_PRO_EDIT")
-    # MIMIR V6: default OFF, explicit CLI/API switches, V6 flag only inside Pro Edit when requested.
-    for keyword in ("enable_v6", "force_v6"):
-        if keyword not in inspect.signature(shorts_pipeline.run_pipeline).parameters:
+    parameters = inspect.signature(shorts_pipeline.run_pipeline).parameters
+    for keyword in ("rerender", "force_v6"):
+        if keyword not in parameters:
             errors.append(f"run_pipeline has no {keyword} switch")
-    saved_v6 = os.environ.pop("MIMIR_V6", None)
-    try:
-        if shorts_pipeline._v6_requested(None):
-            errors.append("MIMIR V6 is not OFF by default")
-        if pro_edit.config.load_config(override_enabled=True).v6:
-            errors.append("Pro Edit V6 direction enabled without MIMIR_V6")
-    finally:
-        if saved_v6 is not None:
-            os.environ["MIMIR_V6"] = saved_v6
-    if "v6" in pro_edit.config.load_config(override_enabled=True, environ={}).signature_payload():
-        errors.append("V6-off Pro Edit signature changed (would invalidate existing Pro Edit caches)")
+    for legacy in ("enable_pro_edit", "enable_v6"):
+        if legacy in parameters:
+            errors.append(f"run_pipeline still exposes the removed {legacy} switch (second path)")
+    package, config = shorts_pipeline._load_pro_edit()
+    if not (config.enabled and config.v6):
+        errors.append("production path does not run the verified presentation layer")
     for module in pro_edit.MODULES:
         if not getattr(module, "__file__", None):
             errors.append(f"Pro Edit module not importable: {module}")
@@ -622,7 +598,8 @@ try:
     suites = ["test_pro_edit_timeline", "test_pro_edit_validator", "test_pro_edit_presets", "test_pro_edit_protection",
               "test_pro_edit_planner", "test_pro_edit_filters", "test_pro_edit_captions", "test_pro_edit_captions_v4",
               "test_pro_edit_v5", "test_pro_edit_render", "test_pro_edit_current_root",
-              "test_v6_caption_truth", "test_v6_camera"]
+              "test_v6_caption_truth", "test_v6_camera", "test_intro_bounds", "test_final_qc",
+              "test_production_contracts"]
     if os.environ.get("MIMIR_VERIFY_E2E", "").strip() == "1":
         suites.extend(["test_pro_edit_pipeline", "test_v6_pipeline"])
     stream = io.StringIO()
@@ -632,9 +609,9 @@ try:
     pro_edit_summary = (f"{outcome.testsRun} run, {len(outcome.failures)} failed, {len(outcome.errors)} errors, "
                         f"{len(outcome.skipped)} skipped")
     if not outcome.wasSuccessful():
-        errors.append(f"Pro Edit tests failed ({pro_edit_summary}):\n{stream.getvalue()[-4000:]}")
+        errors.append(f"test suites failed ({pro_edit_summary}):\n{stream.getvalue()[-4000:]}")
 except Exception as error:
-    errors.append(f"Pro Edit verification failed: {type(error).__name__}: {error}")
+    errors.append(f"production path verification failed: {type(error).__name__}: {error}")
 
 if shutil.which("ffmpeg") is None:
     errors.append("ffmpeg not found on PATH")
@@ -652,7 +629,7 @@ print(" - compile/import contracts: OK")
 print(" - legacy calibration/identity-word engines: absent")
 print(" - GPT wording / Whisper anchor invariants: OK")
 print(" - local exact-PCM caption clock outlier guard: OK")
-print(" - evidence-backed streamer slang spelling: OK")
+print(" - no phrase-specific caption spelling rules: OK")
 print(" - caption display readability without clock mutation: OK")
 print(" - speaker boundary QA / retry gate: OK")
 print(" - Gold V7 speaker word/time preservation: OK")
@@ -662,5 +639,5 @@ print(" - V6 short human reference stitch (2s contract): OK")
 print(" - V6 risky phrase two-view identity consensus: OK")
 print(" - V6 one-phrase-one-identity final fail-closed guard: OK")
 print(" - V7 verified direct-address participant-name orthography: OK")
-print(" - intro exact-path + adaptive-duration contract: OK")
-print(f" - Pro Edit V5 + MIMIR V6 (default OFF) contracts + tests: OK ({pro_edit_summary})")
+print(" - intro exact-path + evidence-derived cold-open bounds: OK")
+print(f" - single production path + rendered-MP4 QC contracts + tests: OK ({pro_edit_summary})")

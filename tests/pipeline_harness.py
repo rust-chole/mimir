@@ -6,11 +6,15 @@ synthetic source video. Only paid/interactive model stages are replaced by
 deterministic fakes that write MIMIR-shaped artifacts.
 
 Usage (always against a disposable COPY of the repo):
-    python pipeline_harness.py --root <repo copy> --video <mp4> --mode off|on|on_broken|on_planner_down|on_stage_crash|v6|v6_force --out result.json
+    python pipeline_harness.py --root <repo copy> --video <mp4> --mode <mode> --out result.json
 
-``v6`` runs MIMIR V6 (caption truth + evidence director + pixel proof + final
-gate); ``v6_force`` then re-runs the same source WITHOUT --force but with
---force-v6, so the summary shows which stages were recomputed.
+Modes (there is ONE production path; modes only inject faults):
+    run            full run (rules planner, memes off, fake no-finding reviewer)
+    rerender       second run of the same source with --rerender (upstream caches kept)
+    no_headline    the headline judge found no grounded line -> moving peak only
+    broken_render  Pro Edit main render fails -> baseline render -> QC gate must REJECT
+    stage_crash    Pro Edit preparation crashes -> baseline render -> QC gate must REJECT
+    planner_down   planner unavailable (static camera) -> published as DEGRADED at worst
 """
 from __future__ import annotations
 
@@ -107,18 +111,25 @@ def install_fakes(video: Path) -> None:
             "words": [{"word": w, "edited_start": s, "edited_end": e, "speaker_raw": "A", "speaker_role": "main",
                        "speaker_label": ""} for w, s, e in words]})
 
-    def analyze_teasers(timeline_path, transcript_path, clip_index, edited_video_path=None, video_report_path=None):
+    def analyze_teasers(timeline_path, transcript_path, clip_index, edited_video_path=None, video_report_path=None,
+                        caption_profile_path=None):
         return write(Path(teaser_analyzer.get_output_path(timeline_path)), {
             "version": 1, "inputs": {"timeline": str(timeline_path)},
             "teasers": [{"clip_index": clip_index, "recommended": True,
                          "edited": {"teaser_start": 13.2, "teaser_end": 14.8, "duration": 1.6}}]})
 
-    def analyze_intros(teaser_json_path, clip_index, manual_creator_name=None, video_report_path=None):
+    def analyze_intros(teaser_json_path, clip_index, manual_creator_name=None, video_report_path=None,
+                       verified_names=(), caption_text=""):
         teaser = json.loads(Path(teaser_json_path).read_text(encoding="utf-8"))
+        headline = "" if os.environ.get("HARNESS_NO_HEADLINE") == "1" else "HE SAID WORD TWELVE"
+        gate = {"accepted": True, "no_headline": not headline}
         return write(Path(intro_analyzer.get_output_path(teaser_json_path)), {
             "version": 1, "inputs": {"timeline": teaser["inputs"]["timeline"], "teaser": str(teaser_json_path)},
-            "intros": [{"clip_index": clip_index, "recommended": True, "score": 9.0, "title": "harness clip",
-                        "intro_text": "WAIT FOR IT", "quality_gate": {"accepted": True}}]})
+            "intros": [{"clip_index": clip_index, "recommended": True, "score": 9.0 if headline else 0.0,
+                        "title": "harness clip", "intro_text": headline, "quality_gate": gate}]})
+
+    def fake_reviewer():
+        return lambda prompt, frames: {"findings": [], "summary": f"harness reviewer saw {len(frames)} frames"}
 
     vod_processor.process_vod = process_vod
     clip_analyzer.create_clip_analysis = create_clip_analysis
@@ -129,14 +140,17 @@ def install_fakes(video: Path) -> None:
     speaker_caption_support.create_speaker_profile = create_speaker_profile
     teaser_analyzer.analyze_teasers = analyze_teasers
     intro_analyzer.analyze_intros = analyze_intros
+    from ai.editor import final_review
+
+    final_review.default_reviewer = fake_reviewer
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
-    parser.add_argument("--mode", required=True, choices=["baseline", "off", "on", "on_broken", "on_planner_down", "on_stage_crash",
-                                                                "on_captions_off", "on_caption_crash", "v6", "v6_force"])
+    parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
+                                                          "stage_crash", "planner_down"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -145,35 +159,23 @@ def main() -> int:
     for key in list(os.environ):
         if key.startswith("MIMIR_PRO_EDIT") or key in ("OPENAI_API_KEY", "MIMIR_V6", "MIMIR_CAPTION_ENTITIES"):
             os.environ.pop(key)
-    if args.mode in ("on", "v6", "v6_force"):
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
-    if args.mode == "on_captions_off":
-        # planner unavailable (no key) + caption presentation disabled
-        os.environ["MIMIR_PRO_EDIT_CAPTIONS"] = "0"
+    os.environ["MIMIR_PRO_EDIT_PLANNER"] = "static" if args.mode == "planner_down" else "rules"
+    if args.mode == "no_headline":
+        os.environ["HARNESS_NO_HEADLINE"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
     from ai import shorts_pipeline
 
-    if args.mode == "on_broken":
+    if args.mode == "broken_render":
         from ai.editor.pro_edit import stage
         from ai.editor.pro_edit.errors import EditRenderError
 
         def broken(**kwargs):
             raise EditRenderError("harness-injected render failure")
 
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
         stage.render_camera_captions = broken
 
-    if args.mode == "on_caption_crash":
-        from ai.editor.pro_edit import stage
-
-        def caption_crash(**kwargs):
-            raise RuntimeError("harness-injected caption presentation failure")
-
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
-        stage.build_presentation = caption_crash
-
-    if args.mode == "on_stage_crash":
+    if args.mode == "stage_crash":
         from ai.editor.pro_edit import stage
 
         def crash(request):
@@ -182,17 +184,29 @@ def main() -> int:
         stage.prepare_pro_edit = crash
 
     kwargs = dict(force=True, enable_memes=False, enable_video_brain=False, keep_temp=True)
-    if args.mode in ("v6", "v6_force"):
-        kwargs["enable_v6"] = True
-        if args.mode == "v6_force":
-            kwargs.update(force=False, force_v6=True)
-    elif args.mode != "baseline":
-        kwargs["enable_pro_edit"] = args.mode != "off"
-    result = shorts_pipeline.run_pipeline(video, **kwargs)
+    if args.mode == "rerender":
+        kwargs.update(force=False, rerender=True)
+    summary: dict = {"mode": args.mode}
+    try:
+        result = shorts_pipeline.run_pipeline(video, **kwargs)
+    except shorts_pipeline.ShortsPipelineError as error:
+        state_file = shorts_pipeline._state_path(video)
+        state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
+        summary.update({
+            "error": str(error), "run_status": state.get("run_status"),
+            "publish_status": state.get("publish_status"),
+            "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
+            "v6_state": state.get("v6"), "final_qc": state.get("final_qc"),
+            "published_exists": (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists(),
+            "rejected": sorted(p.name for p in shorts_pipeline.REJECTED_DIR.glob("*"))
+            if shorts_pipeline.REJECTED_DIR.exists() else [],
+        })
+        Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+        return 0
     final = Path(result["final_output"])
     state = json.loads(Path(result["state_file"]).read_text(encoding="utf-8"))
-    summary = {
-        "mode": args.mode,
+    summary.update({
+        "status": result.get("status"),
         "final_output": str(final),
         "final_md5": md5(final),
         "warnings": result.get("warnings", []),
@@ -200,12 +214,13 @@ def main() -> int:
         "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
         "pro_edit_artifacts": sorted(p.name for p in (root / "vod_output" / "pro_edit").rglob("*") if p.is_file())
         if (root / "vod_output" / "pro_edit").exists() else [],
-        "pro_edit_imported": "ai.editor.pro_edit" in sys.modules,
         "v6": result.get("v6"),
         "v6_state": state.get("v6"),
-        "v6_imported": "ai.editor.v6_runtime" in sys.modules or "ai.editor.caption_truth" in sys.modules,
-    }
-    Path(args.out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        "final_qc": state.get("final_qc"),
+        "final_timeline": json.loads(Path(state["stages"]["intro_final_base"]["path"]).with_name(
+            Path(state["stages"]["intro_final_base"]["path"]).stem + ".timeline.json").read_text(encoding="utf-8")),
+    })
+    Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return 0
 
 

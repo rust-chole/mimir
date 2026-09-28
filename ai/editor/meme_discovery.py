@@ -124,10 +124,10 @@ CATEGORY_HINTS: dict[str, tuple[str, ...]] = {
         "awkward", "cricket", "silence", "dead air", "stare",
     ),
     "hype": (
-        "lets go", "let's go", "hype", "scream", "celebration", "kai reaction",
+        "lets go", "let's go", "hype", "scream", "celebration", "hype reaction",
     ),
     "fear_shock": (
-        "jumpscare", "jump scare", "shock", "scream", "scared", "caseoh",
+        "jumpscare", "jump scare", "shock", "scream", "scared",
     ),
     "wholesome_ironic": (
         "aww so cute", "so cute", "cute", "wholesome", "aww",

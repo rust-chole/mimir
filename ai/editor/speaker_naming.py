@@ -558,7 +558,7 @@ def resolve_interactive_speaker_names(
     - one plausible speaker -> no question, plain captions
     - two/three plausible speakers -> ask, especially when automatic identity is uncertain
     - each entered name is verified on a DISJOINT held-out utterance when available
-    - partial identity is allowed (e.g. KAI known, second speaker unlabeled)
+    - partial identity is allowed (e.g. one name known, second speaker unlabeled)
     - human naming may become a biometric anchor for final known-speaker diarization
     - caption text/timestamps are never touched here
     """

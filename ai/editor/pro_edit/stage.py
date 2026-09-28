@@ -688,14 +688,16 @@ def prepare_pro_edit(request: ProEditRequest) -> ProEditPreparation:
         from ai.editor import intro_renderer
 
         restart, first_caption = intro_renderer.calculate_main_restart_seconds(
-            caption_path=request.caption_path, main_duration=media.duration_s)
+            caption_path=request.caption_path, main_duration=media.duration_s,
+            protected_ranges=intro_renderer.protected_edited_ranges(clip_timeline))
+        restart = intro_renderer.snap_to_frame(restart, media.fps.fps)
         output_size = base_window(media.width, media.height, config.output_profile)[2:]
         intro = None
         hook_band = None
         if request.teaser_record is not None:
             intro = build_intro_timeline(request.teaser_record, caption_path=request.caption_path,
                                          clean_duration=media.duration_s, main_duration=media.duration_s,
-                                         clip_map=clip_map)
+                                         clip_map=clip_map, clip_timeline=clip_timeline, fps=media.fps.fps)
             prep.intro_timeline = intro
             try:
                 hook_band = hook_text_band(request.intro_record, intro, width=output_size[0],
@@ -917,6 +919,32 @@ def render_with_fallback(
             failures.append(f"{label}: {type(error).__name__}: {str(error)[:1200]}")
     outcome.update(status="fallback", reason=" | ".join(failures) or "no render attempt")
     return Path(baseline())
+
+
+def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> Path:
+    """Bounded repair: the same verified caption presentation with NO camera move.
+
+    A stable wide shot is always a valid edit; this is what the final reviewer's
+    'cropped subject' repair renders (once). Captions stay the frozen-truth
+    presentation; only the camera path becomes identity."""
+    from ai.editor.pro_edit.camera import CameraPath
+
+    if prep.resolved is None or prep.media is None or prep.caps is None or prep.artifacts is None:
+        raise ProEditError("static repair needs a prepared Pro Edit render")
+    ass = prep.presentation_ass if prep.presentation_ass is not None else prep.caption_path
+    if ass is None:
+        raise ProEditError("static repair has no caption file")
+    static = dataclasses.replace(prep.resolved, ops=(), path=CameraPath(prep.resolved.frame_count, ()),
+                                 recommendations=())
+    verify_truth(prep, "static repair")
+    result = render_camera_captions(
+        edited_clip=prep.media.path, caption_file=Path(ass), output_path=Path(output_path), resolved=static,
+        caps=prep.caps, source_media=prep.media, script_path=prep.artifacts.filter_script.with_name(
+            prep.artifacts.filter_script.stem + "_static" + prep.artifacts.filter_script.suffix),
+        interpolation=prep.interpolation, keep_failed=prep.keep_failed,
+        fonts_dir=prep.caption_fonts_dir if prep.presentation_ass is not None else None)
+    verify_truth(prep, "static repair render")
+    return result.output_path
 
 
 def render_intro_source(prep: ProEditPreparation, *, clean_clip: Path, outcome: dict[str, Any]) -> Path:

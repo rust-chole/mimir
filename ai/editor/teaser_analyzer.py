@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ai.openai_client import client
-from ai.editor import intro_peak_support
+from ai.editor import intro_bounds, intro_peak_support
 from ai.model_config import (
     TEASER_MODEL,
     TEASER_REASONING_EFFORT,
@@ -35,29 +35,19 @@ TEASER_DIR = (
 # ============================================================
 
 TEASER_ANALYZER_VERSION = 1
-TEASER_ANALYZER_REVISION = 6
+TEASER_ANALYZER_REVISION = 7
 
-# Çok kısa tek kelimelik saçma teaserları engellemek için.
-MIN_TEASER_DURATION = 0.85
-PREFERRED_MIN_TEASER_DURATION = 2.60
-WEAK_PEAK_MIN_TEASER_DURATION = 3.20
-MODERATE_PEAK_MIN_TEASER_DURATION = 2.85
-STRONG_PEAK_MIN_TEASER_DURATION = 2.35
-WEAK_PEAK_THRESHOLD = 0.62
-STRONG_PEAK_THRESHOLD = 0.78
-
-# AI yanlışlıkla uzun bir konuşmayı teaser yapmasın.
-# Bu sabit hedef süre DEĞİL, sadece güvenlik limiti.
-MAX_TEASER_DURATION = 6.50
+# Generic safety bounds only. The cold-open length itself is measured from the
+# event (ai/editor/intro_bounds.py): onset, reaction decay, whole phrases and
+# shot boundaries. There is no per-strength or per-type duration.
+MIN_TEASER_DURATION = intro_bounds.MIN_INTRO_S
+MAX_TEASER_DURATION = intro_bounds.MAX_INTRO_S
 
 # Güçlü sayılması için.
 RECOMMENDED_SCORE = 7.0
 
-# Teaser kesilirken konuşmanın çok sert başlamaması için
-# mümkün olan sessizlikten küçük doğal handle alıyoruz.
-MAX_LEAD_PADDING = 0.35
-
-MAX_TAIL_PADDING = 0.65
+# A spoken phrase and a nearby multimodal peak are one event when this close.
+PHRASE_PEAK_UNION_GAP = 1.10
 
 
 # ============================================================
@@ -117,14 +107,6 @@ TEASER_SCHEMA = {
             "minimum": -1
         },
 
-        "teaser_start": {
-            "type": "number"
-        },
-
-        "teaser_end": {
-            "type": "number"
-        },
-
         "reason": {
             "type": "string"
         },
@@ -151,8 +133,8 @@ TEASER_SCHEMA = {
         "selection_mode",
         "peak_id",
         "peak_alignment_score",
-        "teaser_start",
-        "teaser_end",
+        "start_word_id",
+        "end_word_id",
         "reason",
         "viewer_question",
         "spoiler_risk",
@@ -190,37 +172,26 @@ This repetition is intentional.
 YOUR MAIN JOB
 ============================================================
 
-Select the strongest PEAK EVENT from the provided MULTIMODAL PEAK CANDIDATES.
+Decide WHICH real moment is the cold open. You are NOT writing a hook sentence.
 
-You are NOT writing a hook sentence.
+The cold open is either:
 
-You are selecting a REAL PEAK WINDOW from the provided candidates.
+- a MULTIMODAL PEAK from the provided candidates (selection_mode="peak_window",
+  peak_id = that candidate), optionally together with the exact spoken words
+  that belong to it (start_word_id/end_word_id, else -1), or
+- a SPOKEN LINE (selection_mode="spoken_phrase", start_word_id..end_word_id
+  from AVAILABLE WORDS), optionally linked to the peak it belongs to (peak_id,
+  else -1).
 
-Each candidate has:
-  - peak_id
-  - core time range (start-end)
-  - recommended teaser window (teaser_start-teaser_end)
-  - combined_score (audio+visual alignment strength)
-  - audio_score, visual_score
-  - signals (event types like explosion, crash, reaction, reveal, etc.)
-  - visual_description
-  - nearby_text (words spoken in that window)
-
-Your selection MUST be one of the provided peak candidates.
-Choose the candidate with the strongest combined evidence.
-If a silent physical event is the strongest peak, select it.
-If a spoken reaction aligned with audio+visual is strongest, select it.
+Each peak candidate has: peak_id, core time range, the window MIMIR measured
+for it, combined/audio/visual scores, signals, visual_description and
+nearby_text. If a silent physical event is the strongest moment, select it. If
+a spoken reaction aligned with audio+visual evidence is strongest, select it.
 Do not select a weak spoken phrase just because it has "clean" words.
 
-Return:
-
-peak_id
-teaser_start
-teaser_end
-
-The software will calculate all timestamps itself.
-
-Never invent timestamps.
+You never return timestamps. MIMIR measures where the chosen event starts and
+finishes (sound onset, reaction decay, complete phrases, shot changes) and
+cuts the cold open from that evidence.
 
 
 ============================================================
@@ -344,10 +315,9 @@ when the real useful line is:
 Do NOT include unrelated dialogue before or after it just to make the
 teaser longer.
 
-There is no rigid fixed duration, but the cold open should usually have enough
-room to FEEL the reaction. Prefer roughly 2.2-4.8 seconds when the moment supports
-it. A shorter line may be extended to preserve the immediately adjacent scream,
-visible reaction, impact, or payoff beat. Do not pad with unrelated dead air.
+Do not think about duration. Choose the words that form the complete line;
+MIMIR keeps the immediately adjacent scream, visible reaction, impact or payoff
+beat that belongs to the same event and never pads with unrelated dead air.
 
 
 ============================================================
@@ -900,82 +870,6 @@ def get_peak_candidate(
             return item
 
     return None
-
-
-def expand_bounds_to_minimum(
-    start: float,
-    end: float,
-    *,
-    clip_duration: float,
-    minimum_duration: float = PREFERRED_MIN_TEASER_DURATION,
-    lead_fraction: float = 0.42,
-) -> tuple[float, float]:
-    start = clamp(start, 0.0, clip_duration)
-    end = clamp(end, start, clip_duration)
-    current = end - start
-
-    if current >= minimum_duration or clip_duration <= current:
-        return start, end
-
-    needed = min(minimum_duration, clip_duration) - current
-    # Weak peaks benefit from extra setup; strong peaks benefit from reaction tail.
-    # Caller chooses the balance. This never changes the selected peak itself.
-    lead_fraction = max(0.25, min(0.72, float(lead_fraction)))
-    lead = needed * lead_fraction
-    tail = needed - lead
-    start -= lead
-    end += tail
-
-    if start < 0.0:
-        end = min(clip_duration, end - start)
-        start = 0.0
-
-    if end > clip_duration:
-        start = max(0.0, start - (end - clip_duration))
-        end = clip_duration
-
-    return clamp(start, 0.0, clip_duration), clamp(end, 0.0, clip_duration)
-
-
-def _adaptive_teaser_minimum(selected_peak: dict[str, Any] | None) -> tuple[float, float, str]:
-    """Return (minimum_duration, lead_fraction, policy).
-
-    `combined_score` is evidence that a moment matters, NOT proof that it is
-    self-explanatory in 2.35 seconds. Compact mode is reserved for genuinely
-    short, jointly audio+visual peaks. Sustained reactions/payoffs receive more
-    context even when their editorial strength is 1.0.
-    """
-    strength = 0.0
-    audio_score = 0.0
-    visual_score = 0.0
-    peak_duration = 99.0
-    multimodal = False
-    if isinstance(selected_peak, dict):
-        try:
-            strength = float(selected_peak.get("combined_score", 0.0) or 0.0)
-            audio_score = float(selected_peak.get("audio_score", 0.0) or 0.0)
-            visual_score = float(selected_peak.get("visual_score", 0.0) or 0.0)
-            start = float(selected_peak.get("teaser_start", selected_peak.get("start", 0.0)) or 0.0)
-            end = float(selected_peak.get("teaser_end", selected_peak.get("end", start)) or start)
-            peak_duration = max(0.0, end - start)
-            multimodal = bool(selected_peak.get("multimodal", False))
-        except (TypeError, ValueError):
-            pass
-
-    if strength < WEAK_PEAK_THRESHOLD:
-        return WEAK_PEAK_MIN_TEASER_DURATION, 0.62, "weak_peak_more_setup"
-
-    truly_compact = (
-        strength >= STRONG_PEAK_THRESHOLD
-        and multimodal
-        and audio_score >= 0.72
-        and visual_score >= 0.72
-        and peak_duration <= 1.55
-    )
-    if truly_compact:
-        return STRONG_PEAK_MIN_TEASER_DURATION, 0.42, "compact_multimodal_spike"
-
-    return MODERATE_PEAK_MIN_TEASER_DURATION, 0.55, "contextual_peak_balanced_context"
 
 
 def words_overlapping_window(
@@ -1687,154 +1581,33 @@ def join_selected_words(
 
 
 # ============================================================
-# NATURAL PADDING
-# ============================================================
-
-def calculate_natural_bounds(
-    selected_words: list[dict[str, Any]],
-    available_words: list[dict[str, Any]],
-    clip_duration: float,
-) -> tuple[
-    float,
-    float,
-]:
-
-    first_word = selected_words[
-        0
-    ]
-
-    last_word = selected_words[
-        -1
-    ]
-
-    first_position = available_words.index(
-        first_word
-    )
-
-    last_position = available_words.index(
-        last_word
-    )
-
-    start = float(
-        first_word[
-            "edited_start"
-        ]
-    )
-
-    end = float(
-        last_word[
-            "edited_end"
-        ]
-    )
-
-    # --------------------------------------------------------
-    # LEAD-IN
-    # --------------------------------------------------------
-
-    if first_position > 0:
-
-        previous_word = available_words[
-            first_position - 1
-        ]
-
-        gap_before = (
-            float(
-                first_word[
-                    "edited_start"
-                ]
-            )
-            - float(
-                previous_word[
-                    "edited_end"
-                ]
-            )
-        )
-
-        # Sadece gerçekten var olan sessizlikten handle al.
-        if gap_before > 0:
-
-            start -= min(
-                MAX_LEAD_PADDING,
-                gap_before,
-            )
-
-    else:
-
-        start = max(
-            0.0,
-            start,
-        )
-
-    # --------------------------------------------------------
-    # TAIL
-    # --------------------------------------------------------
-
-    if (
-        last_position + 1
-        < len(
-            available_words
-        )
-    ):
-
-        next_word = available_words[
-            last_position + 1
-        ]
-
-        gap_after = (
-            float(
-                next_word[
-                    "edited_start"
-                ]
-            )
-            - float(
-                last_word[
-                    "edited_end"
-                ]
-            )
-        )
-
-        if gap_after > 0:
-
-            end += min(
-                MAX_TAIL_PADDING,
-                gap_after,
-            )
-
-    else:
-
-        end = min(
-            clip_duration,
-            end + MAX_TAIL_PADDING,
-        )
-
-    start = clamp(
-        start,
-        0.0,
-        clip_duration,
-    )
-
-    end = clamp(
-        end,
-        start,
-        clip_duration,
-    )
-
-    return (
-        start,
-        end,
-    )
-
-
-# ============================================================
 # BUILD FINAL RESULT
 # ============================================================
+
+def boundary_words_for(
+    available_words: list[dict[str, Any]],
+    caption_profile: dict[str, Any] | None,
+) -> list[intro_bounds.Word]:
+    """Word clock used for cold-open boundaries.
+
+    The final caption profile is measured on the exact paced-clip audio (the
+    same clock the captions use); the whole-VOD transcript mapped through cuts
+    is only the fallback when that profile is unavailable."""
+    words = intro_bounds.words_from_profile(caption_profile)
+    return words or intro_bounds.words_from_rows(available_words)
+
 
 def build_teaser_result(
     clip: dict[str, Any],
     available_words: list[dict[str, Any]],
     ai_result: dict[str, Any],
     peak_support: dict[str, Any] | None = None,
+    *,
+    boundary_words: list[intro_bounds.Word] | None = None,
+    envelope: intro_bounds.Envelope | None = None,
+    media_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    """Editor's choice (WHICH event) -> evidence-measured cold-open window."""
 
     selection_mode = str(
         ai_result.get("selection_mode", "spoken_phrase")
@@ -1863,107 +1636,64 @@ def build_teaser_result(
         )
 
     cut_ranges = normalize_cut_ranges(clip)
+
+    try:
+        start_word_id = int(ai_result.get("start_word_id", -1))
+        end_word_id = int(ai_result.get("end_word_id", -1))
+    except (TypeError, ValueError):
+        start_word_id = end_word_id = -1
     selected_words: list[dict[str, Any]] = []
-
-    if selection_mode == "peak_window":
-        if selected_peak is None:
-            # Safe fallback when the model refers to a missing peak.
-            selection_mode = "spoken_phrase"
-        else:
-            # Use AI-provided teaser_start/teaser_end if available (new peak-first schema)
-            # Otherwise fall back to the peak candidate's recommended window.
-            ai_teaser_start = ai_result.get("teaser_start")
-            ai_teaser_end = ai_result.get("teaser_end")
-            
-            if ai_teaser_start is not None and ai_teaser_end is not None:
-                teaser_edited_start = clamp(
-                    float(ai_teaser_start),
-                    0.0,
-                    clip_edited_duration,
-                )
-                teaser_edited_end = clamp(
-                    float(ai_teaser_end),
-                    teaser_edited_start,
-                    clip_edited_duration,
-                )
-            else:
-                # Fallback to peak candidate's recommended window
-                teaser_edited_start = clamp(
-                    float(selected_peak.get("teaser_start", selected_peak.get("start", 0.0))),
-                    0.0,
-                    clip_edited_duration,
-                )
-                teaser_edited_end = clamp(
-                    float(selected_peak.get("teaser_end", selected_peak.get("end", teaser_edited_start))),
-                    teaser_edited_start,
-                    clip_edited_duration,
-                )
-
-            # Find words in the teaser window for metadata
-            selected_words = words_overlapping_window(
-                available_words,
-                teaser_edited_start,
-                teaser_edited_end,
-            )
-
-
-    if selection_mode == "spoken_phrase":
-        try:
-            start_word_id = int(ai_result["start_word_id"])
-            end_word_id = int(ai_result["end_word_id"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise RuntimeError("AI word ID döndürmedi.") from error
-
-        if start_word_id < 0 or end_word_id < 0:
-            raise RuntimeError(
-                "spoken_phrase seçildi ama geçerli word ID verilmedi."
-            )
-
+    if start_word_id >= 0 and end_word_id >= 0:
         selected_words = get_selected_words(
             available_words=available_words,
             start_word_id=start_word_id,
             end_word_id=end_word_id,
         )
 
-        (
+    if selection_mode == "peak_window" and selected_peak is None:
+        # The model referred to a peak that does not exist: its words are the event.
+        selection_mode = "spoken_phrase"
+    if selection_mode == "spoken_phrase" and not selected_words:
+        raise RuntimeError("spoken_phrase seçildi ama geçerli word ID verilmedi.")
+
+    # ---- event core (WHAT happened), then evidence bounds (HOW LONG it lasts)
+    lead_in: float | None = None
+    if selection_mode == "peak_window":
+        core_start = float(selected_peak.get("start", 0.0))
+        core_end = float(selected_peak.get("end", core_start))
+        if selected_words:
+            speech_start = float(selected_words[0]["edited_start"])
+            speech_end = float(selected_words[-1]["edited_end"])
+            if speech_start < core_start:
+                lead_in = speech_start
+            core_end = max(core_end, min(speech_end, core_start + MAX_TEASER_DURATION))
+    else:
+        core_start = float(selected_words[0]["edited_start"])
+        core_end = float(selected_words[-1]["edited_end"])
+        if selected_peak is not None:
+            peak_start = float(selected_peak.get("start", 0.0))
+            peak_end = float(selected_peak.get("end", peak_start))
+            gap = max(0.0, peak_start - core_end, core_start - peak_end)
+            if gap <= PHRASE_PEAK_UNION_GAP:
+                core_start, core_end = min(core_start, peak_start), max(core_end, peak_end)
+
+    words = boundary_words if boundary_words is not None else intro_bounds.words_from_rows(available_words)
+    event = intro_bounds.EventEvidence(core_start, core_end, lead_in_start=lead_in, source=selection_mode)
+    first_pass = intro_bounds.compute_intro_bounds(
+        event, clip_duration=clip_edited_duration, words=words, envelope=envelope)
+    cuts = intro_bounds.scene_cuts(media_path, first_pass.start - 1.0, first_pass.end + 1.0) if media_path else []
+    bounds = intro_bounds.compute_intro_bounds(
+        event, clip_duration=clip_edited_duration, words=words, envelope=envelope, cuts=cuts)
+    teaser_edited_start = bounds.start
+    teaser_edited_end = bounds.end
+    teaser_duration = teaser_edited_end - teaser_edited_start
+
+    if not selected_words:
+        selected_words = words_overlapping_window(
+            available_words,
             teaser_edited_start,
             teaser_edited_end,
-        ) = calculate_natural_bounds(
-            selected_words=selected_words,
-            available_words=available_words,
-            clip_duration=clip_edited_duration,
         )
-
-        # If Terra linked this phrase to a multimodal peak, preserve the nearby
-        # scream/reaction/impact instead of trimming exactly on word boundaries.
-        if selected_peak is not None:
-            peak_start = float(selected_peak.get("teaser_start", selected_peak.get("start", 0.0)))
-            peak_end = float(selected_peak.get("teaser_end", selected_peak.get("end", peak_start)))
-            gap = 0.0
-            if teaser_edited_end < peak_start:
-                gap = peak_start - teaser_edited_end
-            elif peak_end < teaser_edited_start:
-                gap = teaser_edited_start - peak_end
-
-            union_start = min(teaser_edited_start, peak_start)
-            union_end = max(teaser_edited_end, peak_end)
-            if gap <= 1.10 and union_end - union_start <= MAX_TEASER_DURATION:
-                teaser_edited_start = union_start
-                teaser_edited_end = union_end
-
-    # V31: BOTH spoken_phrase and peak_window pass through the same adaptive
-    # duration floor. Previously peak_window skipped this block completely,
-    # which is how a weak 0.9s cold-open reached the final render.
-    adaptive_minimum, adaptive_lead_fraction, adaptive_policy = _adaptive_teaser_minimum(selected_peak)
-    teaser_edited_start, teaser_edited_end = expand_bounds_to_minimum(
-        teaser_edited_start,
-        teaser_edited_end,
-        clip_duration=clip_edited_duration,
-        minimum_duration=adaptive_minimum,
-        lead_fraction=adaptive_lead_fraction,
-    )
-
-    teaser_duration = teaser_edited_end - teaser_edited_start
 
     # Word metadata may be absent for a purely non-verbal peak.
     if selected_words:
@@ -1996,7 +1726,7 @@ def build_teaser_result(
     score = float(ai_result.get("score", 0))
     recommended = bool(ai_result.get("recommended", False))
     duration_valid = (
-        MIN_TEASER_DURATION <= teaser_duration <= MAX_TEASER_DURATION
+        MIN_TEASER_DURATION - 1e-6 <= teaser_duration <= MAX_TEASER_DURATION + 1e-6
     )
     final_recommended = (
         recommended
@@ -2009,10 +1739,6 @@ def build_teaser_result(
         warnings.append(
             "Teaser duration güvenli aralık dışında: "
             f"{teaser_duration:.2f}s"
-        )
-    if teaser_duration < PREFERRED_MIN_TEASER_DURATION:
-        warnings.append(
-            "Teaser tercih edilen 2.2s multimodal hissin altında kaldı."
         )
     if source_relative_start < 0.75:
         warnings.append(
@@ -2058,32 +1784,34 @@ def build_teaser_result(
             "teaser_start": round_time(teaser_edited_start),
             "teaser_end": round_time(teaser_edited_end),
             "duration": round_time(teaser_duration),
-            "adaptive_duration_policy": adaptive_policy,
-            "adaptive_minimum_duration": round_time(adaptive_minimum),
+            "duration_policy": "event_evidence",
+            "bounds": bounds.to_dict(),
         },
         "multimodal_support": selected_peak or {},
         "locked_peak": {
-            "peak_id": peak_id if selected_peak is not None else -1,
-            "peak_start": round_time(float(selected_peak.get("start", 0.0))) if selected_peak is not None else 0.0,
-            "peak_end": round_time(float(selected_peak.get("end", 0.0))) if selected_peak is not None else 0.0,
+            "peak_id": peak_id,
+            "peak_start": round_time(float(selected_peak.get("start", 0.0))),
+            "peak_end": round_time(float(selected_peak.get("end", 0.0))),
             "teaser_start": round_time(teaser_edited_start),
             "teaser_end": round_time(teaser_edited_end),
-            "combined_score": round(float(selected_peak.get("combined_score", 0.0)), 3) if selected_peak is not None else 0.0,
-            "audio_score": round(float(selected_peak.get("audio_score", 0.0)), 3) if selected_peak is not None else 0.0,
-            "visual_score": round(float(selected_peak.get("visual_score", 0.0)), 3) if selected_peak is not None else 0.0,
-            "multimodal": bool(selected_peak.get("multimodal")) if selected_peak is not None else False,
-            "signals": selected_peak.get("signals", []) if selected_peak is not None else [],
-            "visual_description": str(selected_peak.get("visual_description", "")) if selected_peak is not None else "",
+            "combined_score": round(float(selected_peak.get("combined_score", 0.0)), 3),
+            "audio_score": round(float(selected_peak.get("audio_score", 0.0)), 3),
+            "visual_score": round(float(selected_peak.get("visual_score", 0.0)), 3),
+            "multimodal": bool(selected_peak.get("multimodal")),
+            "signals": selected_peak.get("signals", []),
+            "visual_description": str(selected_peak.get("visual_description", "")),
         } if selected_peak is not None else {},
         "reason": str(ai_result.get("reason", "")).strip(),
         "viewer_question": str(ai_result.get("viewer_question", "")).strip(),
         "spoiler_risk": str(ai_result.get("spoiler_risk", "medium")),
         "warnings": warnings,
         "render_plan": {
-            "input": "captioned_preview",
+            "input": "clean_paced_clip",
             "prepend_teaser": True,
             "restart_main_clip": True,
             "remove_teaser_from_main_clip": False,
+            "normal_captions_in_intro": False,
+            "transition": "hard_cut",
         },
     }
 
@@ -2098,6 +1826,7 @@ def analyze_clip(
     clip_index: int,
     edited_video_path: str | Path | None = None,
     video_report_path: str | Path | None = None,
+    caption_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 
     clip = get_clip(
@@ -2138,10 +1867,14 @@ def analyze_clip(
     if clip_duration <= 0:
         clip_duration = max(float(word["edited_end"]) for word in available_words)
 
+    envelope = intro_bounds.audio_envelope(edited_video_path)
+    boundary_words = boundary_words_for(available_words, caption_profile)
     peak_support = intro_peak_support.build_peak_support(
         edited_video_path=edited_video_path,
         video_report_path=video_report_path,
         clip_duration=clip_duration,
+        envelope=envelope,
+        words=boundary_words,
     )
     intro_peak_support.attach_nearby_words(
         peak_support,
@@ -2181,6 +1914,9 @@ def analyze_clip(
         available_words=available_words,
         ai_result=ai_result,
         peak_support=peak_support,
+        boundary_words=boundary_words,
+        envelope=envelope,
+        media_path=edited_video_path,
     )
 
     print()
@@ -2362,6 +2098,7 @@ def analyze_teasers(
     clip_index: int | None = None,
     edited_video_path: str | Path | None = None,
     video_report_path: str | Path | None = None,
+    caption_profile_path: str | Path | None = None,
 ) -> dict[str, Any]:
 
     timeline_path = Path(
@@ -2388,6 +2125,13 @@ def analyze_teasers(
         transcript
     )
 
+    caption_profile: dict[str, Any] | None = None
+    if caption_profile_path and Path(caption_profile_path).is_file():
+        try:
+            caption_profile = load_json(caption_profile_path)
+        except Exception:
+            caption_profile = None
+
     timelines = timeline[
         "timelines"
     ]
@@ -2405,6 +2149,7 @@ def analyze_teasers(
                 clip_index=clip_index,
                 edited_video_path=edited_video_path,
                 video_report_path=video_report_path,
+                caption_profile=caption_profile,
             )
         )
 

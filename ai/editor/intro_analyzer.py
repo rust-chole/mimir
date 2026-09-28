@@ -36,7 +36,7 @@ INTRO_DIR = (
 # ============================================================
 
 INTRO_ANALYZER_VERSION = 1
-INTRO_ANALYZER_REVISION = 6
+INTRO_ANALYZER_REVISION = 7
 
 # No intro is better than a bad intro.
 MIN_RECOMMENDED_SCORE = 8.0
@@ -244,14 +244,21 @@ You are NOT selecting a new clip and you are NOT rewriting the teaser.
 
 The real render structure is:
 
-    [MOVING CLEAN TEASER + YOUR HOOK TEXT]
+    [MOVING CLEAN PEAK FOOTAGE + REAL AUDIO + YOUR HOOK TEXT]
                     ↓
-        [SHORT SMOOTH RESTART TRANSITION]
+                HARD RESTART
                     ↓
         [MAIN CLIP FROM TRUE BEGINNING]
 
-There is NO separate frozen intro card.
-Your line appears directly on the moving teaser scene.
+There is NO separate frozen intro card and there are no speech captions during
+the cold open: your line is the only text on the moving peak.
+
+TRUTH RULES (checked by software; violating candidates are discarded):
+- every fact must be supported by the transcript or the visual evidence;
+- never state a number that is not in the evidence;
+- never name a person, channel or brand unless it is a VERIFIED name given to
+  you; describe people by role ("HE", "HIS FRIEND", "THE STREAMER") instead;
+- no generic clickbait ("YOU WON'T BELIEVE", "WAIT FOR IT", "WATCH WHAT HAPPENS").
 
 Your job is to find the ONE strongest ATTENTION TARGET inside the evidence
 and write one short hook line that points the viewer toward that target
@@ -342,7 +349,15 @@ Your job is to protect the final Short.
 
 Core rule:
 
-    NO INTRO IS BETTER THAN A BAD INTRO.
+    NO HEADLINE IS BETTER THAN A BAD HEADLINE.
+
+Rejecting every candidate does NOT remove the cold open: the moving peak
+footage still plays with its real audio, just without text. So never accept a
+candidate merely to have a headline.
+
+Reject any candidate that states something the transcript/visual evidence does
+not show, contradicts what the peak footage shows, invents or guesses a name,
+invents a number, or spoils the payoff.
 
 Score every candidate from 0 to 10.
 
@@ -1794,10 +1809,105 @@ def request_final_judgement(
 # COPY VALIDATION
 # ============================================================
 
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100, "thousand": 1000,
+    "million": 1000000, "billion": 1000000000, "first": 1, "second": 2, "third": 3,
+}
+_SENTENCE_START = re.compile(r"(?:^|[.!?]\s+|\]\s*)$")
+
+
+def _numbers_in(text: str) -> set[str]:
+    """Numeric claims of a text as canonical strings ("1,000"/"1000"/"thousand" -> "1000")."""
+    values: set[str] = set()
+    for token in re.findall(r"[\d][\d,.]*[kKmM]?", str(text)):
+        raw = token.rstrip(".,")
+        multiplier = 1
+        if raw[-1:] in "kK":
+            multiplier, raw = 1000, raw[:-1]
+        elif raw[-1:] in "mM":
+            multiplier, raw = 1000000, raw[:-1]
+        try:
+            number = float(raw.replace(",", "")) * multiplier
+        except ValueError:
+            continue
+        values.add(str(int(number)) if number == int(number) else str(number))
+    for word in re.findall(r"[A-Za-z]+", str(text)):
+        value = _NUMBER_WORDS.get(word.casefold())
+        if value is not None:
+            values.add(str(value))
+    return values
+
+
+# Capitalized for grammar/devotion/address, not identity (generic English).
+_CAPITALIZED_COMMON = frozenset({"god", "jesus", "christ", "lord", "chat", "bro", "sir", "mom", "dad", "okay"})
+
+
+def evidence_proper_nouns(evidence_text: str) -> set[str]:
+    """Words the evidence writes capitalized mid-sentence (names, brands, places).
+
+    Sentence-initial words, the pronoun "I", capitalized interjections/address
+    words and words the evidence also writes in lowercase are ignored: their
+    capital is grammar, not identity."""
+    nouns: set[str] = set()
+    text = str(evidence_text)
+    lowercase = {word for word in re.findall(r"\b[a-z][a-z'\-]+", text)}
+    for match in re.finditer(r"[A-Za-z][A-Za-z'\-]+", text):
+        word = match.group(0)
+        if not word[0].isupper() or word.isupper() and len(word) <= 2:
+            continue
+        before = text[max(0, match.start() - 3):match.start()]
+        if _SENTENCE_START.search(text[:match.start()]) or before.endswith(("\n", ": ", "] ")):
+            continue
+        key = word.casefold().strip("'-")
+        if key in _CAPITALIZED_COMMON or key in lowercase:
+            continue
+        nouns.add(key)
+    return nouns
+
+
+def headline_grounding_problems(
+    text: str,
+    *,
+    evidence_text: str,
+    verified_names: list[str] | tuple[str, ...] = (),
+) -> list[str]:
+    """Deterministic truth checks for hook copy (the judge still scores quality).
+
+    * every number the headline states must appear in the evidence;
+    * a word the evidence uses as a proper noun (a person, channel, brand...)
+      may appear only when it is a verified name - an ASR-heard name can be a
+      mishearing, and a headline must never guess who someone is.
+    """
+    problems: list[str] = []
+    if not str(evidence_text).strip():
+        return problems
+    missing_numbers = sorted(_numbers_in(text) - _numbers_in(evidence_text))
+    if missing_numbers:
+        problems.append("headline states number(s) not in the evidence: " + ", ".join(missing_numbers[:4]))
+    verified = {
+        part.casefold()
+        for name in verified_names
+        for part in re.findall(r"[A-Za-z][A-Za-z'\-]+", str(name))
+    }
+    nouns = evidence_proper_nouns(evidence_text)
+    for word in re.findall(r"[A-Za-z][A-Za-z'\-]+", str(text)):
+        key = word.casefold().strip("'-")
+        if len(key) >= 3 and key in nouns and key not in verified:
+            problems.append(f"headline uses unverified name/proper noun: {word}")
+            break
+    return problems
+
+
 def validate_intro_choice(
     ai_result: dict[str, Any],
     teaser_text: str,
     creator_name: str | None,
+    *,
+    evidence_text: str = "",
+    verified_names: list[str] | tuple[str, ...] = (),
 ) -> tuple[
     bool,
     list[str],
@@ -2053,6 +2163,14 @@ def validate_intro_choice(
                 "uses_specific_name=false iken specific_name boş olmalı"
             )
 
+    problems.extend(
+        headline_grounding_problems(
+            text,
+            evidence_text=evidence_text,
+            verified_names=[name for name in (creator_name, *verified_names) if name],
+        )
+    )
+
     return (
         len(
             problems
@@ -2212,6 +2330,10 @@ def _build_no_intro_result(
     candidate_scores: list[dict[str, Any]],
     repair_rounds_used: int,
 ) -> dict[str, Any]:
+    """The cold open still runs (moving peak + real audio); it just carries no headline.
+
+    A strong peak with no headline is preferable to a generic, ungrounded or
+    low-scoring headline."""
 
     return {
         "clip_index": clip_index,
@@ -2221,8 +2343,9 @@ def _build_no_intro_result(
                 "",
             )
         ),
-        "recommended": False,
+        "recommended": True,
         "ai_recommended": False,
+        "headline_status": "none",
         "score": round(
             score,
             1,
@@ -2238,7 +2361,8 @@ def _build_no_intro_result(
         "curiosity_target": "",
         "quality_gate": {
             "threshold": MIN_RECOMMENDED_SCORE,
-            "accepted": False,
+            "accepted": True,
+            "no_headline": True,
             "candidate_count": len(
                 candidates
             ),
@@ -2275,11 +2399,14 @@ def _build_no_intro_result(
             "style": "moving_teaser",
         },
         "sequence": [
-            "main_clip",
+            "moving_peak_without_headline",
+            "hard_main_clip_restart",
         ],
         "render_plan": {
-            "restart_main_clip_after_teaser": False,
-            "transition": "none",
+            "intro_background": "moving_teaser",
+            "then_play": "main_clip_restart",
+            "restart_main_clip_after_teaser": True,
+            "transition": "hard_cut",
         },
     }
 
@@ -2291,6 +2418,8 @@ def _collect_valid_candidates(
     creator_name: str | None,
     existing: list[dict[str, Any]],
     seen_texts: set[str],
+    evidence_text: str = "",
+    verified_names: list[str] | tuple[str, ...] = (),
 ) -> tuple[
     list[dict[str, Any]],
     list[str],
@@ -2311,6 +2440,8 @@ def _collect_valid_candidates(
                 ai_result=candidate,
                 teaser_text=teaser_text,
                 creator_name=creator_name,
+                evidence_text=evidence_text,
+                verified_names=verified_names,
             )
         )
 
@@ -2357,74 +2488,6 @@ def _collect_valid_candidates(
         added,
         rejection_notes,
     )
-
-
-def _locked_intro_fallback_candidate(clip: dict[str, Any]) -> dict[str, Any]:
-    """Build a no-API fallback hook from existing clip metadata.
-
-    V26 LOCKED INTRO rule: a usable cold-open must never disappear solely
-    because copy judgement missed the old 8/10 gate. This helper is used only
-    when the normal Luna candidate list is empty.
-    """
-    raw = normalize_spaces(str(clip.get("hook_text", "")))
-    if not raw:
-        raw = normalize_spaces(str(clip.get("title", "")))
-    if not raw:
-        raw = "WATCH WHAT HAPPENS"
-
-    words = raw.split()[:MAX_INTRO_WORDS]
-    text = " ".join(words).strip()
-    while len(text) > MAX_INTRO_CHARACTERS and len(words) > MIN_INTRO_WORDS:
-        words.pop()
-        text = " ".join(words).strip()
-    if len(text.split()) < MIN_INTRO_WORDS:
-        text = "WATCH WHAT HAPPENS"
-    if len(text) > MAX_INTRO_CHARACTERS:
-        text = text[:MAX_INTRO_CHARACTERS].rsplit(" ", 1)[0].strip()
-    if len(text.split()) < MIN_INTRO_WORDS:
-        text = "WATCH WHAT HAPPENS"
-
-    return {
-        "intro_text": text.upper(),
-        "tone": "curiosity",
-        "copy_strategy": "curiosity_gap",
-        "uses_specific_name": False,
-        "specific_name": "",
-        "reason": "V26 locked-intro deterministic fallback from existing clip metadata.",
-        "curiosity_target": "the unresolved event",
-    }
-
-
-def _locked_intro_best_index(
-    judgement: dict[str, Any],
-    candidates: list[dict[str, Any]],
-) -> int:
-    """Return a valid best-candidate index without changing the real score."""
-    if not candidates:
-        return 0
-    try:
-        selected = int(judgement.get("selected_candidate_index", 0))
-    except (TypeError, ValueError):
-        selected = 0
-    if 1 <= selected <= len(candidates):
-        return selected
-
-    best_index = 1
-    best_score = float("-inf")
-    rows = judgement.get("candidate_scores", [])
-    if isinstance(rows, list):
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            try:
-                idx = int(row.get("candidate_index", 0))
-                score = float(row.get("overall_score", float("-inf")))
-            except (TypeError, ValueError):
-                continue
-            if 1 <= idx <= len(candidates) and score > best_score:
-                best_index = idx
-                best_score = score
-    return best_index
 
 
 def _judgement_state(
@@ -2484,6 +2547,8 @@ def analyze_intro_for_clip(
     clip_index: int,
     manual_creator_name: str | None = None,
     video_support_report: dict[str, Any] | None = None,
+    verified_names: list[str] | tuple[str, ...] = (),
+    caption_text: str = "",
 ) -> dict[str, Any]:
 
     teaser = get_teaser(
@@ -2517,6 +2582,16 @@ def analyze_intro_for_clip(
     gemini_support_available = isinstance(
         video_support_report,
         dict,
+    )
+
+    # Everything a headline may claim must be visible in this evidence.
+    evidence_text = "\n".join(
+        part for part in (
+            clip_transcript,
+            caption_text,
+            str(teaser.get("teaser_text", "")),
+            gemini_context,
+        ) if part
     )
 
     print()
@@ -2588,6 +2663,8 @@ def analyze_intro_for_clip(
             creator_name=creator_name,
             existing=valid_candidates,
             seen_texts=seen_texts,
+            evidence_text=evidence_text,
+            verified_names=verified_names,
         )
 
         if len(
@@ -2609,12 +2686,19 @@ def analyze_intro_for_clip(
             )
 
     if not valid_candidates:
-        fallback_candidate = _locked_intro_fallback_candidate(clip)
-        valid_candidates.append(fallback_candidate)
-        seen_texts.add(normalize_for_compare(fallback_candidate["intro_text"]))
         print(
-            "   🔒 V26 locked intro: normal hook listesi boştu; "
-            "mevcut clip metadata'sından deterministic fallback kullanılıyor."
+            "   ⏭️ No valid, grounded hook candidate: the cold open runs without a headline."
+        )
+        return _build_no_intro_result(
+            clip=clip,
+            clip_index=clip_index,
+            creator_name=creator_name,
+            score=0.0,
+            reason="no candidate passed validation/grounding",
+            gemini_support_used=False,
+            candidates=[],
+            candidate_scores=[],
+            repair_rounds_used=0,
         )
 
     candidates = valid_candidates[
@@ -2775,6 +2859,8 @@ def analyze_intro_for_clip(
             creator_name=creator_name,
             existing=repaired_valid,
             seen_texts=repaired_seen,
+            evidence_text=evidence_text,
+            verified_names=verified_names,
         )
 
         if repaired_valid:
@@ -2868,19 +2954,6 @@ def analyze_intro_for_clip(
         and gemini_support_available
     )
 
-    locked_intro_override = False
-    if not accepted and candidates:
-        selected_index = _locked_intro_best_index(judgement, candidates)
-        if selected_index <= 0:
-            selected_index = 1
-        accepted = True
-        locked_intro_override = True
-        print()
-        print(
-            "🔒 V26 LOCKED INTRO: hook kalite skoru "
-            f"{score:.1f}/10; gerçek skor korunuyor ama cold-open kaldırılmıyor."
-        )
-
     if not accepted:
 
         rejection_reason = normalize_spaces(
@@ -2913,7 +2986,7 @@ def analyze_intro_for_clip(
             "🏁 Terra final decision:"
         )
         print(
-            f"⏭️ REJECTED {score:.1f}/10 → intro kullanılmayacak."
+            f"⏭️ Headline REJECTED {score:.1f}/10 → cold open runs without a headline."
         )
 
         return _build_no_intro_result(
@@ -2964,11 +3037,6 @@ def analyze_intro_for_clip(
         )
     )
 
-    if locked_intro_override:
-        reason = normalize_spaces(
-            (reason + " V26 locked-intro override: cold-open preserved despite copy score.").strip()
-        )
-
     tone = str(
         selected_candidate.get(
             "tone",
@@ -3008,7 +3076,8 @@ def analyze_intro_for_clip(
             )
         ),
         "recommended": True,
-        "ai_recommended": not locked_intro_override,
+        "ai_recommended": True,
+        "headline_status": "approved",
         "score": round(
             score,
             1,
@@ -3025,7 +3094,7 @@ def analyze_intro_for_clip(
         "quality_gate": {
             "threshold": MIN_RECOMMENDED_SCORE,
             "accepted": True,
-            "locked_intro_override": locked_intro_override,
+            "no_headline": False,
             "candidate_count": len(
                 candidates
             ),
@@ -3071,7 +3140,7 @@ def analyze_intro_for_clip(
         },
         "sequence": [
             "moving_teaser_with_hook",
-            "smooth_main_clip_restart",
+            "hard_main_clip_restart",
         ],
         "render_plan": {
             "intro_background": "moving_teaser",
@@ -3079,7 +3148,7 @@ def analyze_intro_for_clip(
             "freeze_frame_time": freeze_frame_time,
             "then_play": "main_clip_restart",
             "restart_main_clip_after_teaser": True,
-            "transition": "short_smooth_crossfade",
+            "transition": "hard_cut",
         },
     }
 
@@ -3239,6 +3308,8 @@ def analyze_intros(
     clip_index: int | None = None,
     manual_creator_name: str | None = None,
     video_report_path: str | Path | None = None,
+    verified_names: list[str] | tuple[str, ...] = (),
+    caption_text: str = "",
 ) -> dict[str, Any]:
 
     teaser_json_path = Path(
@@ -3301,6 +3372,8 @@ def analyze_intros(
                 clip_index=clip_index,
                 manual_creator_name=manual_creator_name,
                 video_support_report=video_support_report,
+                verified_names=verified_names,
+                caption_text=caption_text,
             )
         )
 

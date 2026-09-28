@@ -1,4 +1,4 @@
-"""MIMIR V6 end-to-end through the REAL run_pipeline orchestration (offline).
+"""MIMIR production path end-to-end through the REAL run_pipeline orchestration (offline).
 
 Real FFmpeg stages (pacing cut, caption ASS + burn-in, Pro Edit camera render,
 intro render, publish) on a synthetic source; only paid/interactive model
@@ -6,10 +6,11 @@ stages are replaced by deterministic fakes (tests/pipeline_harness.py).
 Runs against a disposable repository copy under a path with spaces, an
 apostrophe and non-ASCII characters. Proves:
 
-* V6 runs caption truth -> evidence director -> render -> pixel proof ->
-  final gate, with no silent fallback;
-* ``--force-v6`` recomputes only the V6 / downstream stages while every
-  upstream cache (transcription ... intro analysis) is reused.
+* the production path runs caption truth -> evidence director -> render ->
+  pixel proof -> rendered-MP4 QC -> final gate, with no fallback;
+* ``--rerender`` (alias ``--force-v6``) recomputes only the presentation /
+  downstream stages while every upstream cache (transcription ... intro
+  analysis) is reused.
 """
 from __future__ import annotations
 
@@ -117,9 +118,9 @@ class V6PipelineEndToEndTests(unittest.TestCase):
         cls.video.parent.mkdir()
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
                         "testsrc2=size=640x360:rate=30000/1001:duration=30", "-f", "lavfi", "-i",
-                        "sine=frequency=300:sample_rate=48000:duration=30", "-shortest", "-c:v", "libx264",
-                        "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-                        "-ac", "2", str(cls.video)], check=True, capture_output=True)
+                        "anoisesrc=color=pink:sample_rate=48000:duration=30:amplitude=0.1", "-shortest", "-c:v",
+                        "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-b:a", "128k", "-ac", "2", str(cls.video)], check=True, capture_output=True)
         cls.results = {}
 
         def run(mode: str, key: str) -> None:
@@ -133,14 +134,14 @@ class V6PipelineEndToEndTests(unittest.TestCase):
             cls.results[key] = json.loads(out.read_text(encoding="utf-8"))
             cls.results[key]["stdout"] = proc.stdout
 
-        for mode in ("v6", "v6_force"):
-            run(mode, mode)
+        for mode, key in (("run", "v6"), ("rerender", "v6_force")):
+            run(mode, key)
         # The incident: the temp cleanup removed this clip's paced video while another
         # source's newer clip_01 video is on disk. The rerun must re-render THIS clip.
         edited_root = cls.copy / "vod_output" / "edited_clips"
         next(edited_root.glob("*/clip_01_*_edited.mp4")).unlink()
         make_video(edited_root / "zz other source" / "clip_01_Other Story_edited.mp4", 12)
-        run("v6_force", "v6_rerun_after_cleanup")
+        run("rerender", "v6_rerun_after_cleanup")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -152,6 +153,7 @@ class V6PipelineEndToEndTests(unittest.TestCase):
     def test_v6_runs_the_real_path_and_passes_the_final_gate(self) -> None:
         result = self.results["v6"]
         self.assertEqual(result["v6"]["status"], "passed", result["v6"])
+        self.assertEqual(result["status"], "published")
         self.assertEqual(result["v6"]["fallbacks"], 0)
         self.assertEqual(result["stages"]["caption_truth_v6"], "done")
         self.assertEqual(result["pro_edit"]["render"]["status"], "pro_edit")
@@ -160,7 +162,8 @@ class V6PipelineEndToEndTests(unittest.TestCase):
         for name in ("output_file", "caption_truth_frozen", "word_timing", "speaker_ownership", "verified_names",
                      "caption_presentation", "story_preserved", "camera_plan", "hold_reasons",
                      "story_regions_visible", "camera_pixels_main", "camera_pixels_final", "v6_render_path",
-                     "no_silent_fallback"):
+                     "no_blocking_fallback", "no_captions_in_intro", "caption_words_timing", "main_av_sync",
+                     "final_review"):
             self.assertEqual(checks.get(name), "pass", (name, checks))
         for key in ("caption_truth", "camera_plan", "render_proof", "manifest"):
             self.assertTrue(Path(manifest["artifacts"][key]).is_file(), key)

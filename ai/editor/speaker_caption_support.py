@@ -353,8 +353,8 @@ def _apply_verified_vocative_name_orthography(
     Therefore a near-match is rewritten only when the token behaves like a
     vocative: it is comma/colon-delimited and nearby words address ``you``.
 
-    Example: ``Tyler, would you ...`` with verified participant ``TYLA`` becomes
-    ``Tyla, would you ...``.  ``I watched Tyler yesterday`` is untouched.
+    Example: ``Jon, would you ...`` with verified participant ``JOHN`` becomes
+    ``John, would you ...``.  ``I watched Jon yesterday`` is untouched.
     Token count and timing are never changed.
     """
     tokens = _caption_tokens(text)
@@ -658,56 +658,6 @@ def _preserve_token_case_and_punctuation(source: str, replacement_word: str) -> 
     return f"{prefix}{replacement}{suffix}"
 
 
-def _streamer_slang_evidence_resolution(
-    *,
-    current_tokens: list[str],
-    candidate_rows: list[dict[str, Any]],
-    context_text: str,
-) -> tuple[list[str] | None, dict[str, Any]]:
-    """Resolve ONLY evidence-backed orthographic streamer-slang ambiguity.
-
-    This is not a generic spellchecker. A preferred spelling is allowed only
-    when an independent micro-ASR candidate actually emitted that spelling and
-    the local wording looks like direct-address livestream speech. The current
-    audio-derived word count/order stays unchanged.
-    """
-    aliases = {
-        "shorty": "shawty",
-    }
-    context_canon = {vod_processor.canonical_word(x) for x in _caption_tokens(context_text)}
-    direct_address_cues = {"you", "your", "hey", "girl", "bro", "look", "good", "damn"}
-    if not (context_canon & direct_address_cues):
-        return None, {"status": "no_direct_address_context"}
-
-    candidate_canons: list[tuple[set[str], int]] = []
-    for row in candidate_rows:
-        phrase = tuple(row.get("phrase", ()))
-        canon = {vod_processor.canonical_word(x) for x in phrase if vod_processor.canonical_word(x)}
-        candidate_canons.append((canon, int(row.get("votes", 0) or 0)))
-
-    updated = list(current_tokens)
-    changes: list[dict[str, Any]] = []
-    for index, token in enumerate(current_tokens):
-        canon = vod_processor.canonical_word(token)
-        preferred = aliases.get(canon)
-        if not preferred:
-            continue
-        evidence_votes = sum(votes for canon_set, votes in candidate_canons if preferred in canon_set)
-        if evidence_votes < 1:
-            continue
-        updated[index] = _preserve_token_case_and_punctuation(token, preferred)
-        changes.append({
-            "from": token,
-            "to": updated[index],
-            "preferred": preferred,
-            "independent_evidence_votes": evidence_votes,
-        })
-
-    if not changes:
-        return None, {"status": "no_evidence_backed_alias"}
-    return updated, {"status": "resolved", "changes": changes}
-
-
 def _micro_refine_caption(
     *,
     audio_path: Path,
@@ -863,20 +813,9 @@ def _micro_refine_caption(
                         selected_phrase = " ".join(phrase)
                         selected_source = f"micro_strict_{int(top.get('votes', 0))}_of_{len(transcripts)}"
 
-            # V3 lexical policy: orthographic streamer slang may be normalized
-            # only when an independent micro-ASR ear explicitly emitted the
-            # preferred spelling. This never invents a word and never touches
-            # timestamps. Example: direct-address shorty/shawty ambiguity.
-            slang_meta: dict[str, Any] = {"status": "not_needed"}
-            if selected_phrase is None and candidate_rows:
-                slang_tokens, slang_meta = _streamer_slang_evidence_resolution(
-                    current_tokens=list(tokens[core_start:core_end_now]),
-                    candidate_rows=candidate_rows,
-                    context_text=" ".join(tokens[max(0, core_start - 6):min(len(tokens), core_end_now + 6)]),
-                )
-                if slang_tokens is not None:
-                    selected_phrase = " ".join(slang_tokens)
-                    selected_source = "streamer_slang_evidence"
+            # No phrase-specific spelling rules: a wording change needs the strict
+            # independent acoustic majority above, nothing else.
+            slang_meta: dict[str, Any] = {"status": "removed_no_phrase_specific_rules"}
 
             # V31/V3: no general semantic tie-break can rewrite wording and no ??? mask can
             # replace real primary text. If the acoustic evidence is not strong
@@ -1291,7 +1230,7 @@ def _transcribe_edited_words(
         )
 
     # V7 verified-name orthography lock.  Acoustic ASR often cannot distinguish
-    # homophonic spellings such as Tyla/Tyler.  When a human-verified participant
+    # homophonic spellings such as John/Jon.  When a human-verified participant
     # name appears as a conservative direct-address near-match, normalize only
     # its spelling.  This runs after acoustic micro evidence and never changes
     # token count, timestamps, speaker assignment, or surrounding wording.
@@ -3047,7 +2986,7 @@ def _run_human_identity_anchor(
 # performs a known-speaker diarization pass using the exact human-confirmed
 # reference WAVs.  V5 used that pass only to validate the cosmetic A/B -> name
 # map, while word ownership still came exclusively from generic raw A/B turns.
-# That allowed a swallowed speaker boundary to render TYLA as KAI (or vice
+# That allowed a swallowed speaker boundary to render one confirmed name as the other (or vice
 # versa).  V6 allows the already-paid known-speaker evidence to correct WHO
 # metadata only.  Wording and Whisper timestamps remain immutable.
 IDENTITY_PHRASE_BREAK_GAP_SECONDS = max(
@@ -3106,7 +3045,7 @@ def _apply_human_known_voice_overlay(
     human has named two voices and a known-speaker anchor pass exists, strong
     direct-name lexical evidence outranks generic raw A/B ownership.  A weak
     timing-only raw guess is never allowed to print a human name merely because
-    an A->KAI/B->TYLA mapping exists.
+    an A->name/B->name mapping exists.
     """
     result = [dict(row) for row in words]
     audit: dict[str, Any] = {
@@ -3292,7 +3231,7 @@ def _lock_human_identity_by_phrase(
     If strong anchored voices conflict inside the same punctuation/gap-delimited
     phrase and neither clearly dominates, the WHO label for the entire phrase is
     blank.  This is intentionally fail-closed: an unlabeled caption is better
-    than KAI/TYLA changing halfway through one utterance.
+    than A/B-name changing halfway through one utterance.
     """
     result = [dict(row) for row in words]
     audit: dict[str, Any] = {
@@ -3400,7 +3339,7 @@ def _enforce_one_identity_per_phrase(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Final fail-closed invariant: one spoken phrase gets one name or none.
 
-    Even after all identity evidence, renderer-visible KAI/TYLA layers must never
+    Even after all identity evidence, renderer-visible A/B-name layers must never
     alternate inside one phrase. A mixed or partially unresolved phrase is safer
     unlabeled than confidently assigned to the wrong person. Text and timing are
     never touched.
@@ -3556,7 +3495,7 @@ def _micro_verify_risky_identity_phrases(
     conflicting identity evidence, or still relies on weak WHO confidence.  Two
     short (<30s) windows must agree on the same human-confirmed voice; otherwise
     the entire phrase is left unlabeled.  This prevents a confident-looking
-    whole-clip diarization mistake from becoming a visible KAI/TYLA swap.
+    whole-clip diarization mistake from becoming a visible A/B-name swap.
     """
     result = [dict(row) for row in words]
     audit: dict[str, Any] = {
@@ -3643,7 +3582,7 @@ def _micro_verify_risky_identity_phrases(
             score += 30.0 * (0.70 - min_conf)
         if reasons:
             # Slightly favor later ties: post-gap identity resets often surface
-            # near the tail of a short, exactly like the Kaityla regression.
+            # near the tail of a short, as seen in a real two-speaker regression.
             score += min(2.0, phrase_start / max(1.0, duration))
             risky_scored.append((score, start_i, end_i, reasons))
 
@@ -3663,7 +3602,7 @@ def _micro_verify_risky_identity_phrases(
         view_details: list[dict[str, Any]] = []
         # Strict 2/2 local consensus. The whole-clip identity anchor is NOT a
         # vote here; it is precisely the source we are auditing. This prevents a
-        # confident but wrong global KAI/TYLA label from self-confirming.
+        # confident but wrong global A/B-name label from self-confirming.
         for view_index, pad in enumerate((0.75, 1.35), 1):
             window_start, window_end = _identity_micro_window_bounds(
                 phrase_start=phrase_start,
@@ -4329,7 +4268,7 @@ def create_speaker_profile(
 
         display_labels: dict[str, str] = {}
         if manual_map:
-            # Partial validation is intentional: a trusted Kai can be labeled
+            # Partial validation is intentional: one trusted name can be labeled
             # while an uncertain second voice remains unlabeled.
             display_labels = dict(validated_identity_map)
         elif not force_plain_captions:
@@ -4380,7 +4319,7 @@ def create_speaker_profile(
             if not isinstance(raw, dict):
                 continue
             speaker = str(raw.get("speaker_raw") or "")
-            # One final label projection prevents stale KAI/TYLA text after a
+            # One final label projection prevents stale A/B-name text after a
             # raw-speaker remap. UNKNOWN always renders without a human name.
             raw["speaker_label"] = str(display_labels.get(speaker, ""))
 

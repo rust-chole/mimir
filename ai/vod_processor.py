@@ -133,7 +133,7 @@ Pay special attention to gaming and livestream vocabulary.
 
 Common vocabulary may include:
 chat, Twitch, YouTube, Discord, stream, streamer, viewers,
-bro, dude, chat, W, L, cooked, cap, no cap, no way, shawty,
+bro, dude, chat, W, L, cooked, cap, no cap, no way,
 game, gameplay, clip, donation, dono, sub, subscriber,
 mods, moderator, IRL, rage, reaction, arena, ranked.
 
@@ -162,7 +162,7 @@ CAPTION_DEFAULT_KEYWORDS = tuple(
     item.strip()
     for item in os.getenv(
         "MIMIR_CAPTION_KEYWORDS",
-        "chat,Twitch,YouTube,Discord,stream,streamer,IRL,dono,no cap,shawty",
+        "chat,Twitch,YouTube,Discord,stream,streamer,IRL,dono,no cap",
     ).split(",")
     if item.strip()
 )

@@ -31,7 +31,7 @@ REPORT_DIR = (
 # VERSION
 # ============================================================
 
-MEME_RENDERER_VERSION = 4
+MEME_RENDERER_VERSION = 5
 
 
 # ============================================================
@@ -42,6 +42,14 @@ MEME_RENDERER_VERSION = 4
 VISUAL_WIDTH_PERCENT = 24.0
 VISUAL_MAX_HEIGHT_PERCENT = 28.0
 VISUAL_OPACITY = 0.78
+# A visual meme goes where the picture is least busy and never over captions:
+# candidate anchors (normalized centre) tried in this order on equal activity.
+VISUAL_EDGE_MARGIN = 0.04
+VISUAL_ANCHORS = (
+    ("top_right", 1.0, 0.0), ("top_left", 0.0, 0.0), ("top_center", 0.5, 0.0),
+    ("mid_right", 1.0, 0.5), ("mid_left", 0.0, 0.5), ("bottom_right", 1.0, 1.0), ("bottom_left", 0.0, 1.0),
+)
+MAIN_OPENING_PROTECTION = 0.70   # no effect in the first moments after the story restart
 
 # Smooth giriş/çıkış.
 VISUAL_FADE_IN = 0.12
@@ -830,6 +838,7 @@ def choose_single_best_discovery(
 def build_single_event(
     discovery_clip: dict[str, Any],
     base_duration: float,
+    timeline_doc: dict[str, Any] | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     list[str],
@@ -951,6 +960,28 @@ def build_single_event(
         start,
     )
 
+    # The final clock is the intro renderer's timeline document (cold open +
+    # hard restart at main_restart), never "teaser length + main time": the
+    # restart trim would otherwise land the meme seconds late.
+    intro_end = None
+    if isinstance(timeline_doc, dict):
+        from ai.editor import intro_renderer
+
+        try:
+            paced = float(timing["main_edited_start"])
+        except (KeyError, TypeError, ValueError):
+            warnings.append("main_edited_start yok; meme final saatine eşlenemedi.")
+            return (None, warnings)
+        mapped = intro_renderer.paced_to_final(timeline_doc, paced)
+        intro_end = float((timeline_doc.get("intro") or {}).get("duration", 0.0) or 0.0)
+        if mapped is None:
+            warnings.append("Meme anı story restart'ından önce kesilmiş bölgede; meme atlandı.")
+            return (None, warnings)
+        if mapped < intro_end + MAIN_OPENING_PROTECTION:
+            warnings.append("Meme cold open'a veya restart'ın hemen başına denk geliyor; meme atlandı.")
+            return (None, warnings)
+        start = mapped
+
     if start >= base_duration:
         warnings.append(
             "Meme başlangıcı final videonun dışında."
@@ -1036,7 +1067,8 @@ def build_single_event(
         except (TypeError, ValueError):
             timing_main_start = 0.0
         teaser_offset = max(0.0, start - timing_main_start)
-        earliest_start = min(base_duration, teaser_offset + 0.70)
+        earliest_start = min(base_duration, (intro_end if intro_end is not None else teaser_offset)
+                             + MAIN_OPENING_PROTECTION)
 
         if duration > (base_duration - earliest_start) + 1e-6:
             warnings.append(
@@ -1458,6 +1490,74 @@ def build_audio_filter(
 # FILTERS — VISUAL
 # ============================================================
 
+def overlay_size(base_info: dict[str, Any], asset_info: dict[str, Any] | None) -> tuple[int, int]:
+    width, height = int(base_info["width"]), int(base_info["height"])
+    box_w = max(96, int(round(width * VISUAL_WIDTH_PERCENT / 100.0)))
+    box_h = max(96, int(round(height * VISUAL_MAX_HEIGHT_PERCENT / 100.0)))
+    try:
+        aw, ah = int((asset_info or {}).get("width") or 0), int((asset_info or {}).get("height") or 0)
+    except (TypeError, ValueError):
+        aw = ah = 0
+    if aw <= 0 or ah <= 0:
+        return box_w, box_h
+    scale = min(box_w / aw, box_h / ah)
+    return max(2, int(aw * scale)), max(2, int(ah * scale))
+
+
+def choose_overlay_position(
+    base_video: Path,
+    base_info: dict[str, Any],
+    start: float,
+    duration: float,
+    size: tuple[int, int],
+    forbidden_bands: list[tuple[float, float]],
+) -> tuple[int, int, str] | None:
+    """Least-busy anchor for a visual meme, never over a caption band.
+
+    Busyness = spatial detail + motion of the ACTUAL rendered frames under the
+    overlay during its window (faces, action and HUD are busy; sky, walls and
+    letterbox are not). None when every anchor would cover captions."""
+    from ai.editor import final_qc
+
+    np = final_qc._numpy()
+    width, height = int(base_info["width"]), int(base_info["height"])
+    fps = float(base_info["fps"])
+    ow, oh = size
+    margin_x, margin_y = int(width * VISUAL_EDGE_MARGIN), int(height * VISUAL_EDGE_MARGIN)
+    candidates = []
+    for name, ax, ay in VISUAL_ANCHORS:
+        x = int(round(margin_x + ax * (width - ow - 2 * margin_x)))
+        y = int(round(margin_y + ay * (height - oh - 2 * margin_y)))
+        y0, y1 = y / height, (y + oh) / height
+        if any(y0 < b1 and b0 < y1 for b0, b1 in forbidden_bands):
+            continue
+        candidates.append((name, x, y))
+    if not candidates:
+        return None
+    aw = final_qc.ANALYSIS_WIDTH
+    ah = max(16, int(round(height * aw / max(1, width))))
+    ah -= ah % 2
+    frames = [int(round((start + duration * k / 4.0) * fps)) for k in range(5)]
+    decoded = [f for _, f in sorted(final_qc.decode_frames(base_video, frames, aw, ah).items())]
+    if not decoded:
+        return candidates[0][1], candidates[0][2], candidates[0][0] + " (no frames decoded)"
+    stack = np.stack(decoded)
+    detail = np.abs(np.diff(stack, axis=2)).mean(axis=0)
+    detail = np.pad(detail, ((0, 0), (0, 1)), mode="edge")
+    motion = np.abs(np.diff(stack, axis=0)).mean(axis=0) if len(decoded) > 1 else np.zeros_like(detail)
+    busy = detail + 2.0 * motion
+    fx, fy = aw / width, ah / height
+    best = None
+    for name, x, y in candidates:
+        region = busy[int(y * fy):max(int(y * fy) + 1, int((y + oh) * fy)),
+                      int(x * fx):max(int(x * fx) + 1, int((x + ow) * fx))]
+        score = float(region.mean()) if region.size else float("inf")
+        if best is None or score < best[0] - 1e-6:
+            best = (score, name, x, y)
+    assert best is not None
+    return best[2], best[3], best[1]
+
+
 def build_visual_filter(
     input_index: int,
     event: dict[str, Any],
@@ -1618,8 +1718,8 @@ def build_visual_filter(
                 "[base_v]"
                 "[meme_visual]"
                 "overlay="
-                "x=(main_w-overlay_w)/2:"
-                "y=(main_h-overlay_h)/2:"
+                f"x={int(event.get('overlay_x', 0))}:"
+                f"y={int(event.get('overlay_y', 0))}:"
                 "eof_action=pass:"
                 "repeatlast=0:"
                 "shortest=0,"
@@ -1644,6 +1744,9 @@ def render_clip(
     discovery_package: dict[str, Any],
     timeline: dict[str, Any],
     clip_index: int,
+    *,
+    base_video_path: str | Path | None = None,
+    forbidden_bands: list[tuple[float, float]] | None = None,
 ) -> Path:
 
     discovery_clip = get_discovery_clip(
@@ -1651,10 +1754,20 @@ def render_clip(
         clip_index,
     )
 
-    base_video = find_base_final_video(
-        timeline,
-        clip_index,
-    )
+    # The pipeline hands over the exact composed short; a directory glob could
+    # adopt another source's or an older run's preview.
+    if base_video_path is not None:
+        base_video = Path(base_video_path).expanduser().resolve()
+        if not base_video.is_file():
+            raise FileNotFoundError(f"Base final video bulunamadı:\n{base_video}")
+    else:
+        base_video = find_base_final_video(
+            timeline,
+            clip_index,
+        )
+    from ai.editor import intro_renderer
+
+    timeline_doc = intro_renderer.load_final_timeline(base_video)
 
     base_info = get_media_info(
         base_video
@@ -1699,7 +1812,22 @@ def render_clip(
                 "duration"
             ]
         ),
+        timeline_doc,
     )
+
+    if event is not None and event["media_type"] == "visual":
+        asset_info = get_media_info(event["asset_path"])
+        size = overlay_size(base_info, asset_info)
+        placement = choose_overlay_position(
+            base_video, base_info, float(event["start"]), float(event["duration"]), size,
+            list(forbidden_bands or []),
+        )
+        if placement is None:
+            warnings.append("Visual meme her konumda caption bandını kapatıyor; meme atlandı.")
+            event = None
+        else:
+            event["overlay_x"], event["overlay_y"], event["overlay_anchor"] = placement
+            event["overlay_size"] = list(size)
 
     print()
     print(
@@ -2006,7 +2134,7 @@ def render_clip(
             "policy": {
                 "max_memes_per_clip": 1,
 
-                "visual_position": "center",
+                "visual_position": event.get("overlay_anchor", "n/a"),
 
                 "visual_width_percent": (
                     VISUAL_WIDTH_PERCENT
@@ -2074,6 +2202,9 @@ def render_clip(
 def render_memes(
     discovery_json_path: str | Path,
     clip_index: int | None = None,
+    *,
+    base_video_path: str | Path | None = None,
+    forbidden_bands: list[tuple[float, float]] | None = None,
 ) -> list[Path]:
 
     discovery_json_path = Path(
@@ -2119,6 +2250,8 @@ def render_memes(
                 discovery_package=discovery_package,
                 timeline=timeline,
                 clip_index=clip_index,
+                base_video_path=base_video_path,
+                forbidden_bands=forbidden_bands,
             )
         ]
 
@@ -2177,7 +2310,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "Visual: centered + subtle opacity"
+        "Visual: least-busy anchor, never over captions"
     )
 
     print()

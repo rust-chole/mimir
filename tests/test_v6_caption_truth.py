@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import pro_edit_fixtures as fx  # noqa: F401  (repo root on sys.path)
@@ -333,8 +334,11 @@ class PresentationAndGateTests(unittest.TestCase):
                 self.assertLessEqual(len(page.lines), 2)
 
     def test_gate_never_passes_a_run_with_a_fallback(self) -> None:
+        # Truth / verified-render fallbacks BLOCK; presentation-quality fallbacks are
+        # never silent and never a clean pass (at best "passed_with_warnings").
         run = v6_runtime.V6Run(enabled=True)
         run.fallback("face_tracking", "opencv not installed", "center_safe_framing")
+        run.fallback("caption_truth", "profile missing", "unfrozen_asr_captions")
         with tempfile.TemporaryDirectory() as tmp:
             gate = v6_runtime.final_quality_gate(
                 run=run, final_output=Path(tmp) / "missing.mp4", profile_path=None, truth_path=None,
@@ -342,12 +346,51 @@ class PresentationAndGateTests(unittest.TestCase):
                 story_intact=(False, "not prepared"), intro_handoff=None, render_status="baseline")
         self.assertEqual(gate["status"], v6_runtime.GATE_FAILED)
         checks = {c["check"]: c for c in gate["checks"]}
-        self.assertEqual(checks["no_silent_fallback"]["status"], "fail")
-        self.assertIn("face_tracking->center_safe_framing", checks["no_silent_fallback"]["detail"])
+        self.assertEqual(checks["no_blocking_fallback"]["status"], "fail")
+        self.assertIn("caption_truth->unfrozen_asr_captions", checks["no_blocking_fallback"]["detail"])
+        self.assertEqual(checks["presentation_degradations"]["status"], "warn")
+        self.assertIn("face_tracking->center_safe_framing", checks["presentation_degradations"]["detail"])
         for name in ("output_file", "caption_truth_frozen", "camera_pixels_main", "v6_render_path"):
             self.assertEqual(checks[name]["status"], "fail", name)
         run.gate = gate
         self.assertTrue(any(line.startswith("[MIMIR_V6_FALLBACK] face_tracking") for line in run.console_lines()))
+        for subsystem in v6_runtime.BLOCKING_FALLBACKS:
+            with self.subTest(subsystem=subsystem):
+                blocking = v6_runtime.V6Run(enabled=True)
+                blocking.fallback(subsystem, "x", "y")
+                gate = v6_runtime.final_quality_gate(
+                    run=blocking, final_output=Path("missing.mp4"), profile_path=None, truth_path=None,
+                    burned_ass=None, prep=None, main_proof=None, final_proof=None, intro_proof=None,
+                    story_intact=(True, ""), intro_handoff=None, render_status="pro_edit")
+                self.assertIn("no_blocking_fallback", gate["failed"])
+
+    def test_a_degraded_run_is_never_reported_as_a_clean_pass(self) -> None:
+        run = v6_runtime.V6Run(enabled=True)
+        run.fallback("face_tracking", "no faces", "center_safe_framing")
+        passing = mock.patch.multiple(
+            v6_runtime,
+            check_output=lambda *a, **k: v6_runtime._check("output_file", "pass"),
+            check_caption_truth=lambda *a, **k: [v6_runtime._check("caption_truth_frozen", "pass")],
+            check_burned_names=lambda *a, **k: v6_runtime._check("verified_names", "pass"),
+            check_presentation=lambda *a, **k: v6_runtime._check("caption_presentation", "pass"),
+            check_camera=lambda *a, **k: [v6_runtime._check("camera_plan", "pass")],
+            check_geometry=lambda *a, **k: v6_runtime._check("story_regions_visible", "pass"),
+        )
+        prep = mock.Mock(presentation_ass=Path("p.ass"))
+        with passing:
+            gate = v6_runtime.final_quality_gate(
+                run=run, final_output=Path("f.mp4"), profile_path=None, truth_path=None, burned_ass=None, prep=prep,
+                main_proof={"status": "passed"}, final_proof={"status": "passed"}, intro_proof=None,
+                story_intact=(True, "ok"), intro_handoff={"status": "verified"}, render_status="pro_edit",
+                qc_rows=[{"check": "caption_words_timing", "status": "pass"}])
+            self.assertEqual(gate["status"], "passed_with_warnings")
+            self.assertEqual(gate["warnings"], ["presentation_degradations"])
+            failing_qc = v6_runtime.final_quality_gate(
+                run=run, final_output=Path("f.mp4"), profile_path=None, truth_path=None, burned_ass=None, prep=prep,
+                main_proof={"status": "passed"}, final_proof={"status": "passed"}, intro_proof=None,
+                story_intact=(True, "ok"), intro_handoff={"status": "verified"}, render_status="pro_edit",
+                qc_rows=[{"check": "no_captions_in_intro", "status": "fail"}])
+            self.assertEqual(failing_qc["status"], v6_runtime.GATE_FAILED)
 
     def test_final_proof_is_never_a_pass_when_the_main_render_verified_nothing(self) -> None:
         self.assertIsNone(v6_runtime.untraceable_final_proof({"status": "passed"}))

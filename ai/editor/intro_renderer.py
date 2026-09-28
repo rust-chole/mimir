@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 try:
     import winreg
@@ -29,7 +30,7 @@ FINAL_PREVIEWS_DIR = VOD_OUTPUT_DIR / "final_previews"
 # RENDER CONFIG
 # ============================================================
 
-RENDERER_VERSION = 10
+RENDERER_VERSION = 11
 
 # Renderer also enforces the analyzer quality gate.
 MIN_RENDER_SCORE = 8.0
@@ -40,8 +41,11 @@ VIDEO_CRF = "18"
 PIXEL_FORMAT = "yuv420p"
 
 # Final output is rebuilt from two sources:
-# 1) clean edited clip -> teaser segment + neon hook (NO normal captions)
-# 2) captioned preview -> full main clip with normal dynamic captions
+# 1) clean edited clip -> teaser segment + optional neon hook (NO normal captions)
+# 2) captioned preview -> main clip with normal dynamic captions
+# joined by a HARD CUT: no normal caption can bleed into the cold open through
+# a dissolve, and the final clock is exact:
+#     final_t = intro_duration + (paced_t - main_restart)
 AUDIO_SAMPLE_RATE = 48000
 AUDIO_BITRATE = "192k"
 
@@ -62,10 +66,10 @@ PREFERRED_MAX_DISPLAY_DURATION = 2.45
 # Hook'u teaser'ın son nefesine kadar taşımıyoruz; transition öncesi temiz alan bırak.
 TEASER_END_CLEARANCE = 0.12
 
-# Teaser -> main restart geçişi. Kısa tutulur; edit hissini öldürmez.
-SMOOTH_TRANSITION_SECONDS = 0.16
-MIN_TRANSITION_SECONDS = 0.08
-MAX_TRANSITION_SECONDS = 0.22
+# The restart is a hard cut (see calculate_transition_duration). The audio
+# gets only a click-free micro fade at the splice; it never changes duration.
+AUDIO_DECLICK_OUT_SECONDS = 0.010
+AUDIO_DECLICK_IN_SECONDS = 0.006
 
 # Text reveal begins almost instantly.
 LINE_1_DELAY = 0.015
@@ -83,6 +87,10 @@ POST_INTRO_GAP_TRIGGER_SECONDS = 1.60
 POST_INTRO_SPEECH_PREROLL_SECONDS = 0.65
 POST_INTRO_MAX_TRIM_SECONDS = 8.00
 POST_INTRO_MIN_MAIN_SECONDS = 0.80
+# The dead-lead trim may never remove story the editor protected (silent visual
+# setup, causal origin, escalation bridge): the restart stops this far before
+# the first protected range.
+POST_INTRO_PROTECTED_PREROLL_SECONDS = 0.20
 
 
 # ============================================================
@@ -721,16 +729,41 @@ def get_first_caption_start(caption_path: str | Path | None) -> float | None:
     return earliest
 
 
+def protected_edited_ranges(clip_timeline: dict[str, Any] | None) -> list[tuple[float, float]]:
+    """Protected story ranges of a timeline clip on the PACED clip clock.
+
+    Uses the same (render-persisted) cut ranges the pacing cutter rendered."""
+    if not isinstance(clip_timeline, dict):
+        return []
+    from ai.editor import captions, pacing_cutter
+
+    try:
+        cuts = pacing_cutter.normalize_cut_ranges(clip_timeline)
+        protected = pacing_cutter.normalize_protected_ranges(clip_timeline)
+    except Exception:
+        return []
+    result = []
+    for item in protected:
+        start = captions.map_source_to_edited_time(float(item["start"]), cuts)
+        end = captions.map_source_to_edited_time(float(item["end"]), cuts)
+        if end > start:
+            result.append((round(start, 6), round(end, 6)))
+    return sorted(result)
+
+
 def calculate_main_restart_seconds(
     *,
     caption_path: str | Path | None,
     main_duration: float,
+    protected_ranges: Iterable[tuple[float, float]] = (),
 ) -> tuple[float, float | None]:
     """Choose a conservative post-intro main restart point.
 
     The first caption is already built from the exact rendered clip clock. If it
     starts late, remove only the dead lead before it while preserving a short
     preroll. Video, audio and burned-in captions are then trimmed together.
+    Story the editor protected (e.g. a silent physical setup before anyone
+    speaks) is never trimmed: the restart stops before the first protected range.
     """
     first_caption = get_first_caption_start(caption_path)
     if first_caption is None or first_caption <= POST_INTRO_GAP_TRIGGER_SECONDS:
@@ -740,11 +773,47 @@ def calculate_main_restart_seconds(
     desired = min(desired, POST_INTRO_MAX_TRIM_SECONDS)
     safe_max = max(0.0, float(main_duration) - POST_INTRO_MIN_MAIN_SECONDS)
     restart = min(desired, safe_max)
+    for start, end in protected_ranges:
+        if float(end) > 0.0 and float(start) < restart:
+            restart = min(restart, max(0.0, float(start) - POST_INTRO_PROTECTED_PREROLL_SECONDS))
 
     if restart < 0.05:
         restart = 0.0
 
     return round(restart, 6), first_caption
+
+
+def compute_intro_clock(
+    teaser: dict[str, Any],
+    *,
+    clip_timeline: dict[str, Any] | None,
+    caption_path: str | Path | None,
+    clean_duration: float,
+    main_duration: float,
+    fps: float,
+) -> dict[str, Any]:
+    """THE intro clock (renderer, Pro Edit intro timeline and pipeline guard all use it).
+
+    Frame-exact cut points: the video trim and the audio trim remove the same
+    instant, so audio never drifts against picture across the splice."""
+    protected = protected_edited_ranges(clip_timeline)
+    restart, first_caption = calculate_main_restart_seconds(
+        caption_path=caption_path, main_duration=float(main_duration), protected_ranges=protected)
+    restart = snap_to_frame(restart, fps)
+    start, end = get_teaser_bounds(teaser=teaser, edited_duration=float(clean_duration))
+    start = snap_to_frame(start, fps)
+    end = min(float(clean_duration), snap_to_frame(end, fps))
+    if end <= start:
+        raise RuntimeError("Teaser kesim aralığı frame grid'inde boş kaldı.")
+    return {
+        "teaser_start": start,
+        "teaser_end": end,
+        "teaser_duration": round(end - start, 6),
+        "main_restart": restart,
+        "first_caption": first_caption,
+        "transition": calculate_transition_duration(end - start, float(main_duration) - restart),
+        "protected": protected,
+    }
 
 
 def get_analyzer_intro_duration(intro: dict[str, Any]) -> float:
@@ -1167,27 +1236,21 @@ def calculate_transition_duration(
     teaser_duration: float,
     main_duration: float,
 ) -> float:
-    """
-    Very short crossfade: enough to remove the harsh splice without turning
-    the edit into a slow cinematic dissolve.
-    """
+    """The cold open ends with a HARD restart into the story.
 
-    safe_max = min(
-        MAX_TRANSITION_SECONDS,
-        max(0.0, teaser_duration * 0.22),
-        max(0.0, main_duration * 0.22),
-    )
+    A dissolve would blend the captioned main (normal speech captions) into the
+    last frames of the cold open and soften the restart the format relies on.
+    Kept as a function so every clock (Pro Edit intro timeline, final QC,
+    meme placement) reads the same value from one place."""
+    del teaser_duration, main_duration
+    return 0.0
 
-    if safe_max < MIN_TRANSITION_SECONDS:
-        return 0.0
 
-    return round(
-        min(
-            SMOOTH_TRANSITION_SECONDS,
-            safe_max,
-        ),
-        3,
-    )
+def snap_to_frame(seconds: float, fps: float) -> float:
+    """Nearest frame boundary: video and audio trims then cut the same instant."""
+    if fps <= 0:
+        return round(float(seconds), 6)
+    return round(round(float(seconds) * fps) / fps, 6)
 
 
 def build_filter_complex(
@@ -1205,6 +1268,7 @@ def build_filter_complex(
     fps_value = f"{fps:.6f}"
     teaser_duration = max(0.0, teaser_end - teaser_start)
 
+    hook_filter = f"subtitles=filename='{ass_path}'," if ass_path else ""
     teaser_video = (
         f"[0:v]"
         f"trim=start={teaser_start:.6f}:end={teaser_end:.6f},"
@@ -1212,7 +1276,7 @@ def build_filter_complex(
         f"scale={width}:{height}:flags=lanczos,"
         f"setsar=1,"
         f"format={PIXEL_FORMAT},"
-        f"subtitles=filename='{ass_path}',"
+        f"{hook_filter}"
         f"setsar=1,"
         f"settb=AVTB,"
         f"setpts=N/({fps_value}*TB),"
@@ -1246,6 +1310,7 @@ def build_filter_complex(
     # Extremely short clips: keep deterministic concat instead of invalid xfade.
     if transition_duration <= 0.0:
         if edited_has_audio and main_has_audio:
+            declick_out = max(0.0, teaser_duration - AUDIO_DECLICK_OUT_SECONDS)
             audio_filters = (
                 f"[0:a]"
                 f"atrim=start={teaser_start:.6f}:end={teaser_end:.6f},"
@@ -1253,7 +1318,10 @@ def build_filter_complex(
                 f"aresample={AUDIO_SAMPLE_RATE},"
                 f"aformat=sample_fmts=fltp:"
                 f"sample_rates={AUDIO_SAMPLE_RATE}:"
-                f"channel_layouts=stereo"
+                f"channel_layouts=stereo,"
+                f"apad=whole_dur={teaser_duration:.6f},"
+                f"atrim=end={teaser_duration:.6f},"
+                f"afade=t=out:st={declick_out:.6f}:d={AUDIO_DECLICK_OUT_SECONDS:.6f}"
                 f"[teaser_a];"
 
                 f"[1:a]"
@@ -1262,7 +1330,8 @@ def build_filter_complex(
                 f"aresample={AUDIO_SAMPLE_RATE},"
                 f"aformat=sample_fmts=fltp:"
                 f"sample_rates={AUDIO_SAMPLE_RATE}:"
-                f"channel_layouts=stereo"
+                f"channel_layouts=stereo,"
+                f"afade=t=in:st=0:d={AUDIO_DECLICK_IN_SECONDS:.6f}"
                 f"[main_a];"
             )
 
@@ -1380,6 +1449,19 @@ def intro_quality_status(
         {},
     )
 
+    # A strong peak with no headline beats a bad headline: an intro whose copy
+    # gate found no truthful, grounded line renders the moving peak alone.
+    if (
+        isinstance(quality_gate, dict)
+        and quality_gate.get("no_headline") is True
+        and not str(intro.get("intro_text", "")).strip()
+    ):
+        return (
+            True,
+            score,
+            "no_headline",
+        )
+
     locked_intro_override = bool(
         isinstance(quality_gate, dict)
         and quality_gate.get("locked_intro_override") is True
@@ -1447,8 +1529,9 @@ def render_clip(
         )
 
     text = clean_hook_text(str(intro.get("intro_text", "")))
+    no_headline = gate_reason == "no_headline"
 
-    if not text:
+    if not text and not no_headline:
         raise RuntimeError("intro_text boş.")
 
     # Teaser CLEAN edited clip'ten gelir -> normal dynamic caption YOK.
@@ -1481,20 +1564,32 @@ def render_clip(
 
     edited_info = get_video_info(edited_clip)
     main_info = get_video_info(captioned_preview)
+    fps = float(main_info["fps"])
 
-    main_restart, first_caption_start = calculate_main_restart_seconds(
-        caption_path=caption_path,
-        main_duration=float(main_info["duration"]),
+    clip_timeline = next(
+        (
+            item for item in timeline.get("timelines", []) or []
+            if isinstance(item, dict) and int(item.get("clip_index", -1)) == int(clip_index)
+        ),
+        None,
     )
+    clock = compute_intro_clock(
+        teaser,
+        clip_timeline=clip_timeline,
+        caption_path=caption_path,
+        clean_duration=float(edited_info["duration"]),
+        main_duration=float(main_info["duration"]),
+        fps=fps,
+    )
+    protected = clock["protected"]
+    main_restart = float(clock["main_restart"])
+    first_caption_start = clock["first_caption"]
     main_effective_duration = max(
         0.0,
         float(main_info["duration"]) - main_restart,
     )
-
-    teaser_start, teaser_end = get_teaser_bounds(
-        teaser=teaser,
-        edited_duration=float(edited_info["duration"]),
-    )
+    teaser_start = float(clock["teaser_start"])
+    teaser_end = float(clock["teaser_end"])
 
     # LOCKED PEAK VALIDATION: Ensure the rendered teaser covers the locked peak
     locked_peak = teaser.get("locked_peak", {})
@@ -1529,19 +1624,22 @@ def render_clip(
 
     width = int(main_info["width"])
     height = int(main_info["height"])
-    fps = float(main_info["fps"])
 
     font_name = detect_font()
 
-    ass_file = save_intro_ass(
-        intro_json_path=intro_json_path,
-        clip_index=clip_index,
-        text=text,
-        display_duration=display_duration,
-        width=width,
-        height=height,
-        font_name=font_name,
-    )
+    ass_file: Path | None = None
+    if text:
+        ass_file = save_intro_ass(
+            intro_json_path=intro_json_path,
+            clip_index=clip_index,
+            text=text,
+            display_duration=display_duration,
+            width=width,
+            height=height,
+            font_name=font_name,
+        )
+    else:
+        display_duration = 0.0
 
     output_path = get_output_path(
         timeline=timeline,
@@ -1552,7 +1650,7 @@ def render_clip(
     filter_complex, maps = build_filter_complex(
         teaser_start=teaser_start,
         teaser_end=teaser_end,
-        ass_path=escape_filter_path(ass_file),
+        ass_path=escape_filter_path(ass_file) if ass_file is not None else "",
         width=width,
         height=height,
         fps=fps,
@@ -1580,7 +1678,7 @@ def render_clip(
     print(f"🔥 Teaser cut    : {teaser_start:.3f} → {teaser_end:.3f}s")
     print(f"🔥 Teaser süre   : {teaser_duration:.3f}s")
     print(f"📝 Neon süre     : {display_duration:.3f}s")
-    print(f"🌊 Transition    : {transition_duration:.3f}s smooth crossfade")
+    print("🌊 Restart       : hard cut (no dissolve; normal captions start only after it)")
     if main_restart > 0.0:
         lead_after_restart = (
             max(0.0, float(first_caption_start) - main_restart)
@@ -1596,12 +1694,13 @@ def render_clip(
     print("🚫 Teaser altyazı: YOK")
     print("✅ Main altyazı  : VAR")
     print(
-        "🎬 Yapı          : CLEAN TEASER + HOOK → SMOOTH MAIN RESTART "
-        f"{main_restart:.2f}s"
+        "🎬 Yapı          : CLEAN MOVING PEAK "
+        + ("+ HOOK " if text else "(no headline) ")
+        + f"→ HARD RESTART {main_restart:.2f}s"
     )
     print(f"📥 Clean teaser source:\n{edited_clip}")
     print(f"📥 Captioned main:\n{captioned_preview}")
-    print(f"📝 Hook ASS:\n{ass_file}")
+    print(f"📝 Hook ASS:\n{ass_file if ass_file is not None else '(none)'}")
     print()
     print("🎞️ Render başlıyor...")
 
@@ -1637,11 +1736,12 @@ def render_clip(
             ]
         )
 
+    temp_output = output_path.with_name(output_path.stem + ".rendering" + output_path.suffix)
     command.extend(
         [
             "-movflags",
             "+faststart",
-            str(output_path),
+            str(temp_output),
         ]
     )
 
@@ -1657,15 +1757,16 @@ def render_clip(
         raise RuntimeError("FFmpeg bulunamadı.") from error
 
     if result.returncode != 0:
+        temp_output.unlink(missing_ok=True)
         raise RuntimeError(
-            "FFmpeg Intro Render V8 hatası:\n\n"
-            + result.stderr
+            "FFmpeg intro render hatası:\n\n"
+            + result.stderr[-4000:]
         )
 
-    if not output_path.exists():
-        raise RuntimeError("Final intro preview V8 oluşmadı.")
+    if not temp_output.exists():
+        raise RuntimeError("Final intro preview oluşmadı.")
 
-    actual_info = get_video_info(output_path)
+    actual_info = get_video_info(temp_output)
     actual_duration = float(actual_info["duration"])
     difference = abs(actual_duration - expected_duration)
 
@@ -1673,13 +1774,91 @@ def render_clip(
     print(f"✅ Expected final : {expected_duration:.3f}s")
     print(f"✅ Actual final   : {actual_duration:.3f}s")
 
-    if difference > 0.30:
-        print(f"⚠️ Duration farkı: {difference:.3f}s")
+    tolerance = 2.0 / max(1.0, fps) + 0.05
+    if difference > tolerance:
+        temp_output.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Intro composition clock mismatch: rendered {actual_duration:.3f}s, expected "
+            f"{expected_duration:.3f}s (intro {teaser_duration:.3f}s + main {main_effective_duration:.3f}s)."
+        )
+
+    os.replace(temp_output, output_path)
+    write_final_timeline(
+        output_path,
+        {
+            "version": 1,
+            "kind": "mimir_final_timeline",
+            "renderer_version": RENDERER_VERSION,
+            "fps": round(fps, 6),
+            "intro": {
+                "source": "clean_paced_clip",
+                "source_path": str(edited_clip),
+                "paced": [round(teaser_start, 6), round(teaser_end, 6)],
+                "duration": round(teaser_duration, 6),
+                "headline": text,
+                "headline_final": [0.0, round(display_duration, 6)] if text else None,
+                "normal_captions": False,
+                "peak": {
+                    key: teaser.get("locked_peak", {}).get(key)
+                    for key in ("peak_start", "peak_end")
+                } if isinstance(teaser.get("locked_peak"), dict) and teaser.get("locked_peak") else None,
+            },
+            "restart": {
+                "transition": "hard_cut",
+                "main_restart_paced": round(main_restart, 6),
+                "first_caption_paced": first_caption_start,
+                "protected_paced": [[round(a, 6), round(b, 6)] for a, b in protected],
+            },
+            "main": {
+                "source_path": str(captioned_preview),
+                "duration": round(float(main_info["duration"]), 6),
+                "effective_duration": round(main_effective_duration, 6),
+            },
+            "mapping": "final_t = intro.duration + (paced_t - restart.main_restart_paced) for paced_t >= restart",
+            "expected_final_duration": round(expected_duration, 6),
+            "rendered_duration": round(actual_duration, 6),
+            "output": str(output_path),
+        },
+    )
 
     print(f"✅ Çıktı:\n{output_path}")
     print("=" * 72)
 
     return output_path
+
+
+def final_timeline_path(output_path: str | Path) -> Path:
+    path = Path(output_path)
+    return path.with_name(path.stem + ".timeline.json")
+
+
+def write_final_timeline(output_path: str | Path, document: dict[str, Any]) -> Path:
+    target = final_timeline_path(output_path)
+    temp = target.with_name(target.name + ".tmp")
+    temp.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, target)
+    return target
+
+
+def load_final_timeline(output_path: str | Path) -> dict[str, Any] | None:
+    target = final_timeline_path(output_path)
+    if not target.is_file():
+        return None
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def paced_to_final(document: dict[str, Any], paced_t: float) -> float | None:
+    """Final-output time of a paced-clip instant in the MAIN story (None: trimmed before the restart)."""
+    intro = document.get("intro", {}) if isinstance(document.get("intro"), dict) else {}
+    restart = document.get("restart", {}) if isinstance(document.get("restart"), dict) else {}
+    start = float(restart.get("main_restart_paced", 0.0) or 0.0)
+    if float(paced_t) < start - 1e-6:
+        return None
+    return float(intro.get("duration", 0.0) or 0.0) + float(paced_t) - start
 
 
 
