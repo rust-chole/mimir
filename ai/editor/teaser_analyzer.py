@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -37,7 +37,7 @@ TEASER_DIR = (
 TEASER_ANALYZER_VERSION = 1
 TEASER_ANALYZER_REVISION = 6
 
-# Ã‡ok kÄ±sa tek kelimelik saÃ§ma teaserlarÄ± engellemek iÃ§in.
+# Çok kısa tek kelimelik saçma teaserları engellemek için.
 MIN_TEASER_DURATION = 0.85
 PREFERRED_MIN_TEASER_DURATION = 2.60
 WEAK_PEAK_MIN_TEASER_DURATION = 3.20
@@ -46,15 +46,15 @@ STRONG_PEAK_MIN_TEASER_DURATION = 2.35
 WEAK_PEAK_THRESHOLD = 0.62
 STRONG_PEAK_THRESHOLD = 0.78
 
-# AI yanlÄ±ÅŸlÄ±kla uzun bir konuÅŸmayÄ± teaser yapmasÄ±n.
-# Bu sabit hedef sÃ¼re DEÄÄ°L, sadece gÃ¼venlik limiti.
+# AI yanlışlıkla uzun bir konuşmayı teaser yapmasın.
+# Bu sabit hedef süre DEĞİL, sadece güvenlik limiti.
 MAX_TEASER_DURATION = 6.50
 
-# GÃ¼Ã§lÃ¼ sayÄ±lmasÄ± iÃ§in.
+# Güçlü sayılması için.
 RECOMMENDED_SCORE = 7.0
 
-# Teaser kesilirken konuÅŸmanÄ±n Ã§ok sert baÅŸlamamasÄ± iÃ§in
-# mÃ¼mkÃ¼n olan sessizlikten kÃ¼Ã§Ã¼k doÄŸal handle alÄ±yoruz.
+# Teaser kesilirken konuşmanın çok sert başlamaması için
+# mümkün olan sessizlikten küçük doğal handle alıyoruz.
 MAX_LEAD_PADDING = 0.35
 
 MAX_TAIL_PADDING = 0.65
@@ -175,9 +175,9 @@ You are selecting a COLD OPEN / TEASER from an already selected clip.
 The final short will be edited like this:
 
     [TEASER FROM A STRONG LATER MOMENT]
-                    â†“
+                    ↓
               hard restart
-                    â†“
+                    ↓
     [THE MAIN CLIP FROM ITS REAL BEGINNING]
 
 The teaser scene will therefore appear once at the beginning and then
@@ -300,9 +300,9 @@ Do NOT select the first line merely because it is energetic.
 The purpose is:
 
     strong future moment
-        â†“
+        ↓
     restart
-        â†“
+        ↓
     viewer watches to understand how we reach it
 
 
@@ -487,7 +487,7 @@ def load_json(
     if not path.exists():
 
         raise FileNotFoundError(
-            f"JSON bulunamadÄ±:\n{path}"
+            f"JSON bulunamadı:\n{path}"
         )
 
     with path.open(
@@ -505,7 +505,7 @@ def load_json(
     ):
 
         raise RuntimeError(
-            f"JSON root object deÄŸil:\n{path}"
+            f"JSON root object değil:\n{path}"
         )
 
     return data
@@ -553,7 +553,7 @@ def validate_timeline(
     ) != 3:
 
         raise RuntimeError(
-            "Teaser Analyzer yalnÄ±zca Timeline V3 ile Ã§alÄ±ÅŸÄ±r."
+            "Teaser Analyzer yalnızca Timeline V3 ile çalışır."
         )
 
     timelines = timeline.get(
@@ -569,7 +569,7 @@ def validate_timeline(
     ):
 
         raise RuntimeError(
-            "Timeline V3 iÃ§inde 'timelines' listesi bulunamadÄ±."
+            "Timeline V3 içinde 'timelines' listesi bulunamadı."
         )
 
     source = timeline.get(
@@ -582,7 +582,7 @@ def validate_timeline(
     ):
 
         raise RuntimeError(
-            "Timeline source bilgisi bulunamadÄ±."
+            "Timeline source bilgisi bulunamadı."
         )
 
 
@@ -607,7 +607,7 @@ def validate_transcript(
     ):
 
         raise RuntimeError(
-            "Transcript word timestamps iÃ§ermiyor."
+            "Transcript word timestamps içermiyor."
         )
 
     source = transcript.get(
@@ -620,7 +620,7 @@ def validate_transcript(
     ):
 
         raise RuntimeError(
-            "Transcript source bilgisi bulunamadÄ±."
+            "Transcript source bilgisi bulunamadı."
         )
 
 
@@ -674,7 +674,7 @@ def get_clip(
             return clip
 
     raise IndexError(
-        f"clip_index={clip_index} bulunamadÄ±."
+        f"clip_index={clip_index} bulunamadı."
     )
 
 
@@ -818,7 +818,7 @@ def source_to_edited_time(
             ]
         )
 
-        # Timestamp cuttan Ã¶nce.
+        # Timestamp cuttan önce.
         if (
             source_time
             <= cut_start
@@ -838,7 +838,7 @@ def source_to_edited_time(
 
             continue
 
-        # Timestamp cut'Ä±n iÃ§inde.
+        # Timestamp cut'ın içinde.
         removed += (
             source_time
             - cut_start
@@ -1126,7 +1126,7 @@ def build_available_words(
             + absolute_end
         ) / 2.0
 
-        # Sadece bu clip iÃ§indeki kelimeler.
+        # Sadece bu clip içindeki kelimeler.
         if not (
             absolute_clip_start
             <= midpoint
@@ -1145,8 +1145,8 @@ def build_available_words(
             - absolute_clip_start
         )
 
-        # Otomatik pacing cut ile silinmiÅŸ kelimeyi
-        # teaser adayÄ± yapma.
+        # Otomatik pacing cut ile silinmiş kelimeyi
+        # teaser adayı yapma.
         if word_is_removed(
             relative_start=relative_start,
             relative_end=relative_end,
@@ -1200,7 +1200,7 @@ def build_available_words(
     if not result:
 
         raise RuntimeError(
-            "Bu clip iÃ§in kullanÄ±labilir transcript kelimesi bulunamadÄ±."
+            "Bu clip için kullanılabilir transcript kelimesi bulunamadı."
         )
 
     return result
@@ -1431,7 +1431,7 @@ Remember:
 
     print()
     print(
-        "ğŸ§  Luna teaser anÄ±nÄ± seÃ§iyor..."
+        "🧠 Luna teaser anını seçiyor..."
     )
 
     reasoning_effort = (
@@ -1441,7 +1441,7 @@ Remember:
     )
 
     print(
-        f"ğŸ¤– Model: {TEASER_MODEL} "
+        f"🤖 Model: {TEASER_MODEL} "
         f"[{reasoning_effort}]"
     )
 
@@ -1481,7 +1481,7 @@ Remember:
     if not output_text:
 
         raise RuntimeError(
-            "AI boÅŸ teaser analizi dÃ¶ndÃ¼rdÃ¼."
+            "AI boş teaser analizi döndürdü."
         )
 
     try:
@@ -1493,7 +1493,7 @@ Remember:
     except json.JSONDecodeError as error:
 
         raise RuntimeError(
-            "AI geÃ§ersiz teaser JSON dÃ¶ndÃ¼rdÃ¼:\n\n"
+            "AI geçersiz teaser JSON döndürdü:\n\n"
             + output_text
         ) from error
 
@@ -1633,14 +1633,14 @@ def get_selected_words(
     if start_position is None:
 
         raise RuntimeError(
-            f"AI geÃ§ersiz start_word_id seÃ§ti: "
+            f"AI geçersiz start_word_id seçti: "
             f"{start_word_id}"
         )
 
     if end_position is None:
 
         raise RuntimeError(
-            f"AI geÃ§ersiz end_word_id seÃ§ti: "
+            f"AI geçersiz end_word_id seçti: "
             f"{end_word_id}"
         )
 
@@ -1661,7 +1661,7 @@ def get_selected_words(
     if not selected:
 
         raise RuntimeError(
-            "Teaser word range boÅŸ."
+            "Teaser word range boş."
         )
 
     return selected
@@ -1750,7 +1750,7 @@ def calculate_natural_bounds(
             )
         )
 
-        # Sadece gerÃ§ekten var olan sessizlikten handle al.
+        # Sadece gerçekten var olan sessizlikten handle al.
         if gap_before > 0:
 
             start -= min(
@@ -1912,11 +1912,11 @@ def build_teaser_result(
             start_word_id = int(ai_result["start_word_id"])
             end_word_id = int(ai_result["end_word_id"])
         except (KeyError, TypeError, ValueError) as error:
-            raise RuntimeError("AI word ID dÃ¶ndÃ¼rmedi.") from error
+            raise RuntimeError("AI word ID döndürmedi.") from error
 
         if start_word_id < 0 or end_word_id < 0:
             raise RuntimeError(
-                "spoken_phrase seÃ§ildi ama geÃ§erli word ID verilmedi."
+                "spoken_phrase seçildi ama geçerli word ID verilmedi."
             )
 
         selected_words = get_selected_words(
@@ -2007,21 +2007,21 @@ def build_teaser_result(
     warnings: list[str] = []
     if not duration_valid:
         warnings.append(
-            "Teaser duration gÃ¼venli aralÄ±k dÄ±ÅŸÄ±nda: "
+            "Teaser duration güvenli aralık dışında: "
             f"{teaser_duration:.2f}s"
         )
     if teaser_duration < PREFERRED_MIN_TEASER_DURATION:
         warnings.append(
-            "Teaser tercih edilen 2.2s multimodal hissin altÄ±nda kaldÄ±."
+            "Teaser tercih edilen 2.2s multimodal hissin altında kaldı."
         )
     if source_relative_start < 0.75:
         warnings.append(
-            "Teaser ana clip'in baÅŸlangÄ±cÄ±na Ã§ok yakÄ±n. Cold-open tekrar etkisi zayÄ±f olabilir."
+            "Teaser ana clip'in başlangıcına çok yakın. Cold-open tekrar etkisi zayıf olabilir."
         )
     if selection_mode == "peak_window" and selected_peak is not None:
         if not bool(selected_peak.get("multimodal")):
             warnings.append(
-                "Peak window yalnÄ±z tek modaliteyle destekleniyor; Terra gerekÃ§e ile seÃ§ti."
+                "Peak window yalnız tek modaliteyle destekleniyor; Terra gerekçe ile seçti."
             )
 
     peak_alignment_score = clamp(
@@ -2118,15 +2118,15 @@ def analyze_clip(
     )
 
     print(
-        f"ğŸ¬ CLIP {clip_index}"
+        f"🎬 CLIP {clip_index}"
     )
 
     print(
-        f"ğŸ“› {clip.get('title', '')}"
+        f"📛 {clip.get('title', '')}"
     )
 
     print(
-        f"ğŸ“ Available words: "
+        f"📝 Available words: "
         f"{len(available_words)}"
     )
 
@@ -2150,7 +2150,7 @@ def analyze_clip(
 
     peak_candidates = peak_support.get("candidates", [])
     print(
-        f"âš¡ Intro peak candidates: {len(peak_candidates) if isinstance(peak_candidates, list) else 0} "
+        f"⚡ Intro peak candidates: {len(peak_candidates) if isinstance(peak_candidates, list) else 0} "
         f"(audio={peak_support.get('audio_available')}, visual={peak_support.get('visual_available')})"
     )
 
@@ -2168,7 +2168,7 @@ def analyze_clip(
         available_words,
     )
     if review_note:
-        print("ğŸ” Luna multimodal peak review yapÄ±yor...")
+        print("🔁 Luna multimodal peak review yapıyor...")
         ai_result = request_teaser_choice(
             clip=clip,
             available_words=available_words,
@@ -2185,36 +2185,36 @@ def analyze_clip(
 
     print()
     print(
-        f"ğŸ”¥ Teaser: "
+        f"🔥 Teaser: "
         f"{result['teaser_text']}"
     )
 
     print(
-        f"â­ Score: "
+        f"⭐ Score: "
         f"{result['score']}/10"
     )
 
     print(
-        f"âš¡ Mode: {result.get('selection_mode')} | peak={result.get('peak_id')} | "
+        f"⚡ Mode: {result.get('selection_mode')} | peak={result.get('peak_id')} | "
         f"alignment={result.get('peak_alignment_score')}/10"
     )
 
     print(
-        f"âœ… Recommended: "
+        f"✅ Recommended: "
         f"{result['recommended']}"
     )
 
     print(
-        f"ğŸï¸ Edited preview: "
+        f"🎞️ Edited preview: "
         f"{result['edited']['teaser_start']:.2f}"
-        f" â†’ "
+        f" → "
         f"{result['edited']['teaser_end']:.2f}"
         f" "
         f"({result['edited']['duration']:.2f}s)"
     )
 
     print(
-        f"â“ Viewer question: "
+        f"❓ Viewer question: "
         f"{result['viewer_question']}"
     )
 
@@ -2223,7 +2223,7 @@ def analyze_clip(
     ]:
 
         print(
-            "âš ï¸ Warnings:"
+            "⚠️ Warnings:"
         )
 
         for warning in result[
@@ -2468,11 +2468,11 @@ def analyze_teasers(
     )
 
     print(
-        "âœ… TEASER ANALYZER TAMAMLANDI"
+        "✅ TEASER ANALYZER TAMAMLANDI"
     )
 
     print(
-        f"ğŸ“‚ {output_path}"
+        f"📂 {output_path}"
     )
 
     print(
@@ -2515,7 +2515,7 @@ if __name__ == "__main__":
 
     clip_input = input(
         "Clip index "
-        "(boÅŸ = tÃ¼m klipler): "
+        "(boş = tüm klipler): "
     ).strip()
 
     try:
@@ -2540,7 +2540,7 @@ if __name__ == "__main__":
 
         print()
         print(
-            "âŒ TEASER ANALYZER HATASI:"
+            "❌ TEASER ANALYZER HATASI:"
         )
 
         print(

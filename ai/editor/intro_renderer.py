@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -59,10 +59,10 @@ DISPLAY_EXTENSION_SECONDS = 0.30
 MIN_DISPLAY_DURATION = 1.70
 PREFERRED_MAX_DISPLAY_DURATION = 2.45
 
-# Hook'u teaser'Ä±n son nefesine kadar taÅŸÄ±mÄ±yoruz; transition Ã¶ncesi temiz alan bÄ±rak.
+# Hook'u teaser'ın son nefesine kadar taşımıyoruz; transition öncesi temiz alan bırak.
 TEASER_END_CLEARANCE = 0.12
 
-# Teaser -> main restart geÃ§iÅŸi. KÄ±sa tutulur; edit hissini Ã¶ldÃ¼rmez.
+# Teaser -> main restart geçişi. Kısa tutulur; edit hissini öldürmez.
 SMOOTH_TRANSITION_SECONDS = 0.16
 MIN_TRANSITION_SECONDS = 0.08
 MAX_TRANSITION_SECONDS = 0.22
@@ -170,13 +170,13 @@ def load_json(path: str | Path) -> dict[str, Any]:
     path = Path(path).resolve()
 
     if not path.exists():
-        raise FileNotFoundError(f"JSON bulunamadÄ±:\n{path}")
+        raise FileNotFoundError(f"JSON bulunamadı:\n{path}")
 
     with path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
     if not isinstance(data, dict):
-        raise RuntimeError(f"JSON root object deÄŸil:\n{path}")
+        raise RuntimeError(f"JSON root object değil:\n{path}")
 
     return data
 
@@ -203,13 +203,13 @@ def validate_intro_package(package: dict[str, Any]) -> None:
 
     if not isinstance(intros, list) or not intros:
         raise RuntimeError(
-            "Intro JSON iÃ§inde 'intros' listesi bulunamadÄ±."
+            "Intro JSON içinde 'intros' listesi bulunamadı."
         )
 
     inputs = package.get("inputs")
 
     if not isinstance(inputs, dict):
-        raise RuntimeError("Intro JSON iÃ§inde 'inputs' bulunamadÄ±.")
+        raise RuntimeError("Intro JSON içinde 'inputs' bulunamadı.")
 
     for key in ("timeline", "teaser"):
         value = inputs.get(key)
@@ -224,19 +224,19 @@ def validate_timeline(timeline: dict[str, Any]) -> None:
         raise RuntimeError("Timeline V3 bekleniyordu.")
 
     if not isinstance(timeline.get("source"), dict):
-        raise RuntimeError("Timeline source bilgisi bulunamadÄ±.")
+        raise RuntimeError("Timeline source bilgisi bulunamadı.")
 
 
 
 def validate_teaser_package(package: dict[str, Any]) -> None:
     if package.get("version") != 1:
-        raise RuntimeError("Teaser Analyzer V1 Ã§Ä±ktÄ±sÄ± bekleniyordu.")
+        raise RuntimeError("Teaser Analyzer V1 çıktısı bekleniyordu.")
 
     teasers = package.get("teasers")
 
     if not isinstance(teasers, list) or not teasers:
         raise RuntimeError(
-            "Teaser JSON iÃ§inde 'teasers' listesi bulunamadÄ±."
+            "Teaser JSON içinde 'teasers' listesi bulunamadı."
         )
 
 
@@ -262,7 +262,7 @@ def get_intro(
             return intro
 
     raise IndexError(
-        f"Intro JSON iÃ§inde clip_index={clip_index} bulunamadÄ±."
+        f"Intro JSON içinde clip_index={clip_index} bulunamadı."
     )
 
 
@@ -284,7 +284,7 @@ def get_teaser(
             return teaser
 
     raise IndexError(
-        f"Teaser JSON iÃ§inde clip_index={clip_index} bulunamadÄ±."
+        f"Teaser JSON içinde clip_index={clip_index} bulunamadı."
     )
 
 
@@ -303,13 +303,13 @@ def get_referenced_paths(
 
     if not timeline_path.exists():
         raise FileNotFoundError(
-            f"Intro JSON'un referans verdiÄŸi Timeline bulunamadÄ±:\n"
+            f"Intro JSON'un referans verdiği Timeline bulunamadı:\n"
             f"{timeline_path}"
         )
 
     if not teaser_path.exists():
         raise FileNotFoundError(
-            f"Intro JSON'un referans verdiÄŸi Teaser JSON bulunamadÄ±:\n"
+            f"Intro JSON'un referans verdiği Teaser JSON bulunamadı:\n"
             f"{teaser_path}"
         )
 
@@ -334,7 +334,7 @@ def get_video_stem(timeline: dict[str, Any]) -> str:
             return Path(value).stem
 
     raise RuntimeError(
-        "Timeline source iÃ§inde video_stem/video_name/video_path bulunamadÄ±."
+        "Timeline source içinde video_stem/video_name/video_path bulunamadı."
     )
 
 
@@ -347,8 +347,8 @@ def find_edited_clip(
 
     if not directory.exists():
         raise FileNotFoundError(
-            f"Edited clips klasÃ¶rÃ¼ bulunamadÄ±:\n{directory}\n\n"
-            "Ã–nce pacing_cutter Ã§alÄ±ÅŸtÄ±r."
+            f"Edited clips klasörü bulunamadı:\n{directory}\n\n"
+            "Önce pacing_cutter çalıştır."
         )
 
     matches = sorted(
@@ -367,8 +367,8 @@ def find_edited_clip(
         )
 
     raise FileNotFoundError(
-        f"Edited clip bulunamadÄ±:\n{directory}\n\n"
-        "Ã–nce pacing_cutter Ã§alÄ±ÅŸtÄ±r."
+        f"Edited clip bulunamadı:\n{directory}\n\n"
+        "Önce pacing_cutter çalıştır."
     )
 
 
@@ -381,8 +381,8 @@ def find_captioned_preview(
 
     if not directory.exists():
         raise FileNotFoundError(
-            f"Captioned preview klasÃ¶rÃ¼ bulunamadÄ±:\n{directory}\n\n"
-            "Ã–nce caption_renderer Ã§alÄ±ÅŸtÄ±r."
+            f"Captioned preview klasörü bulunamadı:\n{directory}\n\n"
+            "Önce caption_renderer çalıştır."
         )
 
     exact = (
@@ -414,8 +414,8 @@ def find_captioned_preview(
         )
 
     raise FileNotFoundError(
-        f"Captioned preview bulunamadÄ±:\n{directory}\n\n"
-        "Ã–nce caption_renderer Ã§alÄ±ÅŸtÄ±r."
+        f"Captioned preview bulunamadı:\n{directory}\n\n"
+        "Önce caption_renderer çalıştır."
     )
 
 
@@ -428,7 +428,7 @@ def run_ffprobe_json(video_path: str | Path) -> dict[str, Any]:
     path = Path(video_path).resolve()
 
     if not path.exists():
-        raise FileNotFoundError(f"Video bulunamadÄ±:\n{path}")
+        raise FileNotFoundError(f"Video bulunamadı:\n{path}")
 
     try:
         result = subprocess.run(
@@ -449,21 +449,21 @@ def run_ffprobe_json(video_path: str | Path) -> dict[str, Any]:
         )
     except FileNotFoundError as error:
         raise RuntimeError(
-            "ffprobe bulunamadÄ±. FFmpeg kurulumunu kontrol et."
+            "ffprobe bulunamadı. FFmpeg kurulumunu kontrol et."
         ) from error
 
     if result.returncode != 0:
         raise RuntimeError(
-            "ffprobe video bilgisini okuyamadÄ±:\n" + result.stderr
+            "ffprobe video bilgisini okuyamadı:\n" + result.stderr
         )
 
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as error:
-        raise RuntimeError("ffprobe geÃ§ersiz JSON dÃ¶ndÃ¼rdÃ¼.") from error
+        raise RuntimeError("ffprobe geçersiz JSON döndürdü.") from error
 
     if not isinstance(data, dict):
-        raise RuntimeError("ffprobe Ã§Ä±ktÄ±sÄ± geÃ§ersiz.")
+        raise RuntimeError("ffprobe çıktısı geçersiz.")
 
     return data
 
@@ -514,7 +514,7 @@ def get_video_info(video_path: str | Path) -> dict[str, Any]:
                 height = int(stream["height"])
             except (KeyError, TypeError, ValueError) as error:
                 raise RuntimeError(
-                    "Video Ã§Ã¶zÃ¼nÃ¼rlÃ¼ÄŸÃ¼ okunamadÄ±."
+                    "Video çözünürlüğü okunamadı."
                 ) from error
 
             fps = parse_fraction(
@@ -527,7 +527,7 @@ def get_video_info(video_path: str | Path) -> dict[str, Any]:
             has_audio = True
 
     if width is None or height is None:
-        raise RuntimeError("Video stream bulunamadÄ±.")
+        raise RuntimeError("Video stream bulunamadı.")
 
     if fps <= 0:
         fps = 30.0
@@ -535,10 +535,10 @@ def get_video_info(video_path: str | Path) -> dict[str, Any]:
     try:
         duration = float(data.get("format", {}).get("duration", 0))
     except (TypeError, ValueError) as error:
-        raise RuntimeError("Video sÃ¼resi okunamadÄ±.") from error
+        raise RuntimeError("Video süresi okunamadı.") from error
 
     if duration <= 0:
-        raise RuntimeError("Video sÃ¼resi geÃ§ersiz.")
+        raise RuntimeError("Video süresi geçersiz.")
 
     return {
         "width": width,
@@ -613,7 +613,7 @@ def get_teaser_duration(teaser: dict[str, Any]) -> float:
     edited = teaser.get("edited")
 
     if not isinstance(edited, dict):
-        raise RuntimeError("Teaser JSON iÃ§inde edited bilgisi bulunamadÄ±.")
+        raise RuntimeError("Teaser JSON içinde edited bilgisi bulunamadı.")
 
     # Preferred field from Teaser Analyzer V1.
     try:
@@ -630,13 +630,13 @@ def get_teaser_duration(teaser: dict[str, Any]) -> float:
         end = float(edited["teaser_end"])
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError(
-            "Teaser duration hesaplanamadÄ±."
+            "Teaser duration hesaplanamadı."
         ) from error
 
     duration = end - start
 
     if duration <= 0:
-        raise RuntimeError("Teaser duration geÃ§ersiz.")
+        raise RuntimeError("Teaser duration geçersiz.")
 
     return duration
 
@@ -650,7 +650,7 @@ def get_teaser_bounds(
 
     if not isinstance(edited, dict):
         raise RuntimeError(
-            "Teaser JSON iÃ§inde edited bilgisi bulunamadÄ±."
+            "Teaser JSON içinde edited bilgisi bulunamadı."
         )
 
     try:
@@ -658,7 +658,7 @@ def get_teaser_bounds(
         end = float(edited["teaser_end"])
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError(
-            "Teaser edited.teaser_start/end geÃ§ersiz."
+            "Teaser edited.teaser_start/end geçersiz."
         ) from error
 
     start = max(0.0, start)
@@ -666,7 +666,7 @@ def get_teaser_bounds(
 
     if end <= start:
         raise RuntimeError(
-            "Teaser kesim aralÄ±ÄŸÄ± edited clip iÃ§inde geÃ§ersiz."
+            "Teaser kesim aralığı edited clip içinde geçersiz."
         )
 
     return round(start, 6), round(end, 6)
@@ -802,8 +802,8 @@ def clean_hook_text(text: str) -> str:
         str(text)
         .strip()
         .upper()
-        .replace("â€™", "'")
-        .replace("â€˜", "'")
+        .replace("’", "'")
+        .replace("‘", "'")
         .split()
     )
 
@@ -813,7 +813,7 @@ def split_balanced_two_lines(text: str) -> tuple[str, str]:
     words = clean_hook_text(text).split()
 
     if not words:
-        raise RuntimeError("intro_text boÅŸ.")
+        raise RuntimeError("intro_text boş.")
 
     if len(words) <= 2:
         return " ".join(words), ""
@@ -1237,8 +1237,8 @@ def build_filter_complex(
 
     if edited_has_audio != main_has_audio:
         raise RuntimeError(
-            "Edited clip ile captioned preview audio yapÄ±sÄ± uyuÅŸmuyor. "
-            "Ä°kisinde de ses olmalÄ±."
+            "Edited clip ile captioned preview audio yapısı uyuşmuyor. "
+            "İkisinde de ses olmalı."
         )
 
     transition_duration = max(0.0, float(transition_duration))
@@ -1441,7 +1441,7 @@ def render_clip(
 
     if not accepted:
         raise RuntimeError(
-            "Intro kalite kapÄ±sÄ±ndan geÃ§medi: "
+            "Intro kalite kapısından geçmedi: "
             f"{gate_reason}. "
             "No intro is better than a bad intro."
         )
@@ -1449,17 +1449,17 @@ def render_clip(
     text = clean_hook_text(str(intro.get("intro_text", "")))
 
     if not text:
-        raise RuntimeError("intro_text boÅŸ.")
+        raise RuntimeError("intro_text boş.")
 
     # Teaser CLEAN edited clip'ten gelir -> normal dynamic caption YOK.
-    # Main CAPTIONED preview'dan gelir -> restart sonrasÄ± normal caption VAR.
+    # Main CAPTIONED preview'dan gelir -> restart sonrası normal caption VAR.
     # Pipeline may pass the exact edited clip identity. Prefer it over directory
     # discovery so stale/multiple edited variants can never hijack the mandatory intro.
     if edited_clip_path is not None:
         edited_clip = Path(edited_clip_path).expanduser().resolve()
         if not edited_clip.is_file():
             raise FileNotFoundError(
-                f"Pipeline'in verdiÄŸi edited clip bulunamadÄ±:\n{edited_clip}"
+                f"Pipeline'in verdiği edited clip bulunamadı:\n{edited_clip}"
             )
     else:
         edited_clip = find_edited_clip(
@@ -1471,7 +1471,7 @@ def render_clip(
         captioned_preview = Path(captioned_preview_path).expanduser().resolve()
         if not captioned_preview.is_file():
             raise FileNotFoundError(
-                f"Pipeline'in verdiÄŸi captioned preview bulunamadÄ±:\n{captioned_preview}"
+                f"Pipeline'in verdiği captioned preview bulunamadı:\n{captioned_preview}"
             )
     else:
         captioned_preview = find_captioned_preview(
@@ -1570,17 +1570,17 @@ def render_clip(
 
     print()
     print("=" * 72)
-    print(f"âš¡ MIMIR INTRO RENDERER V{RENDERER_VERSION}")
+    print(f"⚡ MIMIR INTRO RENDERER V{RENDERER_VERSION}")
     print("=" * 72)
-    print(f"ğŸï¸ Clip          : {clip_index}")
-    print(f"ğŸ§² Hook text     : {text}")
-    print(f"â­ Terra score   : {intro_score:.1f}/10")
-    print(f"ğŸ›¡ï¸ Quality gate  : >= {MIN_RENDER_SCORE:.1f}/10")
-    print(f"ğŸ”¤ Font          : {font_name}")
-    print(f"ğŸ”¥ Teaser cut    : {teaser_start:.3f} â†’ {teaser_end:.3f}s")
-    print(f"ğŸ”¥ Teaser sÃ¼re   : {teaser_duration:.3f}s")
-    print(f"ğŸ“ Neon sÃ¼re     : {display_duration:.3f}s")
-    print(f"ğŸŒŠ Transition    : {transition_duration:.3f}s smooth crossfade")
+    print(f"🎞️ Clip          : {clip_index}")
+    print(f"🧲 Hook text     : {text}")
+    print(f"⭐ Terra score   : {intro_score:.1f}/10")
+    print(f"🛡️ Quality gate  : >= {MIN_RENDER_SCORE:.1f}/10")
+    print(f"🔤 Font          : {font_name}")
+    print(f"🔥 Teaser cut    : {teaser_start:.3f} → {teaser_end:.3f}s")
+    print(f"🔥 Teaser süre   : {teaser_duration:.3f}s")
+    print(f"📝 Neon süre     : {display_duration:.3f}s")
+    print(f"🌊 Transition    : {transition_duration:.3f}s smooth crossfade")
     if main_restart > 0.0:
         lead_after_restart = (
             max(0.0, float(first_caption_start) - main_restart)
@@ -1588,22 +1588,22 @@ def render_clip(
             else 0.0
         )
         print(
-            f"âœ‚ï¸ Main restart  : {main_restart:.3f}s "
-            f"(ilk caption {float(first_caption_start):.3f}s, preroll â‰ˆ {lead_after_restart:.3f}s)"
+            f"✂️ Main restart  : {main_restart:.3f}s "
+            f"(ilk caption {float(first_caption_start):.3f}s, preroll ≈ {lead_after_restart:.3f}s)"
         )
     else:
-        print("âœ‚ï¸ Main restart  : 0.000s (uzun post-intro gap yok / gÃ¼venli fallback)")
-    print("ğŸš« Teaser altyazÄ±: YOK")
-    print("âœ… Main altyazÄ±  : VAR")
+        print("✂️ Main restart  : 0.000s (uzun post-intro gap yok / güvenli fallback)")
+    print("🚫 Teaser altyazı: YOK")
+    print("✅ Main altyazı  : VAR")
     print(
-        "ğŸ¬ YapÄ±          : CLEAN TEASER + HOOK â†’ SMOOTH MAIN RESTART "
+        "🎬 Yapı          : CLEAN TEASER + HOOK → SMOOTH MAIN RESTART "
         f"{main_restart:.2f}s"
     )
-    print(f"ğŸ“¥ Clean teaser source:\n{edited_clip}")
-    print(f"ğŸ“¥ Captioned main:\n{captioned_preview}")
-    print(f"ğŸ“ Hook ASS:\n{ass_file}")
+    print(f"📥 Clean teaser source:\n{edited_clip}")
+    print(f"📥 Captioned main:\n{captioned_preview}")
+    print(f"📝 Hook ASS:\n{ass_file}")
     print()
-    print("ğŸï¸ Render baÅŸlÄ±yor...")
+    print("🎞️ Render başlıyor...")
 
     command = [
         "ffmpeg",
@@ -1654,29 +1654,29 @@ def render_clip(
             check=False,
         )
     except FileNotFoundError as error:
-        raise RuntimeError("FFmpeg bulunamadÄ±.") from error
+        raise RuntimeError("FFmpeg bulunamadı.") from error
 
     if result.returncode != 0:
         raise RuntimeError(
-            "FFmpeg Intro Render V8 hatasÄ±:\n\n"
+            "FFmpeg Intro Render V8 hatası:\n\n"
             + result.stderr
         )
 
     if not output_path.exists():
-        raise RuntimeError("Final intro preview V8 oluÅŸmadÄ±.")
+        raise RuntimeError("Final intro preview V8 oluşmadı.")
 
     actual_info = get_video_info(output_path)
     actual_duration = float(actual_info["duration"])
     difference = abs(actual_duration - expected_duration)
 
     print()
-    print(f"âœ… Expected final : {expected_duration:.3f}s")
-    print(f"âœ… Actual final   : {actual_duration:.3f}s")
+    print(f"✅ Expected final : {expected_duration:.3f}s")
+    print(f"✅ Actual final   : {actual_duration:.3f}s")
 
     if difference > 0.30:
-        print(f"âš ï¸ Duration farkÄ±: {difference:.3f}s")
+        print(f"⚠️ Duration farkı: {difference:.3f}s")
 
-    print(f"âœ… Ã‡Ä±ktÄ±:\n{output_path}")
+    print(f"✅ Çıktı:\n{output_path}")
     print("=" * 72)
 
     return output_path
@@ -1708,7 +1708,7 @@ def render_all(
 
         if not accepted:
             print(
-                f"â­ï¸ Clip {clip_index}: intro reddedildi "
+                f"⏭️ Clip {clip_index}: intro reddedildi "
                 f"({score:.1f}/10, {gate_reason})."
             )
             continue
@@ -1758,7 +1758,7 @@ def run_renderer(
         or caption_path is not None
     ) and clip_index is None:
         raise ValueError(
-            "Explicit edited/captioned path yalnÄ±z belirli bir clip_index ile kullanÄ±labilir."
+            "Explicit edited/captioned path yalnız belirli bir clip_index ile kullanılabilir."
         )
 
     if clip_index is not None:
@@ -1799,7 +1799,7 @@ if __name__ == "__main__":
     ).strip().strip('"')
 
     clip_input = input(
-        "Clip index (boÅŸ = tÃ¼m Ã¶nerilen klipler): "
+        "Clip index (boş = tüm önerilen klipler): "
     ).strip()
 
     try:
@@ -1812,6 +1812,6 @@ if __name__ == "__main__":
 
     except Exception as error:
         print()
-        print("âŒ INTRO RENDERER V8 HATASI:")
+        print("❌ INTRO RENDERER V8 HATASI:")
         print(error)
 
