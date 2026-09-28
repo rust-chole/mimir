@@ -1275,7 +1275,7 @@ def _write_fallback_meme_slots(
     return _write_json_atomic(
         slot_path,
         {
-            "version": 2,
+            "version": meme_analyzer.MEME_ANALYZER_VERSION,
             "mode": "pipeline_fallback_no_meme",
             "inputs": {
                 "intro": str(intro_path),
@@ -1311,7 +1311,7 @@ def _write_fallback_discovery(
     return _write_json_atomic(
         discovery_path,
         {
-            "version": 1,
+            "version": meme_discovery.DISCOVERY_VERSION,
             "mode": "pipeline_fallback_no_discovery",
             "created_at": _now(),
             "inputs": {"meme_slots": str(slot_path)},
@@ -3960,7 +3960,7 @@ def run_pipeline(
     elif book.reusable(
         "meme_analysis",
         meme_analysis_sig,
-        lambda: _contains_clip(meme_slot_path, "clips", selected_clip_index, 2),
+        lambda: _contains_clip(meme_slot_path, "clips", selected_clip_index, meme_analyzer.MEME_ANALYZER_VERSION),
         output=meme_slot_path,
         freshness=[
             intro_path,
@@ -3986,7 +3986,7 @@ def run_pipeline(
                 clip_index=selected_clip_index,
                 base_video_path=final_preview_path,
             )
-            if not _contains_clip(meme_slot_path, "clips", selected_clip_index, 2):
+            if not _contains_clip(meme_slot_path, "clips", selected_clip_index, meme_analyzer.MEME_ANALYZER_VERSION):
                 raise RuntimeError("Meme slot JSON seçilen klibi içermiyor.")
 
             _stage_done(meme_slot_path)
@@ -4296,24 +4296,39 @@ def run_pipeline(
 
     repairs: list[str] = []
     failed_checks = {row["check"] for row in qc_rows if row["status"] == "fail"}
-    if candidate != final_preview_path and failed_checks & {"effects_clear", "main_matches_render", "main_av_sync"}:
+    # An effect is optional presentation: whatever QC failure a candidate WITH an
+    # effect shows, the bounded repair is to drop the effect (the base is then
+    # re-checked; a failure that was the base's own still rejects).
+    if candidate != final_preview_path and failed_checks:
         repairs.append("drop_effects")
     if "intro_headline" in failed_checks and headline_text:
         repairs.append("drop_headline")
     for repair in (review_doc or {}).get("repairs", []) or []:
         if repair not in repairs:
             repairs.append(repair)
+    if repairs and review_doc is None:
+        # The reviewer only looks at a QC-clean candidate; this one was repaired
+        # after QC failed and is re-checked by QC only. Say so in the gate.
+        review_doc = {"status": "not_run", "reason": "candidate failed QC before review; the repaired "
+                      "candidate is re-checked by QC only", "warnings": [f"not reviewed: QC failed "
+                      f"({', '.join(sorted(failed_checks))}) and was repaired"], "repairs": []}
     if repairs:
         print(f"\n🛠️ Bounded repair (tek tur): {', '.join(repairs)}")
         try:
             if "static_camera" in repairs and pro_prep_ref is not None and pro_prep_ref.ready:
                 static_path = captioned_preview_path.with_name(captioned_preview_path.stem + "_static"
                                                                + captioned_preview_path.suffix)
-                main_render_used = pro_edit_pkg.stage.render_static_camera(pro_prep_ref, output_path=static_path)
+                main_render_used, v6_main_proof = pro_edit_pkg.stage.render_static_camera(
+                    pro_prep_ref, output_path=static_path)
                 temp_candidates.append(main_render_used)
                 v6_run.fallback("camera_direction", "final review: subject crop -> static camera repair",
                                 "static_camera_repair")
-                v6_main_proof = {"status": "no_camera_ops", "reason": "static camera repair", "samples": []}
+                if intro_source_path != edited_clip_path:
+                    # The crop may be in the cold open: it goes back to the clean paced footage too.
+                    intro_source_path = edited_clip_path
+                    qc_common["intro_source"] = edited_clip_path
+                    v6_intro_proof = {"status": "no_camera_ops", "reason": "static camera repair: clean cold open",
+                                      "samples": []}
             if "drop_headline" in repairs or "static_camera" in repairs:
                 if "drop_headline" in repairs:
                     _write_fallback_intro(intro_path, teaser_path, timeline_path, transcript_path, timeline_data,
@@ -4337,6 +4352,8 @@ def run_pipeline(
             if "drop_effects" in repairs:
                 selected_meme_count = 0
                 candidate = final_preview_path
+                v6_run.fallback("memes", "bounded repair: effect removed after the effect candidate failed "
+                                + ", ".join(sorted(failed_checks) or ["review"]), "effect_dropped")
             qc_rows, _ = _evaluate(candidate, main_render_used, candidate_doc, review=False)
             if review_doc is not None:
                 review_doc = {**review_doc, "applied_repairs": list(repairs)}

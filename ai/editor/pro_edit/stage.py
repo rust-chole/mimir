@@ -921,12 +921,13 @@ def render_with_fallback(
     return Path(baseline())
 
 
-def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> Path:
+def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> tuple[Path, dict[str, Any]]:
     """Bounded repair: the same verified caption presentation with NO camera move.
 
     A stable wide shot is always a valid edit; this is what the final reviewer's
     'cropped subject' repair renders (once). Captions stay the frozen-truth
-    presentation; only the camera path becomes identity."""
+    presentation; only the camera path becomes identity. Returns the render and
+    its proof (no camera op to prove; story geometry re-checked on the identity path)."""
     from ai.editor.pro_edit.camera import CameraPath
 
     if prep.resolved is None or prep.media is None or prep.caps is None or prep.artifacts is None:
@@ -944,7 +945,12 @@ def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> Path
         interpolation=prep.interpolation, keep_failed=prep.keep_failed,
         fonts_dir=prep.caption_fonts_dir if prep.presentation_ass is not None else None)
     verify_truth(prep, "static repair render")
-    return result.output_path
+    geometry = (render_proof.story_geometry_check(static, prep.context, get_style_pack(static.style_name))
+                if prep.context is not None else
+                {"status": "passed", "frames_checked": 0, "violations": [], "violation_count": 0})
+    proof = {"status": "no_camera_ops", "reason": "static camera repair: identity camera path", "samples": [],
+             "story_geometry": geometry, "render": str(result.output_path)}
+    return result.output_path, proof
 
 
 def render_intro_source(prep: ProEditPreparation, *, clean_clip: Path, outcome: dict[str, Any]) -> Path:

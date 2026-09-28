@@ -8,7 +8,10 @@ There is ONE production path. These tests prove, on real renders:
 * the cold open is moving peak footage with real audio, no speech captions,
   and a hard restart; the headline is optional;
 * a Pro Edit render failure or crash is REJECTED (nothing reaches final/),
-  instead of silently publishing the legacy render.
+  instead of silently publishing the legacy render;
+* an effect (SFX) lands on the final clock and passes the same QC; an effect
+  that damages the short is dropped by the one bounded repair;
+* reviewer findings trigger exactly one deterministic repair round, re-checked by QC.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pro_edit_fixtures as fx  # noqa: F401
@@ -27,6 +31,8 @@ from ai.editor.pro_edit.media import probe_media
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "pipeline_harness.py"
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "review_repair",
+         "effect_broken")
 
 
 def make_source(path: Path) -> Path:
@@ -50,19 +56,24 @@ class PipelineEndToEndTests(unittest.TestCase):
         shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
                                                                      "venv*", ".env"))
         cls.results = {}
-        for mode in ("run", "no_headline", "broken_render", "stage_crash", "planner_down"):
+
+        def run_mode(mode: str) -> tuple[str, dict]:
             # One source per mode: a rejected run must be judged on its own final/ state.
             video = make_source(base / "media ✓" / f"harness {mode}.mp4")
             out = base / f"{mode}.json"
             # UTF-8 mode: on Windows a piped stdout defaults to the ANSI code page.
             proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(video),
                                    "--mode", mode, "--out", str(out)], capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=900,
+                                  encoding="utf-8", errors="replace", timeout=1500,
                                   env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
             if proc.returncode != 0:
                 raise AssertionError(f"harness mode {mode} failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
-            cls.results[mode] = json.loads(out.read_text(encoding="utf-8"))
-            cls.results[mode]["stdout"] = proc.stdout
+            return mode, {**json.loads(out.read_text(encoding="utf-8")), "stdout": proc.stdout}
+
+        # Every mode has its own source stem, so the runs share nothing but the code.
+        workers = max(1, min(3, (os.cpu_count() or 2) - 1))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            cls.results = dict(pool.map(run_mode, MODES))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -70,6 +81,10 @@ class PipelineEndToEndTests(unittest.TestCase):
 
     def qc(self, mode: str) -> dict[str, dict]:
         return {row["check"]: row for row in self.results[mode]["final_qc"]["checks"]}
+
+    def fallbacks(self, mode: str) -> list[tuple[str, str]]:
+        rows = self.results[mode]["v6_state"]["summary"]["fallback_rows"]
+        return [(row["subsystem"], row["level"]) for row in rows]
 
     def test_normal_run_publishes_only_a_qc_verified_short(self) -> None:
         run = self.results["run"]
@@ -129,6 +144,42 @@ class PipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(down["pro_edit"]["render"]["captions"], "presentation")
         for name, row in self.qc("planner_down").items():
             self.assertEqual(row["status"], "pass", (name, row["detail"]))
+
+    def test_effect_lands_on_the_final_clock_and_passes_qc(self) -> None:
+        run = self.results["memes"]
+        self.assertEqual(run["status"], "published", run.get("v6"))
+        self.assertEqual(run["meme_stages"], {"meme_analysis": "done", "meme_discovery": "done",
+                                              "meme_render": "done"})
+        self.assertEqual(run["final_qc"]["repairs"], [])
+        for name, row in self.qc("memes").items():
+            self.assertEqual(row["status"], "pass", (name, row["detail"]))
+        doc = run["final_timeline"]
+        final = probe_media(run["final_output"])
+        # The effect render keeps every frame of the verified composition.
+        self.assertLessEqual(abs(final.duration_s - doc["expected_final_duration"]), 2 * final.fps.frame_duration
+                             + 0.05)
+
+    def test_an_effect_that_damages_the_short_is_dropped_not_published(self) -> None:
+        run = self.results["effect_broken"]
+        self.assertEqual(run["status"], "published_degraded", run.get("v6"))
+        self.assertEqual(run["final_qc"]["repairs"], ["drop_effects"])
+        for name, row in self.qc("effect_broken").items():
+            self.assertEqual(row["status"], "pass", (name, row["detail"]))
+        self.assertEqual(run["final_qc"]["review"]["status"], "not_run")        # never a silent pass
+        self.assertIn(("memes", "effect_dropped"), self.fallbacks("effect_broken"))
+
+    def test_reviewer_findings_get_one_bounded_repair_rechecked_by_qc(self) -> None:
+        run = self.results["review_repair"]
+        self.assertEqual(run["status"], "published_degraded", run.get("v6"))   # the repair is disclosed
+        review = run["final_qc"]["review"]
+        self.assertEqual(review["status"], "reviewed")
+        self.assertEqual(sorted(run["final_qc"]["repairs"]), ["drop_headline", "static_camera"])
+        self.assertEqual(sorted(review["applied_repairs"]), ["drop_headline", "static_camera"])
+        self.assertEqual(run["final_timeline"]["intro"]["headline"], "")
+        for name, row in self.qc("review_repair").items():
+            self.assertEqual(row["status"], "pass", (name, row["detail"]))
+        self.assertIn(("camera_direction", "static_camera_repair"), self.fallbacks("review_repair"))
+        self.assertEqual(run["v6"]["subsystems"]["camera_pixels_intro"], "no_camera_ops")   # clean cold open too
 
 
 if __name__ == "__main__":

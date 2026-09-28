@@ -162,6 +162,21 @@ class MemeFinalClockTests(unittest.TestCase):
         self.assertIsNone(self.event(3.2, doc)[0])           # right on the restart (opening protection)
 
 
+class EffectsChainVersionTests(unittest.TestCase):
+    def test_every_meme_stage_accepts_what_the_previous_stage_writes(self) -> None:
+        """The analyzer -> discovery -> renderer chain once rejected its own outputs (hard-coded
+        versions), so no meme/SFX ever reached a short."""
+        from ai.editor import meme_analyzer, meme_discovery
+
+        meme_discovery._validate_slot_package({"version": meme_analyzer.MEME_ANALYZER_VERSION, "clips": []})
+        meme_renderer.validate_slot_package({"version": meme_analyzer.MEME_ANALYZER_VERSION,
+                                             "inputs": {"timeline": "t.json"}})
+        meme_renderer.validate_discovery_package({"version": meme_discovery.DISCOVERY_VERSION, "clips": [],
+                                                  "inputs": {"meme_slots": "s.json"}})
+        source = (ROOT / "ai" / "shorts_pipeline.py").read_text(encoding="utf-8")
+        self.assertNotRegex(source, r'_contains_clip\(meme_slot_path, "clips", selected_clip_index, \d')
+
+
 class ReviewerAuthorityTests(unittest.TestCase):
     def test_reviewer_can_only_trigger_bounded_repairs_or_warn(self) -> None:
         repairs, warnings = final_review.decide([

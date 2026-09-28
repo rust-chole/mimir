@@ -271,8 +271,11 @@ def _scan_library() -> list[dict[str, Any]]:
 
 
 def _validate_slot_package(package: dict[str, Any]) -> None:
-    if package.get("version") != 3:
-        raise RuntimeError("Local SFX Discovery V4, Meme Analyzer V3 çıktısı bekliyor.")
+    from ai.editor import meme_analyzer
+
+    if package.get("version") != meme_analyzer.MEME_ANALYZER_VERSION:
+        raise RuntimeError(
+            f"Local SFX Discovery, Meme Analyzer V{meme_analyzer.MEME_ANALYZER_VERSION} çıktısı bekliyor.")
     if not isinstance(package.get("clips"), list):
         raise RuntimeError("Meme slot JSON içinde 'clips' listesi yok.")
 

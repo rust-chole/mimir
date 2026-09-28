@@ -31,7 +31,7 @@ REPORT_DIR = (
 # VERSION
 # ============================================================
 
-MEME_RENDERER_VERSION = 5
+MEME_RENDERER_VERSION = 6
 
 
 # ============================================================
@@ -248,9 +248,14 @@ def validate_discovery_package(
     package: dict[str, Any],
 ) -> None:
 
-    if package.get("version") != 3:
+    from ai.editor import meme_discovery
+
+    # One source of truth: the producer's own version constant. A hard-coded
+    # number here once disabled every meme/SFX render without anyone noticing.
+    if package.get("version") != meme_discovery.DISCOVERY_VERSION:
         raise RuntimeError(
-            "Meme Renderer V3, Meme Discovery V3 çıktısı bekliyor."
+            f"Meme Renderer, Meme Discovery V{meme_discovery.DISCOVERY_VERSION} çıktısı bekliyor "
+            f"(gelen: V{package.get('version')})."
         )
 
     if not isinstance(
@@ -285,9 +290,12 @@ def validate_slot_package(
     package: dict[str, Any],
 ) -> None:
 
-    if package.get("version") != 2:
+    from ai.editor import meme_analyzer
+
+    if package.get("version") != meme_analyzer.MEME_ANALYZER_VERSION:
         raise RuntimeError(
-            "Meme Renderer V3, Meme Analyzer V2 çıktısı bekliyor."
+            f"Meme Renderer, Meme Analyzer V{meme_analyzer.MEME_ANALYZER_VERSION} çıktısı bekliyor "
+            f"(gelen: V{package.get('version')})."
         )
 
     inputs = package.get("inputs")
@@ -2057,8 +2065,10 @@ def render_clip(
             "-movflags",
             "+faststart",
 
-            "-shortest",
-
+            # No -shortest: both branches already keep the base length exactly
+            # (audio apad+atrim to it, overlay eof_action=pass). With a stream-
+            # copied video, -shortest cut the short at the muxer's interleave
+            # point and silently dropped its last frames.
             str(
                 output_path
             ),

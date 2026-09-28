@@ -15,6 +15,10 @@ Modes (there is ONE production path; modes only inject faults):
     broken_render  Pro Edit main render fails -> baseline render -> QC gate must REJECT
     stage_crash    Pro Edit preparation crashes -> baseline render -> QC gate must REJECT
     planner_down   planner unavailable (static camera) -> published as DEGRADED at worst
+    memes          a selected local SFX goes through the real meme renderer + QC effect checks
+    review_repair  the reviewer flags a cropped face + misleading headline -> ONE repair round
+    effect_broken  the effect render damages the short (drops its tail) -> QC fails -> the
+                   bounded repair drops the effect and publishes the re-checked base, DEGRADED
 """
 from __future__ import annotations
 
@@ -129,7 +133,50 @@ def install_fakes(video: Path) -> None:
                         "title": "harness clip", "intro_text": headline, "quality_gate": gate}]})
 
     def fake_reviewer():
+        if os.environ.get("HARNESS_REVIEW_FINDINGS") == "1":
+            findings = [{"type": "half_cut_face", "frames": [2], "confidence": 0.9, "explanation": "face cut"},
+                        {"type": "headline_contradicts_video", "frames": [0], "confidence": 0.92,
+                         "explanation": "headline claims something not shown"}]
+            calls = {"n": 0}
+
+            def review(prompt, frames):
+                calls["n"] += 1
+                if calls["n"] > 1:
+                    raise AssertionError("the reviewer must never be called twice (bounded authority)")
+                return {"findings": findings, "summary": "two repairable findings"}
+
+            return review
         return lambda prompt, frames: {"findings": [], "summary": f"harness reviewer saw {len(frames)} frames"}
+
+    def analyze_memes(intro_json_path, clip_index, base_video_path=None):
+        from ai.editor import meme_analyzer
+
+        intro = json.loads(Path(intro_json_path).read_text(encoding="utf-8"))
+        timeline_path = intro["inputs"]["timeline"]
+        return write(Path(meme_analyzer.get_output_path(intro_json_path)), {
+            "version": meme_analyzer.MEME_ANALYZER_VERSION, "inputs": {"timeline": timeline_path,
+                                                                       "intro": str(intro_json_path)},
+            "clips": [{"clip_index": clip_index, "recommended": True, "slots": [{
+                "slot_index": 1, "intent": "impact", "sound_function": "impact", "strength": "subtle",
+                "timing": {"main_edited_start": 20.5, "final_start": 0.0, "max_duration": 0.6}}]}]})
+
+    def discover_memes(slot_json_path, clip_index):
+        from ai.editor import meme_discovery
+
+        slots = json.loads(Path(slot_json_path).read_text(encoding="utf-8"))
+        sfx = Path(slot_json_path).with_name("harness_boom.wav")
+        import subprocess
+
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=90:sample_rate=48000:duration=0.6", "-af", "afade=t=out:st=0.3:d=0.3",
+                        str(sfx)], check=True)
+        slot = slots["clips"][0]["slots"][0]
+        return write(Path(meme_discovery.get_output_path(slot_json_path)), {
+            "version": meme_discovery.DISCOVERY_VERSION, "inputs": {"meme_slots": str(slot_json_path)},
+            "clips": [{"clip_index": clip_index, "selected_asset_count": 1, "discoveries": [{
+                "slot_index": 1, "selected": True, "fit_score": 8.6, "confidence": 0.9, "slot": slot,
+                "candidate": {"name": "harness boom", "provider": "local_sfx", "media_type": "audio"},
+                "asset": {"absolute_path": str(sfx), "media_type": "audio"}}]}]})
 
     vod_processor.process_vod = process_vod
     clip_analyzer.create_clip_analysis = create_clip_analysis
@@ -143,6 +190,11 @@ def install_fakes(video: Path) -> None:
     from ai.editor import final_review
 
     final_review.default_reviewer = fake_reviewer
+    if os.environ.get("HARNESS_MEMES") == "1":
+        from ai.editor import meme_analyzer, meme_discovery
+
+        meme_analyzer.analyze_memes = analyze_memes
+        meme_discovery.discover_memes = discover_memes
 
 
 def main() -> int:
@@ -150,7 +202,8 @@ def main() -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
-                                                          "stage_crash", "planner_down"])
+                                                          "stage_crash", "planner_down", "memes", "review_repair",
+                                                          "effect_broken"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -162,6 +215,10 @@ def main() -> int:
     os.environ["MIMIR_PRO_EDIT_PLANNER"] = "static" if args.mode == "planner_down" else "rules"
     if args.mode == "no_headline":
         os.environ["HARNESS_NO_HEADLINE"] = "1"
+    if args.mode in ("memes", "effect_broken"):
+        os.environ["HARNESS_MEMES"] = "1"
+    if args.mode == "review_repair":
+        os.environ["HARNESS_REVIEW_FINDINGS"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
     from ai import shorts_pipeline
@@ -183,7 +240,27 @@ def main() -> int:
 
         stage.prepare_pro_edit = crash
 
-    kwargs = dict(force=True, enable_memes=False, enable_video_brain=False, keep_temp=True)
+    if args.mode == "effect_broken":
+        import subprocess
+
+        from ai.editor import meme_renderer
+
+        real_render = meme_renderer.render_memes
+
+        def damaging_render(*a, **k):
+            outputs = real_render(*a, **k)
+            for output in outputs:     # the historical -shortest defect: the tail is lost
+                output = Path(output)
+                cut = output.with_name("cut_" + output.name)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(output), "-t", "28.9", "-c",
+                                "copy", str(cut)], check=True)
+                os.replace(cut, output)
+            return outputs
+
+        meme_renderer.render_memes = damaging_render
+
+    kwargs = dict(force=True, enable_memes=args.mode in ("memes", "effect_broken"), enable_video_brain=False,
+                  keep_temp=True)
     if args.mode == "rerender":
         kwargs.update(force=False, rerender=True)
     summary: dict = {"mode": args.mode}
@@ -198,7 +275,7 @@ def main() -> int:
             "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
             "v6_state": state.get("v6"), "final_qc": state.get("final_qc"),
             "published_exists": (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists(),
-            "rejected": sorted(p.name for p in shorts_pipeline.REJECTED_DIR.glob("*"))
+            "rejected": sorted(p.name for p in shorts_pipeline.REJECTED_DIR.glob(f"{video.stem}_*"))
             if shorts_pipeline.REJECTED_DIR.exists() else [],
         })
         Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
@@ -219,6 +296,8 @@ def main() -> int:
         "final_qc": state.get("final_qc"),
         "final_timeline": json.loads(Path(state["stages"]["intro_final_base"]["path"]).with_name(
             Path(state["stages"]["intro_final_base"]["path"]).stem + ".timeline.json").read_text(encoding="utf-8")),
+        "meme_stages": {k: state["stages"].get(k, {}).get("status") for k in ("meme_analysis", "meme_discovery",
+                                                                               "meme_render")},
     })
     Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return 0
