@@ -11,7 +11,8 @@ There is ONE production path. These tests prove, on real renders:
   instead of silently publishing the legacy render;
 * an effect (SFX) lands on the final clock and passes the same QC; an effect
   that damages the short is dropped by the one bounded repair;
-* reviewer findings trigger exactly one deterministic repair round, re-checked by QC.
+* there is no AI reviewer: every published short carries a human review packet
+  that points at what a person should check, on the final clock.
 """
 from __future__ import annotations
 
@@ -31,8 +32,7 @@ from ai.editor.pro_edit.media import probe_media
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "pipeline_harness.py"
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
-MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "review_repair",
-         "effect_broken")
+MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "effect_broken")
 
 
 def make_source(path: Path) -> Path:
@@ -165,22 +165,22 @@ class PipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(run["final_qc"]["repairs"], ["drop_effects"])
         for name, row in self.qc("effect_broken").items():
             self.assertEqual(row["status"], "pass", (name, row["detail"]))
-        self.assertEqual(run["final_qc"]["review"]["status"], "not_run")        # never a silent pass
         self.assertIn(("memes", "effect_dropped"), self.fallbacks("effect_broken"))
 
-    def test_reviewer_findings_get_one_bounded_repair_rechecked_by_qc(self) -> None:
-        run = self.results["review_repair"]
-        self.assertEqual(run["status"], "published_degraded", run.get("v6"))   # the repair is disclosed
-        review = run["final_qc"]["review"]
-        self.assertEqual(review["status"], "reviewed")
-        self.assertEqual(sorted(run["final_qc"]["repairs"]), ["drop_headline", "static_camera"])
-        self.assertEqual(sorted(review["applied_repairs"]), ["drop_headline", "static_camera"])
-        self.assertEqual(run["final_timeline"]["intro"]["headline"], "")
-        for name, row in self.qc("review_repair").items():
-            self.assertEqual(row["status"], "pass", (name, row["detail"]))
-        self.assertIn(("camera_direction", "static_camera_repair"), self.fallbacks("review_repair"))
-        self.assertEqual(run["v6"]["subsystems"]["camera_pixels_intro"], "no_camera_ops")   # clean cold open too
-
+    def test_published_short_carries_a_human_review_packet(self) -> None:
+        run = self.results["run"]
+        sheet = Path(run["human_review"])
+        self.assertEqual(sheet, Path(run["final_output"]).with_suffix(".review.md"))
+        text = sheet.read_text(encoding="utf-8")
+        for heading in ("## Look here first", "## Cold open", "## Disclosed degradations", "## Decision"):
+            self.assertIn(heading, text)
+        self.assertIn('"HE SAID WORD TWELVE"', text)
+        packet = run["qc_report"]["human_review"]
+        self.assertEqual(packet["status"], "published")
+        self.assertEqual(packet["qc"]["failed"], [])
+        self.assertNotIn("review", run["qc_report"])                      # no model verdict anywhere
+        degraded = self.results["effect_broken"]["qc_report"]["human_review"]
+        self.assertTrue(any(row.startswith("memes -> effect_dropped") for row in degraded["degradations"]))
 
 if __name__ == "__main__":
     unittest.main()

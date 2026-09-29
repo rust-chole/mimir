@@ -13,9 +13,20 @@ from unittest import mock
 from pathlib import Path
 
 import pro_edit_fixtures as fx  # noqa: F401  (repo root on sys.path)
-from ai.editor import caption_truth
+from ai.editor import caption_judge, caption_truth
 from ai.editor import participant_name_lock as lock
 from ai.editor import v6_runtime
+
+
+_NO_JUDGE = mock.patch.object(caption_judge, "default_judge", return_value=None)
+
+
+def setUpModule() -> None:
+    _NO_JUDGE.start()      # hermetic: a machine with an API key must never call the real judge here
+
+
+def tearDownModule() -> None:
+    _NO_JUDGE.stop()
 
 
 def profile(sentence: str, speakers: str | list[str], names: dict[str, str], *, flags: list[str] = (),
@@ -185,6 +196,71 @@ class CaptionTruthStageTests(unittest.TestCase):
         self.assertTrue(saved["words"][index][caption_truth.UNCERTAIN_FLAG])
         self.assertTrue(any(u["reason"] == "entity_spelling_unverified" for u in
                             json.loads(result.truth_path.read_text(encoding="utf-8"))["uncertain"]))
+
+    def judge_names(self, verdict: str, confidence: float = 0.9):
+        calls = []
+
+        def judge(*, name, instructions, payload, schema):
+            calls.append(payload)
+            return {"decisions": [{"word_id": c["word_id"], "verdict": verdict, "confidence": confidence,
+                                   "reason": "test"} for c in payload["candidates"]]}
+        judge.model = f"fake-{verdict}-{confidence}"   # judgments are cached per judge identity + evidence
+        return judge, calls
+
+    def run_unsettled_name(self, judge):
+        sentence = "Yesterday I finally talked to Tyler about the whole stream thing."
+        data = profile(sentence, "A", {"A": "KAI", "B": "TYLA"})
+        path = self.write(data)
+
+        result = caption_truth.run_caption_truth(path, edited_clip_path=None, ear=self.tyler_ear,
+                                                 audio_source=lambda: self.dir / "audio.wav", judge=judge)
+        return data, path, result, sentence.split().index("Tyler")
+
+    @staticmethod
+    def tyler_ear(audio, start, end, *, prompted, vocabulary, context_before="", context_after=""):
+        return caption_truth.EarResult("finally talked to Tyler about the", "fake", prompted)
+
+    def test_judge_decides_what_the_lock_could_not_spelling_only(self) -> None:
+        judge, calls = self.judge_names("canonical")
+        data, path, result, index = self.run_unsettled_name(judge)
+        candidate = calls[0]["candidates"][0]
+        self.assertEqual((candidate["word_id"], candidate["verified_name"]), (index, "Tyla"))
+        self.assertTrue(candidate["local_ears"])                               # escalation ears are evidence
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        word = saved["words"][index]
+        self.assertEqual(word["word"], "Tyla")
+        self.assertEqual(word["name_lock"]["decided_by"], "caption_judge")       # reversible provenance
+        self.assertNotIn(caption_truth.UNCERTAIN_FLAG, word)
+        for key in ("edited_start", "edited_end", "speaker_raw"):                # never time or speaker
+            self.assertEqual(word[key], data["words"][index][key])
+        truth = json.loads(result.truth_path.read_text(encoding="utf-8"))
+        self.assertEqual(truth["entity_decisions"][0]["verdict"], "canonical")
+        self.assertEqual(result.audit["judge_named_words"], 1)
+        # A re-run with the same evidence reuses the recorded judgment (no new call).
+        calls.clear()
+        again = caption_truth.run_caption_truth(path, edited_clip_path=None, ear=self.tyler_ear,
+                                                audio_source=lambda: self.dir / "audio.wav", judge=judge)
+        self.assertEqual(calls, [])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["words"][index]["word"], "Tyla")
+        self.assertTrue(caption_truth.verify_frozen_truth(path, again.truth_path)[0])
+
+    def test_judge_keep_and_uncertain(self) -> None:
+        judge, _ = self.judge_names("keep")
+        _data, path, _result, index = self.run_unsettled_name(judge)
+        word = json.loads(path.read_text(encoding="utf-8"))["words"][index]
+        self.assertEqual(word["word"], "Tyler")
+        self.assertNotIn(caption_truth.UNCERTAIN_FLAG, word)
+        judge, _ = self.judge_names("canonical", confidence=0.3)                 # unsure -> uncertain, not forced
+        _data, path, _result, index = self.run_unsettled_name(judge)
+        word = json.loads(path.read_text(encoding="utf-8"))["words"][index]
+        self.assertEqual(word["word"], "Tyler")
+        self.assertTrue(word[caption_truth.UNCERTAIN_FLAG])
+
+    def test_missing_judge_is_a_disclosed_degradation(self) -> None:
+        _data, _path, result, _index = self.run_unsettled_name(None)
+        self.assertIn(("caption_entity_judge", "uncertain_marked"),
+                      [(r["subsystem"], r["level"]) for r in result.fallbacks])
+        self.assertNotIn("caption_entity_judge", v6_runtime.BLOCKING_FALLBACKS)
 
     def test_missing_ear_is_an_explicit_fallback(self) -> None:
         data = profile("Yesterday I finally talked to Tyler about the whole stream thing.", "A",

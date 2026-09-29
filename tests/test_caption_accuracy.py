@@ -4,6 +4,7 @@ No network: every ear is a deterministic fake. Real FFmpeg cuts the micro window
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from ai import vod_processor
+from ai.editor import caption_judge
 from ai.editor import speaker_caption_support as scs
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg"))
@@ -66,6 +68,46 @@ class TokenConfidenceTests(unittest.TestCase):
         self.assertLess(dict(words)["Marra"], 0.2)
 
 
+class JudgeGuardTests(unittest.TestCase):
+    def span(self, **overrides):
+        base = dict(span_id="s", core=(1, 2), current="Marra", window_text="then Marra told me",
+                    context_before="", context_after="", audio_window=(0.0, 3.0), suspicion=["asr_disagreement"],
+                    ears=[{"ear": "asr_1", "heard_window": "then Mara told me", "heard_core": "Mara"},
+                          {"ear": "asr_2", "heard_window": "then told me", "heard_core": ""},
+                          {"ear": "asr_3", "heard_window": "then told me", "heard_core": ""}],
+                    strict=None, clock=[("then", 0.5, 0.8), ("Mara", 1.0, 1.3)], core_clock=["Mara"])
+        base.update(overrides)
+        return caption_judge.SpanEvidence(**base)
+
+    def decide(self, span, verdict, text, ears=("asr_1",), confidence=0.9):
+        return caption_judge.check_span_decision(span, {"verdict": verdict, "text": text, "confidence": confidence,
+                                                        "supporting_ears": list(ears), "reason": ""})
+
+    def test_the_judge_can_never_emit_a_time(self) -> None:
+        for schema in (caption_judge.SPAN_JUDGE_SCHEMA, caption_judge.ENTITY_JUDGE_SCHEMA):
+            fields = schema["properties"]["decisions"]["items"]["properties"]
+            self.assertFalse([f for f in fields if re.search(r"start|end|time|clock|second", f)], fields)
+
+    def test_grounding_guard(self) -> None:
+        span = self.span()
+        self.assertEqual(self.decide(span, "use_heard", "Mara")[0].phrase, "Mara")
+        self.assertIsNone(self.decide(span, "use_heard", "Maria")[0])                     # never heard
+        self.assertIsNone(self.decide(span, "use_heard", "Mara", ears=())[0])              # no supporting ear
+        self.assertIsNone(self.decide(span, "use_heard", "Mara told me then Mara now")[0])  # not local
+        self.assertIsNone(self.decide(span, "use_heard", "")[0])                          # the clock heard a word
+        deletion = self.decide(self.span(core_clock=[]), "use_heard", "")[0]
+        self.assertEqual((deletion.phrase, deletion.resolved), ("", True))                # 2 of 3 ears + clock silent
+        unsure = self.decide(span, "use_heard", "Mara", confidence=0.3)[0]
+        self.assertEqual((unsure.phrase, unsure.resolved), (None, False))                  # low confidence = uncertain
+
+    def test_verified_name_may_be_used_when_an_ear_heard_a_near_spelling(self) -> None:
+        span = self.span()
+        accepted, _ = caption_judge.check_span_decision(
+            span, {"verdict": "use_heard", "text": "Mira", "confidence": 0.9, "supporting_ears": ["asr_1"],
+                   "reason": ""}, verified_names=["Mira"])
+        self.assertEqual(accepted.phrase, "Mira")
+
+
 class ClockIntegrityTests(unittest.TestCase):
     def assert_clock(self, rows, anchors: dict[str, float]) -> None:
         for previous, current in zip(rows, rows[1:]):
@@ -114,8 +156,10 @@ class SuspicionToResolutionTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._tmp.cleanup()
 
-    def run_stage(self, micro_answer):
-        primary = "then Marra told me to wait here"
+    PRIMARY = "then Marra told me to wait here"
+
+    def run_stage(self, micro_answer, judge=None):
+        primary = self.PRIMARY
         timing = whisper([(w, 0.5 + i * 0.5, 0.8 + i * 0.5) for i, w in enumerate(primary.split())])
         crosscheck = (primary, [(w, 0.25 if w == "Marra" else 0.97) for w in primary.split()], "logprobs")
         micro_calls = []
@@ -126,10 +170,74 @@ class SuspicionToResolutionTests(unittest.TestCase):
 
         with mock.patch.object(scs, "_crosscheck_with_confidence", return_value=crosscheck), \
                 mock.patch.object(vod_processor, "transcribe_word_timing", return_value=timing), \
-                mock.patch.object(vod_processor, "transcribe_caption_micro_pass", side_effect=micro):
+                mock.patch.object(vod_processor, "transcribe_caption_micro_pass", side_effect=micro), \
+                mock.patch.object(caption_judge, "default_judge", return_value=judge):
             words, _ratio, _source, quality = scs._transcribe_edited_words(
                 self.audio, 8.0, accurate_text=primary, known_names=None)
         return words, quality, micro_calls
+
+    SPLIT = ["then Mara told me", "then Marra told me", "then Mora told me", "then Mara told me",
+             "then Marra told me"]
+
+    def split_answers(self):
+        answers = iter(self.SPLIT)
+        return lambda label: next(answers)
+
+    def fake_judge(self, verdict, text="", ears=("asr_1", "asr_4"), confidence=0.86):
+        calls = []
+
+        def judge(*, name, instructions, payload, schema):
+            calls.append(payload)
+            return {"decisions": [{"span_id": s["span_id"], "verdict": verdict, "text": text,
+                                   "supporting_ears": list(ears), "confidence": confidence, "reason": "test"}
+                                  for s in payload["spans"]]}
+        return judge, calls
+
+    def test_unanimous_ears_settle_the_span_without_the_strong_model(self) -> None:
+        judge, calls = self.fake_judge("keep_primary")
+        words, quality, _ = self.run_stage(lambda label: "then Mara told me to wait here", judge)
+        self.assertEqual(calls, [])                                    # no strong-model budget spent
+        self.assertEqual([w["word"] for w in words][1], "Mara")
+        self.assertTrue(quality["micro_accuracy"]["details"][0]["selected_source"].startswith("settled_unanimous"))
+
+    def test_judge_decides_a_split_span_from_the_evidence_and_the_clock_keeps_timing(self) -> None:
+        judge, calls = self.fake_judge("use_heard", "Mara")
+        words, quality, micro_calls = self.run_stage(self.split_answers(), judge)
+        self.assertEqual(len(micro_calls), 5)
+        span = calls[0]["spans"][0]
+        self.assertEqual([e["ear"] for e in span["ears"]], ["asr_1", "asr_2", "asr_3", "asr_4", "asr_5", "crosscheck"])
+        self.assertEqual([e["prompted_with_context"] for e in span["ears"]][:3], [False, False, True])
+        self.assertIn(["Marra", 1.0, 1.3], span["measured_clock_words"])          # measured timing candidates
+        self.assertEqual(span["crosscheck_low_confidence"], [["Marra", 0.25]])
+        self.assertIsNone(span["strict_acoustic_vote"])                            # 2/2/1: no strict majority
+        self.assertEqual(calls[0]["primary_transcript"]["text"], self.PRIMARY)
+        self.assertEqual([w["word"] for w in words][1], "Mara")
+        self.assertAlmostEqual(words[1]["edited_start"], 1.0, places=3)            # the measured clock, not the judge
+        self.assertEqual(quality["lexical_judge"]["status"], "judged")
+        detail = quality["micro_accuracy"]["details"][0]
+        self.assertEqual((detail["selected_source"], detail["resolved"]), ("caption_judge", True))
+
+    def test_a_word_no_ear_heard_is_rejected_and_the_strict_vote_decides(self) -> None:
+        judge, _ = self.fake_judge("use_heard", "Maria")
+        words, quality, _ = self.run_stage(self.split_answers(), judge)
+        self.assertEqual([w["word"] for w in words][1], "Marra")                   # primary kept
+        detail = quality["micro_accuracy"]["details"][0]
+        self.assertFalse(detail["resolved"])                                        # and marked uncertain
+        self.assertIn("no ear heard", detail["lexical_decision"]["guard"])
+        self.assertEqual(quality["lexical_judge"]["guard_rejected"][0]["span_id"], detail["lexical_decision"]["span_id"])
+
+    def test_judge_unresolved_keeps_the_primary_word_marked_uncertain(self) -> None:
+        judge, _ = self.fake_judge("unresolved")
+        words, quality, _ = self.run_stage(self.split_answers(), judge)
+        self.assertEqual([w["word"] for w in words][1], "Marra")
+        self.assertFalse(quality["micro_accuracy"]["details"][0]["resolved"])
+
+    def test_judge_failure_falls_back_to_the_strict_vote_and_is_recorded(self) -> None:
+        def broken(**kwargs):
+            raise TimeoutError("api down")
+        words, quality, _ = self.run_stage(self.split_answers(), broken)
+        self.assertEqual(quality["lexical_judge"]["status"], "failed")
+        self.assertEqual([w["word"] for w in words][1], "Marra")
 
     def test_unanimous_acoustic_ears_correct_the_agreeing_but_unsure_word(self) -> None:
         words, quality, calls = self.run_stage(lambda label: "then Mara told me to wait here")
@@ -139,9 +247,7 @@ class SuspicionToResolutionTests(unittest.TestCase):
         self.assertEqual(quality["micro_accuracy"]["corrected_spans"], 1)
 
     def test_split_ears_keep_the_primary_word_and_report_it_unresolved(self) -> None:
-        answers = iter(["then Mara told me", "then Marra told me", "then Mora told me", "then Mara told me",
-                        "then Marra told me"])
-        words, quality, calls = self.run_stage(lambda label: next(answers))
+        words, quality, calls = self.run_stage(self.split_answers())            # no judge: strict vote
         self.assertEqual(len(calls), 5)                                # 3 + 2 precision ears, no more
         self.assertEqual([w["word"] for w in words][1], "Marra")       # never a fluent guess
         self.assertEqual(quality["micro_accuracy"]["unresolved_spans"], 1)

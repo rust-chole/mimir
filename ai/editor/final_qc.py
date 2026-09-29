@@ -20,9 +20,10 @@ MP4 and its direct inputs, deterministically (FFmpeg decode + numpy):
     peak_recurs               the peak shown in the cold open is also inside the main story
     effects_clear             memes/effects never cover the caption band
 
-The AI reviewer (final_review.py) may add bounded findings; it never overrides
-these facts. A check that cannot run reports ``fail`` with the reason; nothing
-here returns ``pass`` without having measured it.
+No model reviews the result: after these checks the acceptance layer is a
+human (``human_review.py`` points them at what to look at). A check that
+cannot run reports ``fail`` with the reason; nothing here returns ``pass``
+without having measured it.
 """
 from __future__ import annotations
 

@@ -157,6 +157,9 @@ class EditContext:
     caption_signature: str = ""
     caption_region: CaptionSafeRegion = EMPTY_CAPTION_REGION
     hook_band: HookTextBand | None = None
+    # Read-only scene evidence for the edit director (layout, UI/HUD, action regions),
+    # measured before planning. Never geometry the director can emit.
+    director_evidence: Mapping[str, Any] = field(default_factory=dict)
 
     # --- lookups -----------------------------------------------------------
 
@@ -294,6 +297,7 @@ class EditContext:
             "intro_timeline": self.intro.to_dict() if self.intro is not None else None,
             "caption_safe_region": self.caption_region.to_dict(),
             "intro_hook_text_band": self.hook_band.to_dict() if self.hook_band is not None else None,
+            "director_evidence": dict(self.director_evidence),
             "signatures": {
                 "story": self.story_signature,
                 "source_story": self.source_story_signature,

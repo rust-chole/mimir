@@ -9,14 +9,13 @@ Usage (always against a disposable COPY of the repo):
     python pipeline_harness.py --root <repo copy> --video <mp4> --mode <mode> --out result.json
 
 Modes (there is ONE production path; modes only inject faults):
-    run            full run (rules planner, memes off, fake no-finding reviewer)
+    run            full run (rules planner, memes off)
     rerender       second run of the same source with --rerender (upstream caches kept)
     no_headline    the headline judge found no grounded line -> moving peak only
     broken_render  Pro Edit main render fails -> baseline render -> QC gate must REJECT
     stage_crash    Pro Edit preparation crashes -> baseline render -> QC gate must REJECT
     planner_down   planner unavailable (static camera) -> published as DEGRADED at worst
     memes          a selected local SFX goes through the real meme renderer + QC effect checks
-    review_repair  the reviewer flags a cropped face + misleading headline -> ONE repair round
     effect_broken  the effect render damages the short (drops its tail) -> QC fails -> the
                    bounded repair drops the effect and publishes the re-checked base, DEGRADED
 """
@@ -132,22 +131,6 @@ def install_fakes(video: Path) -> None:
             "intros": [{"clip_index": clip_index, "recommended": True, "score": 9.0 if headline else 0.0,
                         "title": "harness clip", "intro_text": headline, "quality_gate": gate}]})
 
-    def fake_reviewer():
-        if os.environ.get("HARNESS_REVIEW_FINDINGS") == "1":
-            findings = [{"type": "half_cut_face", "frames": [2], "confidence": 0.9, "explanation": "face cut"},
-                        {"type": "headline_contradicts_video", "frames": [0], "confidence": 0.92,
-                         "explanation": "headline claims something not shown"}]
-            calls = {"n": 0}
-
-            def review(prompt, frames):
-                calls["n"] += 1
-                if calls["n"] > 1:
-                    raise AssertionError("the reviewer must never be called twice (bounded authority)")
-                return {"findings": findings, "summary": "two repairable findings"}
-
-            return review
-        return lambda prompt, frames: {"findings": [], "summary": f"harness reviewer saw {len(frames)} frames"}
-
     def analyze_memes(intro_json_path, clip_index, base_video_path=None):
         from ai.editor import meme_analyzer
 
@@ -187,9 +170,6 @@ def install_fakes(video: Path) -> None:
     speaker_caption_support.create_speaker_profile = create_speaker_profile
     teaser_analyzer.analyze_teasers = analyze_teasers
     intro_analyzer.analyze_intros = analyze_intros
-    from ai.editor import final_review
-
-    final_review.default_reviewer = fake_reviewer
     if os.environ.get("HARNESS_MEMES") == "1":
         from ai.editor import meme_analyzer, meme_discovery
 
@@ -202,8 +182,7 @@ def main() -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
-                                                          "stage_crash", "planner_down", "memes", "review_repair",
-                                                          "effect_broken"])
+                                                          "stage_crash", "planner_down", "memes", "effect_broken"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -217,8 +196,6 @@ def main() -> int:
         os.environ["HARNESS_NO_HEADLINE"] = "1"
     if args.mode in ("memes", "effect_broken"):
         os.environ["HARNESS_MEMES"] = "1"
-    if args.mode == "review_repair":
-        os.environ["HARNESS_REVIEW_FINDINGS"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
     from ai import shorts_pipeline
@@ -285,6 +262,8 @@ def main() -> int:
     summary.update({
         "status": result.get("status"),
         "final_output": str(final),
+        "human_review": result.get("human_review"),
+        "qc_report": json.loads(final.with_suffix(".qc.json").read_text(encoding="utf-8")),
         "final_md5": md5(final),
         "warnings": result.get("warnings", []),
         "pro_edit": result.get("pro_edit"),

@@ -588,6 +588,12 @@ try:
     package, config = shorts_pipeline._load_pro_edit()
     if not (config.enabled and config.v6):
         errors.append("production path does not run the verified presentation layer")
+    from ai import model_config
+    if not os.getenv("MIMIR_PRO_EDIT_MODEL", "").strip() and config.model != model_config.EDIT_DIRECTOR_MODEL:
+        errors.append("the edit director does not run on the routed director model")
+    import importlib.util
+    if importlib.util.find_spec("ai.editor.final_review") is not None:
+        errors.append("an AI final reviewer exists; acceptance is human (human_review.py)")
     for module in pro_edit.MODULES:
         if not getattr(module, "__file__", None):
             errors.append(f"Pro Edit module not importable: {module}")

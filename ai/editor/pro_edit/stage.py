@@ -339,6 +339,78 @@ def _track_boxes(track: Any, kind: str, start: float, end: float, width: int, he
     return rows
 
 
+def coarse_region(cx: float, cy: float) -> str:
+    """A region WORD for a normalized point (the director reasons with words, never coordinates)."""
+    col = "left" if cx < 1 / 3 else ("right" if cx > 2 / 3 else "center")
+    row = "upper" if cy < 1 / 3 else ("lower" if cy > 2 / 3 else "middle")
+    return "center" if (row, col) == ("middle", "center") else f"{row}-{col}"
+
+
+def coarse_size(area: float) -> str:
+    return "small" if area < 0.05 else ("medium" if area < 0.20 else "large")
+
+
+def _box_words(box: Any) -> dict[str, Any]:
+    x0, y0, x1, y1 = (float(v) for v in box)
+    return {"where": coarse_region((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+            "size": coarse_size(max(0.0, x1 - x0) * max(0.0, y1 - y0))}
+
+
+def director_evidence(request: ProEditRequest, prep: ProEditPreparation, context: EditContext,
+                      media: MediaInfo) -> dict[str, Any]:
+    """What the edit director should know about the picture BEFORE it plans intent.
+
+    Content layout (talking head / gameplay + facecam / screen share / panels),
+    persistent UI/HUD text regions, action regions inside payoff/reaction spans,
+    where each face track sits, and story-required regions: all as region words
+    and sizes. The same cached analyses feed caption placement later, so this
+    adds no decode. Optional evidence: a failed analysis is reported, never fatal."""
+    config = request.config
+    evidence: dict[str, Any] = {"note": "read-only evidence in region words; the engine owns all geometry"}
+    occupancy = None
+    background = None
+    assert prep.artifacts is not None
+    if config.caption_activity:
+        try:
+            occupancy, _status = load_or_analyze(prep.artifacts.caption_occupancy, media, context.clip_identity,
+                                                 force=request.force)
+        except Exception as error:
+            evidence["activity"] = f"unavailable: {type(error).__name__}"
+    if config.caption_ui or config.caption_layout:
+        try:
+            background, _status = background_mod.load_or_analyze(prep.artifacts.caption_background, media,
+                                                                 context.clip_identity, force=request.force)
+        except Exception as error:
+            evidence["ui"] = f"unavailable: {type(error).__name__}"
+    try:
+        layout = classify_layout(context.subject_tracks, context.clip.duration_s, occupancy=occupancy,
+                                 background=background)
+        evidence["layout"] = {"class": layout.layout.value, "confidence": round(layout.confidence, 2),
+                              **({"facecam": _box_words(layout.facecam_box)} if layout.facecam_box else {})}
+    except Exception as error:
+        evidence["layout"] = {"class": UNKNOWN_LAYOUT.layout.value, "reason": f"{type(error).__name__}"}
+    if background is not None:
+        boxes = background_mod.ui_boxes(background, 0.0, context.clip.duration_s)
+        evidence["ui_regions"] = [{**_box_words(box), "persistence": round(float(value), 2)}
+                                  for box, value in sorted(boxes, key=lambda row: -row[1])[:8]]
+    actions = derive_action_regions(context.spans, occupancy)
+    evidence["action_regions"] = [{"story_span_id": a.story_span_id, "window": [round(a.start, 2), round(a.end, 2)],
+                                   **_box_words(a.bbox), "confidence": round(a.confidence, 2)} for a in actions[:16]]
+    evidence["faces"] = []
+    for track in context.subject_tracks:
+        if not track.samples:
+            continue
+        mid = track.samples[len(track.samples) // 2]
+        evidence["faces"].append({"subject_id": track.subject_id, "kind": track.kind,
+                                  "where": coarse_region(mid.cx, mid.cy), "size": coarse_size(mid.width * mid.height),
+                                  "speaker_id": track.speaker_id})
+    evidence["required_visual_content"] = [
+        {"story_span_id": span.span_id, "regions": [_box_words((r.x0, r.y0, r.x1, r.y1)) for r in span.required_regions],
+         "subjects": list(span.required_subject_ids), "min_visible_fraction": span.min_visible_fraction}
+        for span in context.spans if span.required_regions or span.required_subject_ids or span.min_visible_fraction]
+    return evidence
+
+
 def _placement_evidence(request: ProEditRequest, prep: ProEditPreparation, context: EditContext,
                         media: MediaInfo, platform: Any) -> tuple[PlacementEvidence, dict[str, Any], Any]:
     """Faces, story geometry, action regions, layout, UI/text occupancy, activity and
@@ -722,6 +794,7 @@ def prepare_pro_edit(request: ProEditRequest) -> ProEditPreparation:
             raise CaptionIntegrityError("context caption references differ from the authoritative profile")
 
         style = get_style_pack(config.style)
+        context = dataclasses.replace(context, director_evidence=director_evidence(request, prep, context, media))
         prep.planner_cache_key = planner_cache_key(context, config)
         outcome = _plan_outcome(request, context, prep)
         plan = outcome.plan
@@ -919,38 +992,6 @@ def render_with_fallback(
             failures.append(f"{label}: {type(error).__name__}: {str(error)[:1200]}")
     outcome.update(status="fallback", reason=" | ".join(failures) or "no render attempt")
     return Path(baseline())
-
-
-def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> tuple[Path, dict[str, Any]]:
-    """Bounded repair: the same verified caption presentation with NO camera move.
-
-    A stable wide shot is always a valid edit; this is what the final reviewer's
-    'cropped subject' repair renders (once). Captions stay the frozen-truth
-    presentation; only the camera path becomes identity. Returns the render and
-    its proof (no camera op to prove; story geometry re-checked on the identity path)."""
-    from ai.editor.pro_edit.camera import CameraPath
-
-    if prep.resolved is None or prep.media is None or prep.caps is None or prep.artifacts is None:
-        raise ProEditError("static repair needs a prepared Pro Edit render")
-    ass = prep.presentation_ass if prep.presentation_ass is not None else prep.caption_path
-    if ass is None:
-        raise ProEditError("static repair has no caption file")
-    static = dataclasses.replace(prep.resolved, ops=(), path=CameraPath(prep.resolved.frame_count, ()),
-                                 recommendations=())
-    verify_truth(prep, "static repair")
-    result = render_camera_captions(
-        edited_clip=prep.media.path, caption_file=Path(ass), output_path=Path(output_path), resolved=static,
-        caps=prep.caps, source_media=prep.media, script_path=prep.artifacts.filter_script.with_name(
-            prep.artifacts.filter_script.stem + "_static" + prep.artifacts.filter_script.suffix),
-        interpolation=prep.interpolation, keep_failed=prep.keep_failed,
-        fonts_dir=prep.caption_fonts_dir if prep.presentation_ass is not None else None)
-    verify_truth(prep, "static repair render")
-    geometry = (render_proof.story_geometry_check(static, prep.context, get_style_pack(static.style_name))
-                if prep.context is not None else
-                {"status": "passed", "frames_checked": 0, "violations": [], "violation_count": 0})
-    proof = {"status": "no_camera_ops", "reason": "static camera repair: identity camera path", "samples": [],
-             "story_geometry": geometry, "render": str(result.output_path)}
-    return result.output_path, proof
 
 
 def render_intro_source(prep: ProEditPreparation, *, clean_clip: Path, outcome: dict[str, Any]) -> Path:

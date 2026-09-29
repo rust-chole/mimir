@@ -2,12 +2,16 @@
 
 Four separate authorities own the final caption words:
 
-    LEXICAL  what was spoken      -> caption stage ASR consensus (gpt-transcribe
-                                     primary + model-diverse cross-check + micro votes)
+    LEXICAL  what was spoken      -> the caption judge (strongest model) over the
+                                     evidence of every ear (gpt-transcribe primary,
+                                     model-diverse cross-check, micro votes, word clock);
+                                     strict acoustic votes when no judge is available
     TIMING   when it was spoken   -> the immutable Whisper word clock (+ local PCM guard)
     SPEAKER  who spoke it         -> diarization + human identity checkpoint
     IDENTITY canonical spelling of verified people/entities
-                                  -> participant_name_lock (evidence-gated)
+                                  -> participant_name_lock (evidence-gated), then the
+                                     caption judge for what the lock could not decide
+                                     (closed choice: verified spelling | keep | uncertain)
 
 This stage runs once per selected short, AFTER the caption stage, and never
 re-transcribes the clip. It:
@@ -17,9 +21,12 @@ re-transcribes the clip. It:
    UNPROMPTED model-diverse ear (independent of the names, logprobs when the
    backend offers them) + one ear biased with the small verified vocabulary,
    on a few seconds of audio around the word (bounded, cached);
-3. marks words the ASR ears could not agree on as ``caption_uncertain`` (shown,
+3. asks the caption judge to decide the verified-name candidates the lock
+   could not (spelling only), and records who decided every disputed word
+   (``lexical_decisions``, ``entity_decisions``) in the truth document;
+4. marks words the evidence could not settle as ``caption_uncertain`` (shown,
    never emphasized) instead of guessing;
-4. validates timing/speaker invariants and FREEZES the result: a truth
+5. validates timing/speaker invariants and FREEZES the result: a truth
    document with a signature over (id, text, start, end, speaker, label).
    Downstream presentation may only consume it; the final quality gate proves
    the published captions still equal the frozen truth.
@@ -38,6 +45,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from ai.editor import caption_judge
 from ai.editor import participant_name_lock as name_lock
 
 CAPTION_TRUTH_VERSION = 1
@@ -661,6 +669,74 @@ def openai_micro_ear(audio_path: Path, start: float, end: float, *, prompted: bo
 
 
 # ============================================================
+# WHO DECIDED EACH DISPUTED WORD (lexical provenance)
+# ============================================================
+
+def lexical_decision_rows(profile: Mapping[str, Any], words: Sequence[Any]) -> list[dict[str, Any]]:
+    """The caption stage's per-span lexical decisions, mapped to profile word ids by audio time."""
+    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
+    micro = quality.get("micro_accuracy") if isinstance(quality.get("micro_accuracy"), Mapping) else {}
+    rows: list[dict[str, Any]] = []
+    for detail in micro.get("details", []) or []:
+        decision = detail.get("lexical_decision") if isinstance(detail, Mapping) else None
+        if not isinstance(decision, Mapping):
+            continue
+        try:
+            w0, w1 = (float(v) for v in (detail.get("audio_window") or [])[:2])
+        except (TypeError, ValueError):
+            continue
+        before = str(detail.get("primary_phrase", ""))
+        after = detail.get("selected_phrase")
+        shown = str(after) if after is not None else before
+        owners, texts = [], []
+        for index, word in enumerate(words):
+            if not isinstance(word, Mapping):
+                continue
+            try:
+                start, end = float(word.get("edited_start", -1)), float(word.get("edited_end", -1))
+            except (TypeError, ValueError):
+                continue
+            if w0 - 1e-3 <= start and end <= w1 + 1e-3:
+                for token in _tokens(str(word.get("word", ""))):
+                    owners.append(index)
+                    texts.append(_canon(token))
+        found = _best_contiguous_alignment(texts, [_canon(t) for t in _tokens(shown)]) if _tokens(shown) else None
+        ids = sorted({owners[k] for k in range(*found)}) if found else []
+        paced = float(words[ids[0]].get("edited_start", w0)) if ids else w0
+        rows.append({
+            "span_id": decision.get("span_id"), "from": before, "to": shown,
+            "changed": after is not None and [_canon(t) for t in _tokens(before)] != [_canon(t) for t in _tokens(shown)],
+            "resolved": bool(decision.get("resolved")), "decided_by": decision.get("source"),
+            "confidence": decision.get("confidence"), "supporting_ears": decision.get("supporting_ears", []),
+            "guard": decision.get("guard", ""), "word_ids": ids, "paced_start": round(paced, 3),
+        })
+    return rows
+
+
+def _entity_payload(index: int, row: Mapping[str, Any], words: Sequence[Any],
+                    escalations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    texts = [str(w.get("word", "")) if isinstance(w, Mapping) else "" for w in words]
+    word = words[index] if isinstance(words[index], Mapping) else {}
+    ears = [{"prompted_with_names": bool(e.get("prompted")), "model": e.get("model"), "heard": e.get("text"),
+             "heard_at_word": e.get("aligned_token"), "token_probability": e.get("token_probability")}
+            for record in escalations if int(record.get("word_id", -1)) == index
+            for e in record.get("ears", []) or []]
+    return {"word_id": index, "caption_word": texts[index], "verified_name": row.get("near"),
+            "entity_kind": row.get("entity_kind"), "similarity": row.get("confusion"),
+            "lock_evidence": list(row.get("evidence") or []), "lock_reason": row.get("reason"),
+            "speaker": str(word.get("speaker_label") or word.get("speaker_raw") or ""),
+            "context_before": " ".join(texts[max(0, index - 12):index]),
+            "context_after": " ".join(texts[index + 1:index + 13]), "local_ears": ears}
+
+
+def _judgment_key(payload: Any, judge: Any) -> str:
+    blob = json.dumps({"payload": payload, "model": getattr(judge, "model", "custom"),
+                       "effort": getattr(judge, "effort", ""), "version": caption_judge.JUDGE_VERSION},
+                      sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+
+
+# ============================================================
 # STAGE
 # ============================================================
 
@@ -708,8 +784,12 @@ def run_caption_truth(
     audio_source: Callable[[], Path] | None = None,
     max_escalations: int = MAX_ESCALATIONS,
     truth_path: str | Path | None = None,
+    judge: Any = "default",
 ) -> TruthResult:
-    """Resolve + escalate + freeze. Rewrites the profile only when it changes."""
+    """Resolve + escalate + judge + freeze. Rewrites the profile only when it changes.
+
+    ``judge``: the caption judge for undecided verified-name candidates
+    ("default" = caption_judge.default_judge(); None = no judge)."""
     profile_file = Path(profile_path)
     target = Path(truth_path) if truth_path else truth_path_for(profile_file)
     profile = json.loads(profile_file.read_text(encoding="utf-8"))
@@ -764,18 +844,74 @@ def run_caption_truth(
             words[index][UNCERTAIN_FLAG] = True
             words[index][MARKER] = {"uncertain": reason}
     decided_ids = {int(c.get("index", -1)) for c in result.audit.get("corrections", [])}
+    open_names: list[tuple[int, Mapping[str, Any]]] = []
     for row in result.audit.get("rejected", []) or []:
         index = int(row.get("index", -1))
         if index in decided_ids or not 0 <= index < len(words) or not isinstance(words[index], dict):
             continue
         if str(row.get("reason", "")).startswith(ESCALATION_REASONS) and set(row.get("evidence") or []) & ESCALATION_HINTS:
+            open_names.append((index, row))
+
+    # What the evidence-gated lock could not decide goes to the caption judge (closed choice).
+    entity_decisions: list[dict[str, Any]] = []
+    judgments: list[dict[str, Any]] = []
+    extra_corrections: list[dict[str, Any]] = []
+    if open_names:
+        entity_judge = caption_judge.default_judge() if judge == "default" else judge
+        payload = [_entity_payload(index, row, words, escalations) for index, row in open_names]
+        key = _judgment_key(payload, entity_judge)
+        cached_judgment = next((r for r in previous.get("judgments", []) or []
+                                if isinstance(r, Mapping) and r.get("key") == key), None)
+        if cached_judgment is not None:
+            decided = {int(k): dict(v) for k, v in (cached_judgment.get("decisions") or {}).items()}
+            entity_meta = dict(cached_judgment.get("meta") or {})
+        else:
+            decided, entity_meta = caption_judge.resolve_entities(payload, judge=entity_judge)
+        if entity_meta.get("status") == "judged":
+            judgments.append({"key": key, "decisions": {str(k): v for k, v in decided.items()}, "meta": entity_meta})
+        elif entity_meta.get("status") in ("unavailable", "failed"):
+            fallbacks.append({"subsystem": "caption_entity_judge", "level": "uncertain_marked",
+                              "reason": str(entity_meta.get("reason", entity_meta.get("status")))})
+        for index, row in open_names:
+            decision = decided.get(index) or {"verdict": "uncertain", "confidence": None, "reason": "no decision"}
+            token = str(words[index].get("word", ""))
+            entity_decisions.append({"word_id": index, "token": token, "near": row.get("near"), **decision})
+            if decision["verdict"] == "canonical":
+                replacement = name_lock._replacement(token, str(row.get("near", "")))
+                if replacement and replacement != token:
+                    provenance = {"from": token, "to": replacement, "canonical": row.get("near"),
+                                  "entity_kind": row.get("entity_kind"), "confusion": row.get("confusion"),
+                                  "evidence": [*list(row.get("evidence") or []), "caption_judge"],
+                                  "decided_by": "caption_judge", "confidence": decision.get("confidence"),
+                                  "version": name_lock.NAME_LOCK_VERSION}
+                    words[index]["word"] = replacement
+                    words[index]["name_lock"] = provenance
+                    extra_corrections.append(provenance | {"index": index})
+                    continue
+            if decision["verdict"] == "keep":
+                continue
             words[index][UNCERTAIN_FLAG] = True
             words[index][MARKER] = {"uncertain": "entity_spelling_unverified", "near": row.get("near")}
             uncertain.append({"word_ids": [index], "reason": "entity_spelling_unverified",
                               "text": str(words[index].get("word", "")), "near": row.get("near")})
+        verify_truth_invariants(before_words, [w for w in words if isinstance(w, dict)])
+
+    lexical_judge = {}
+    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
+    if isinstance(quality.get("lexical_judge"), Mapping):
+        lexical_judge = dict(quality["lexical_judge"])
+    if lexical_judge.get("status") in ("unavailable", "failed"):
+        fallbacks.append({"subsystem": "caption_lexical_judge", "level": "strict_acoustic_vote",
+                          "reason": str(lexical_judge.get("reason", lexical_judge.get("status")))})
+    lexical_rows = lexical_decision_rows(profile, words)
 
     profile["words"] = words
     lock_audit = {k: v for k, v in result.audit.items() if k != "changed"}
+    if extra_corrections:
+        lock_audit["corrections"] = [*lock_audit.get("corrections", []), *extra_corrections]
+        judged = {int(c["index"]) for c in extra_corrections}
+        lock_audit["rejected"] = [r for r in lock_audit.get("rejected", []) if int(r.get("index", -1)) not in judged]
+        lock_audit["status"] = "corrected"
     profile["participant_name_lock"] = lock_audit
     t_issues = timing_issues(profile)
     s_issues = speaker_issues(profile)
@@ -793,7 +929,7 @@ def run_caption_truth(
         "profile": {"path": str(profile_file.resolve()), "words": len(truth_rows(profile))},
         "signature": signature,
         "authorities": {
-            "lexical": "caption-stage ASR consensus (primary + model-diverse cross-check + strict micro votes)",
+            "lexical": "caption judge over every ear's evidence (grounding-guarded); strict micro votes without it",
             "timing": "immutable Whisper word clock (+ backward-only exact-PCM guard); never moved by spelling",
             "speaker": "diarization + human identity checkpoint; never changed by text",
             "identity": "verified roster (human-confirmed speakers + user-verified entities); evidence-gated spelling",
@@ -802,6 +938,10 @@ def run_caption_truth(
         "vocabulary": vocabulary,
         "entity_lock": {k: lock_audit.get(k) for k in ("status", "corrections", "rejected", "policy")},
         "escalations": escalations,
+        "lexical_judge": lexical_judge,
+        "lexical_decisions": lexical_rows,
+        "entity_decisions": entity_decisions,
+        "judgments": judgments,
         "uncertain": uncertain,
         "timing_issues": t_issues,
         "speaker_issues": s_issues,
@@ -817,6 +957,8 @@ def run_caption_truth(
         "escalations": len(escalations), "escalation_calls": sum(len(r.get("ears", [])) for r in escalations
                                                                  if r.get("key") not in cached),
         "uncertain_words": sum(len(u.get("word_ids", [])) for u in uncertain),
+        "judge_changed_spans": sum(1 for r in lexical_rows if r["changed"] and r["decided_by"] == "caption_judge"),
+        "judge_named_words": len(extra_corrections),
         "timing_issues": len(t_issues), "speaker_issues": len(s_issues), "fallbacks": fallbacks,
         "changed": changed_text,
     }

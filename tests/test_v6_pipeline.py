@@ -162,8 +162,7 @@ class V6PipelineEndToEndTests(unittest.TestCase):
         for name in ("output_file", "caption_truth_frozen", "word_timing", "speaker_ownership", "verified_names",
                      "caption_presentation", "story_preserved", "camera_plan", "hold_reasons",
                      "story_regions_visible", "camera_pixels_main", "camera_pixels_final", "v6_render_path",
-                     "no_blocking_fallback", "no_captions_in_intro", "caption_words_timing", "main_av_sync",
-                     "final_review"):
+                     "no_blocking_fallback", "no_captions_in_intro", "caption_words_timing", "main_av_sync"):
             self.assertEqual(checks.get(name), "pass", (name, checks))
         for key in ("caption_truth", "camera_plan", "render_proof", "manifest"):
             self.assertTrue(Path(manifest["artifacts"][key]).is_file(), key)

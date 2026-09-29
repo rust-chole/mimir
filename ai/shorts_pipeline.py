@@ -18,12 +18,13 @@ from typing import Any, Callable, Iterable
 
 from ai import model_config, vod_processor
 from ai.editor import (
+    caption_judge,
     caption_renderer,
     caption_truth,
     clip_analyzer,
     captions,
     final_qc,
-    final_review,
+    human_review,
     intro_analyzer,
     intro_bounds,
     intro_peak_support,
@@ -266,6 +267,8 @@ def _print_friendly_result(result: dict[str, Any]) -> None:
     else:
         print(f"   İşlem süresi: {_human_time(float(result.get('run_seconds', 0.0)))}")
     print(f"   Uyarı       : {warning_count}")
+    if result.get("human_review"):
+        print(f"🧑‍⚖️ Son onay insanda: {result['human_review']}")
 
     profile = result.get("profile", {})
     if not result.get("fast_resume") and isinstance(profile, dict):
@@ -1650,6 +1653,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         participant_name_lock,
         pacing_cutter,
         caption_renderer,
+        caption_judge,
         caption_truth,
         teaser_analyzer,
         intro_peak_support,
@@ -1659,7 +1663,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         meme_discovery,
         meme_renderer,
         final_qc,
-        final_review,
+        human_review,
         v6_runtime,
     ]
 
@@ -1740,6 +1744,7 @@ def _fast_resume(
         "profile": state.get("profile", {}),
         "fast_resume": True,
         "status": str(state.get("publish_status", "published")),
+        "human_review": state.get("human_review"),
         **({"v6": state["v6"].get("summary", {})} if isinstance(state.get("v6"), dict) else {}),
     }
 
@@ -1846,9 +1851,11 @@ def _run_caption_truth_v6(
         return _stage_signature(
             "caption_truth_v6",
             inputs=[profile_path, caption_path, timeline_path, transcript_path, edited_clip_path],
-            modules=[truth_mod, participant_name_lock, captions],
+            modules=[truth_mod, participant_name_lock, captions, caption_judge],
             options={
                 "clip_index": clip_index,
+                "caption_judge_model": model_config.CAPTION_JUDGE_MODEL,
+                "caption_judge_reasoning_effort": model_config.CAPTION_JUDGE_REASONING_EFFORT,
                 "version": int(getattr(truth_mod, "CAPTION_TRUTH_VERSION", 1)),
                 "name_lock_version": int(getattr(participant_name_lock, "NAME_LOCK_VERSION", 1)),
                 "creator": creator_name or "",
@@ -2022,7 +2029,6 @@ def _finish_v6(
     artifact_dir: Path,
     clip_index: int,
     qc_rows: list[dict[str, Any]] | None = None,
-    review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Final pixel proof + deterministic quality gate + compact manifest (runs BEFORE publishing).
 
@@ -2051,7 +2057,7 @@ def _finish_v6(
         run=run, final_output=published_path, profile_path=profile_path, truth_path=truth_path,
         burned_ass=burned_ass, prep=prep, main_proof=main_proof, final_proof=final_proof, intro_proof=intro_proof,
         story_intact=story, intro_handoff=(state.get("pro_edit") or {}).get("intro_verification"),
-        render_status=render_status, display_labels=labels, qc_rows=qc_rows or (), review=review)
+        render_status=render_status, display_labels=labels, qc_rows=qc_rows or ())
     run.gate = gate
     artifacts = getattr(prep, "artifacts", None)
     proof_path = getattr(artifacts, "render_proof", None)
@@ -2384,7 +2390,7 @@ def run_pipeline(
     analysis_sig = _stage_signature(
         "clip_analysis",
         inputs=clip_analysis_inputs,
-        modules=[clip_analyzer, model_config],
+        modules=[clip_analyzer],
         options={
             "scout_model": model_config.CLIP_SCOUT_MODEL,
             "scout_reasoning_effort": model_config.CLIP_SCOUT_REASONING_EFFORT,
@@ -2916,18 +2922,21 @@ def run_pipeline(
     captions_sig = _stage_signature(
         "captions",
         inputs=[edited_clip_path, transcript_path, timeline_path, speaker_scan_path],
-        modules=[captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor],
+        modules=[captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
+                 caption_judge],
         options={
             "clip_index": selected_clip_index,
             "caption_version": caption_version,
+            "caption_judge_model": model_config.CAPTION_JUDGE_MODEL,
+            "caption_judge_reasoning_effort": model_config.CAPTION_JUDGE_REASONING_EFFORT,
             "speaker_caption_version": int(
                 getattr(speaker_caption_support, "SPEAKER_PROFILE_VERSION", 13)
             ),
             "speaker_naming_version": int(getattr(speaker_naming, "SPEAKER_NAMING_VERSION", 11)),
             "caption_text_model": str(getattr(vod_processor, "CAPTION_ACCURATE_MODEL", "gpt-transcribe")),
             "caption_crosscheck_model": str(getattr(vod_processor, "CAPTION_CROSSCHECK_MODEL", "gpt-4o-transcribe")),
-            "caption_consensus_policy": "3-pass full ASR -> semantic/ASR suspicion -> micro-audio 2-of-3/3-of-5",
-            "caption_semantic_model": str(getattr(speaker_caption_support, "CAPTION_SEMANTIC_MODEL", "gpt-5.6-luna")),
+            "caption_consensus_policy": "primary + cross-check locator -> micro ears -> unanimous settles, "
+                                        "caption judge decides the rest (grounded), strict 3/3-4/5 without it",
             "caption_micro_max_spans": int(getattr(speaker_caption_support, "CAPTION_MICRO_MAX_SPANS", 8)),
             "caption_quality_target": float(getattr(speaker_caption_support, "CAPTION_WORD_ACCURACY_TARGET", 0.97)),
             "caption_quality_retry_limit": int(getattr(speaker_caption_support, "CAPTION_QUALITY_RETRY_LIMIT", 1)),
@@ -3029,7 +3038,8 @@ def run_pipeline(
             transcript_path,
             timeline_path,
             speaker_scan_path,
-            *_module_paths([captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor]),
+            *_module_paths([captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
+                            caption_judge]),
         ],
         error_message="Caption ASS dosyası oluşmadı.",
     )
@@ -3230,7 +3240,7 @@ def run_pipeline(
     teaser_sig = _stage_signature(
         "teaser_analysis",
         inputs=teaser_analysis_inputs,
-        modules=[teaser_analyzer, intro_peak_support, intro_bounds, model_config],
+        modules=[teaser_analyzer, intro_peak_support, intro_bounds],
         options={
             "clip_index": selected_clip_index,
             "model": model_config.TEASER_MODEL,
@@ -3449,7 +3459,7 @@ def run_pipeline(
     intro_analysis_sig = _stage_signature(
         "intro_analysis",
         inputs=intro_analysis_inputs,
-        modules=[intro_analyzer, model_config],
+        modules=[intro_analyzer],
         options={
             "clip_index": selected_clip_index,
             "creator_name": creator_name or "",
@@ -3927,7 +3937,7 @@ def run_pipeline(
     meme_analysis_sig = _stage_signature(
         "meme_analysis",
         inputs=[intro_path, teaser_path, timeline_path, transcript_path, final_preview_path],
-        modules=[meme_analyzer, meme_audio_support, model_config],
+        modules=[meme_analyzer, meme_audio_support],
         options={
             "clip_index": selected_clip_index,
             "enabled": bool(enable_memes),
@@ -4036,7 +4046,7 @@ def run_pipeline(
     discovery_sig = _stage_signature(
         "meme_discovery",
         inputs=[meme_slot_path],
-        modules=[meme_discovery, model_config],
+        modules=[meme_discovery],
         options={
             "clip_index": selected_clip_index,
             "slot_count": len(slots),
@@ -4238,12 +4248,13 @@ def run_pipeline(
         temp_candidates.append(final_source)
 
     # --------------------------------------------------------
-    # 15. FINAL QC -> (one bounded repair) -> PUBLISH or REJECT
+    # 15. FINAL QC -> (one deterministic repair) -> PUBLISH or REJECT
     # --------------------------------------------------------
     # Nothing reaches vod_output/final before the RENDERED candidate passed
-    # deterministic QC and the gate. The reviewer can trigger at most one
-    # deterministic repair round; the repaired candidate is re-checked by QC
-    # (never re-reviewed in a loop).
+    # deterministic QC and the gate. There is no AI reviewer: the acceptance
+    # layer is a HUMAN, who gets a review packet pointing at exactly what to
+    # check. The only repairs are deterministic and happen at most once; the
+    # repaired candidate is re-checked by QC.
 
     started = _stage_start(15, "Final QC + publish")
     labels = _verified_names(name_lock_profile, None, ())
@@ -4268,98 +4279,55 @@ def run_pipeline(
         start = float(event.get("start", 0.0))
         return [(start, start + float(event.get("duration", 0.0)))]
 
-    def _evaluate(candidate: Path, main_render: Path, doc: dict[str, Any], *, review: bool
-                  ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    def _evaluate(candidate: Path, main_render: Path, doc: dict[str, Any]) -> list[dict[str, Any]]:
         context = final_qc.QcContext(candidate=candidate, timeline_doc=doc, main_render=main_render,
                                      effect_windows=_effect_windows(candidate), **qc_common)
         rows = final_qc.run_final_qc(context)
         for row in rows:
             mark = "✅" if row["status"] == "pass" else ("⚠️" if row["status"] == "warn" else "❌")
             print(f"   {mark} {row['check']}: {row['detail']}")
-        if not review or any(row["status"] == "fail" for row in rows):
-            return rows, None
-        beats = [float(b) for b in ((doc.get("intro") or {}).get("peak") or {}).values() if b is not None]
-        beats += [float(r[0]) for r in qc_common["protected_paced"]]
-        result = final_review.review_final(final_review.ReviewInput(
-            candidate=candidate, intro_source=intro_source_path, timeline_doc=doc, headline=headline_text,
-            transcript=_truth_text(caption_truth_path), story_beats=beats,
-            effect_windows=_effect_windows(candidate)))
-        print(f"   🧐 final review: {result.status}" + (f" — {result.summary}" if result.summary else "")
-              + (f" ({result.reason})" if result.reason else ""))
-        return rows, result.to_dict()
+        return rows
 
     candidate = final_source
-    composed_base = final_preview_path
     main_render_used = captioned_preview_path
     candidate_doc = final_timeline_doc
-    qc_rows, review_doc = _evaluate(candidate, main_render_used, candidate_doc, review=True)
+    qc_rows = _evaluate(candidate, main_render_used, candidate_doc)
 
     repairs: list[str] = []
     failed_checks = {row["check"] for row in qc_rows if row["status"] == "fail"}
     # An effect is optional presentation: whatever QC failure a candidate WITH an
-    # effect shows, the bounded repair is to drop the effect (the base is then
-    # re-checked; a failure that was the base's own still rejects).
+    # effect shows, the repair is to drop the effect (the base is then re-checked;
+    # a failure that was the base's own still rejects).
     if candidate != final_preview_path and failed_checks:
         repairs.append("drop_effects")
     if "intro_headline" in failed_checks and headline_text:
         repairs.append("drop_headline")
-    for repair in (review_doc or {}).get("repairs", []) or []:
-        if repair not in repairs:
-            repairs.append(repair)
-    if repairs and review_doc is None:
-        # The reviewer only looks at a QC-clean candidate; this one was repaired
-        # after QC failed and is re-checked by QC only. Say so in the gate.
-        review_doc = {"status": "not_run", "reason": "candidate failed QC before review; the repaired "
-                      "candidate is re-checked by QC only", "warnings": [f"not reviewed: QC failed "
-                      f"({', '.join(sorted(failed_checks))}) and was repaired"], "repairs": []}
     if repairs:
-        print(f"\n🛠️ Bounded repair (tek tur): {', '.join(repairs)}")
+        print(f"\n🛠️ Deterministic repair (tek tur): {', '.join(repairs)}")
         try:
-            if "static_camera" in repairs and pro_prep_ref is not None and pro_prep_ref.ready:
-                static_path = captioned_preview_path.with_name(captioned_preview_path.stem + "_static"
-                                                               + captioned_preview_path.suffix)
-                main_render_used, v6_main_proof = pro_edit_pkg.stage.render_static_camera(
-                    pro_prep_ref, output_path=static_path)
-                temp_candidates.append(main_render_used)
-                v6_run.fallback("camera_direction", "final review: subject crop -> static camera repair",
-                                "static_camera_repair")
-                if intro_source_path != edited_clip_path:
-                    # The crop may be in the cold open: it goes back to the clean paced footage too.
-                    intro_source_path = edited_clip_path
-                    qc_common["intro_source"] = edited_clip_path
-                    v6_intro_proof = {"status": "no_camera_ops", "reason": "static camera repair: clean cold open",
-                                      "samples": []}
-            if "drop_headline" in repairs or "static_camera" in repairs:
-                if "drop_headline" in repairs:
-                    _write_fallback_intro(intro_path, teaser_path, timeline_path, transcript_path, timeline_data,
-                                          selected_clip_index, "bounded repair: headline removed")
-                    intro_record = _package_clip(intro_path, "intros", selected_clip_index)
-                    headline_text = ""
+            if "drop_headline" in repairs:
+                _write_fallback_intro(intro_path, teaser_path, timeline_path, transcript_path, timeline_data,
+                                      selected_clip_index, "deterministic repair: headline failed QC")
+                intro_record = _package_clip(intro_path, "intros", selected_clip_index)
+                headline_text = ""
                 rendered = intro_renderer.run_renderer(
                     intro_json_path=intro_path, clip_index=selected_clip_index,
                     edited_clip_path=intro_source_path, captioned_preview_path=main_render_used,
                     caption_path=caption_path)
                 final_preview_path = _activate_final_preview(rendered[0])
                 candidate_doc = intro_renderer.load_final_timeline(final_preview_path) or candidate_doc
-                candidate = final_preview_path
-                if "drop_effects" not in repairs and final_source != composed_base:
-                    candidate = Path(meme_renderer.render_memes(
-                        discovery_json_path=meme_discovery_path, clip_index=selected_clip_index,
-                        base_video_path=final_preview_path,
-                        forbidden_bands=_final_caption_bands(v6_burned_ass))[0]).resolve()
-            elif "drop_effects" in repairs:
-                candidate = final_preview_path
+                v6_run.fallback("intro_headline", "deterministic repair: the burned headline failed QC",
+                                "headline_dropped")
+            candidate = final_preview_path
+            # (A candidate with an effect that failed anything already carries drop_effects.)
             if "drop_effects" in repairs:
                 selected_meme_count = 0
-                candidate = final_preview_path
-                v6_run.fallback("memes", "bounded repair: effect removed after the effect candidate failed "
-                                + ", ".join(sorted(failed_checks) or ["review"]), "effect_dropped")
-            qc_rows, _ = _evaluate(candidate, main_render_used, candidate_doc, review=False)
-            if review_doc is not None:
-                review_doc = {**review_doc, "applied_repairs": list(repairs)}
+                v6_run.fallback("memes", "deterministic repair: effect removed after the effect candidate failed "
+                                + ", ".join(sorted(failed_checks)), "effect_dropped")
+            qc_rows = _evaluate(candidate, main_render_used, candidate_doc)
         except Exception as error:
-            book.warn(f"Bounded repair başarısız: {type(error).__name__}: {error}")
-            qc_rows = [*qc_rows, final_qc._check("bounded_repair", "fail",
+            book.warn(f"Deterministic repair başarısız: {type(error).__name__}: {error}")
+            qc_rows = [*qc_rows, final_qc._check("deterministic_repair", "fail",
                                                  f"{', '.join(repairs)} failed: {type(error).__name__}: {error}")]
 
     v6_summary = _finish_v6(
@@ -4381,10 +4349,9 @@ def run_pipeline(
         artifact_dir=VOD_OUTPUT_DIR / "pro_edit" / _safe_name(video_path.stem),
         clip_index=selected_clip_index,
         qc_rows=qc_rows,
-        review=review_doc,
     )
     gate = dict(v6_run.gate)
-    state["final_qc"] = {"checks": qc_rows, "review": review_doc, "repairs": repairs}
+    state["final_qc"] = {"checks": qc_rows, "repairs": repairs}
     publish_sig = _stage_signature("publish", inputs=[candidate], options={"gate": gate.get("status")})
     if gate.get("status") == v6_runtime.GATE_FAILED:
         rejected = _reject_candidate(candidate, video_path, gate, state)
@@ -4402,11 +4369,22 @@ def run_pipeline(
     published_path = _publish_final(candidate, video_path)
     if not _valid_file(published_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Published final short oluşmadı.")
-    _write_json_atomic(published_path.with_suffix(".qc.json"),
-                       {"status": gate.get("status"), "gate": gate, "review": review_doc, "repairs": repairs,
-                        "source": str(video_path), "published": str(published_path), "at": _now()})
     publish_status = "published" if gate.get("status") == v6_runtime.GATE_PASSED else "published_degraded"
+    blocking = set(getattr(v6_runtime, "BLOCKING_FALLBACKS", ()))
+    review_packet = human_review.build_review_packet(
+        published=published_path, source=video_path, status=publish_status, qc_rows=qc_rows,
+        timeline_doc=candidate_doc, truth=human_review.load_truth(caption_truth_path), headline=headline_text,
+        effect_windows=_effect_windows(candidate) if candidate != final_preview_path else [],
+        degradations=[f"{row['subsystem']} -> {row['level']}: {row['reason']}" for row in v6_run.fallbacks
+                      if row.get("subsystem") not in blocking],
+        repairs=repairs)
+    review_sheet = human_review.write_review_packet(published_path, review_packet)
+    _write_json_atomic(published_path.with_suffix(".qc.json"),
+                       {"status": gate.get("status"), "gate": gate, "repairs": repairs,
+                        "human_review": {**review_packet, "sheet": str(review_sheet)},
+                        "source": str(video_path), "published": str(published_path), "at": _now()})
     state["publish_status"] = publish_status
+    state["human_review"] = str(review_sheet)
     _stage_done(published_path)
     book.record(
         "publish",
@@ -4492,6 +4470,7 @@ def run_pipeline(
         "fast_resume": False,
         "status": state.get("publish_status", "published"),
         "final_qc": state.get("final_qc"),
+        "human_review": state.get("human_review"),
     }
     if isinstance(state.get("pro_edit"), dict):
         result["pro_edit"] = dict(state["pro_edit"])
@@ -4513,6 +4492,8 @@ def run_pipeline(
         for item in profile["slowest"][:6]:
             print(f"   - {item['label']}: {float(item['seconds']):.1f}s")
     print(f"📂 {published_path}")
+    if state.get("human_review"):
+        print(f"🧑‍⚖️ Human review (acceptance): {state['human_review']}")
 
     if source_visual_report_path:
         print(

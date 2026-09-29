@@ -41,8 +41,8 @@ def _live_check() -> None:
     plan = model_config.model_plan()
     unique_models: list[str] = []
 
-    for role in ("editor", "clip", "intro", "teaser", "meme", "meme_discovery"):
-        model = plan[role]["model"]
+    for role in plan.values():
+        model = role["model"]
         if model not in unique_models:
             unique_models.append(model)
 

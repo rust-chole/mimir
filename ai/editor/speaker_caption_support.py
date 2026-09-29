@@ -668,22 +668,27 @@ def _candidate_votes(
     window_text: str,
     transcripts: list[str],
     core_rel: tuple[int, int],
+    sources: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Convert actual ASR outputs into candidate phrases for only the suspect core."""
+    """Convert actual ASR outputs into candidate phrases for only the suspect core.
+
+    ``sources`` are the fixed ear ids (asr_1 raw acoustic, asr_2 enhanced acoustic,
+    asr_3.. context ears): an ear that failed never shifts the ids of later ears."""
     buckets: dict[tuple[str, ...], dict[str, Any]] = {}
     evidence: list[dict[str, Any]] = []
     for index, transcript in enumerate(transcripts, start=1):
         text = str(transcript or "").strip()
         if not text:
             continue
+        source = sources[index - 1] if sources and index - 1 < len(sources) else f"asr_{index}"
         phrase = _reference_phrase_for_core(window_text, text, core_rel[0], core_rel[1])
         canon = _canon_phrase(phrase)
         # Empty means this ASR effectively deleted the core. Keep it as evidence,
         # but deletion needs a stronger 3-vote threshold before automatic use.
         slot = buckets.setdefault(canon, {"phrase": phrase, "votes": 0, "sources": []})
         slot["votes"] += 1
-        slot["sources"].append(f"asr_{index}")
-        evidence.append({"source": f"asr_{index}", "phrase": " ".join(phrase), "transcript": text[:400]})
+        slot["sources"].append(source)
+        evidence.append({"source": source, "phrase": " ".join(phrase), "transcript": text[:400]})
     ranked = sorted(
         buckets.values(),
         key=lambda item: (int(item["votes"]), len(_canon_phrase(tuple(item["phrase"])))),
@@ -748,29 +753,45 @@ def _micro_refine_caption(
     suspect_spans: list[dict[str, Any]],
     duration: float,
     known_names: list[str] | None = None,
+    timing_words: list[dict[str, Any]] | None = None,
+    crosscheck_text: str = "",
+    crosscheck_words: list[tuple[str, float]] | None = None,
+    judge: Any = None,
 ) -> tuple[str, dict[str, Any]]:
+    """Gather local acoustic evidence per suspect span, then decide the WORDS.
+
+    1. Evidence: three independent local ears per span (raw + enhanced acoustic,
+       one context-diverse); two more when the first three are not unanimous.
+    2. Decision: a span that >=3 ears heard identically is settled by that
+       unanimous acoustic evidence. Every other span goes, in ONE batched call,
+       to the caption judge (caption_judge.py, the strongest model) with all the
+       evidence; each verdict passes a deterministic grounding guard, else the
+       strict acoustic vote (4/5) decides that span.
+    3. Only TEXT changes here; the caller aligns it to the measured word clock.
+    """
+    from ai.editor import caption_judge
+
     tokens = _caption_tokens(base_text)
+    empty_meta = {"checked_spans": 0, "corrected_spans": 0, "unresolved_spans": 0, "details": [],
+                  "lexical_judge": {"status": "not_needed"}}
     if not tokens or not aligned_words or not suspect_spans:
-        return base_text, {"checked_spans": 0, "corrected_spans": 0, "unresolved_spans": 0, "human_reviews": 0, "details": []}
+        return base_text, empty_meta
 
     original_token_count = len(tokens)
     original_aligned_count = len(aligned_words)
-    details: list[dict[str, Any]] = []
-    corrected = 0
-    unresolved = 0
-    human_reviews = 0
-    unknown_masks = 0
+    clock = [(str(w.get("word", "")), float(w.get("start", 0.0)), float(w.get("end", 0.0)))
+             for w in (timing_words or []) if isinstance(w, dict)]
+    doubtful = [(w, p) for w, p in (crosscheck_words or []) if p < CAPTION_LOW_CONFIDENCE_PROB]
+    gathered: list[dict[str, Any]] = []
+    skipped = 0
 
-    # Right-to-left keeps earlier token indices stable when one local phrase changes length.
-    for span in sorted(suspect_spans, key=lambda item: item["start"], reverse=True):
+    for span in sorted(suspect_spans, key=lambda item: item["start"]):
         core_start = max(0, min(original_token_count - 1, int(span["start"])))
         core_end = max(core_start + 1, min(original_token_count, int(span["end"])))
         window_start = max(0, core_start - CAPTION_MICRO_CONTEXT_WORDS)
         window_end = min(original_token_count, core_end + CAPTION_MICRO_CONTEXT_WORDS)
-        window_end = min(len(tokens), window_end)
-        core_end_now = min(len(tokens), core_end)
-        if window_start >= window_end or core_start >= core_end_now:
-            unresolved += 1
+        if window_start >= window_end or core_start >= core_end:
+            skipped += 1
             continue
 
         aligned_start_index = _aligned_index_for_token(window_start, original_token_count, original_aligned_count)
@@ -779,164 +800,80 @@ def _micro_refine_caption(
         time_end = min(duration, float(aligned_words[aligned_end_index].get("end", time_start + 0.5)) + CAPTION_MICRO_PAD_SECONDS)
         time_start, time_end = _expand_micro_window(time_start=time_start, time_end=time_end, duration=duration)
         if time_end <= time_start + 0.20:
-            unresolved += 1
+            skipped += 1
             continue
+        core_t0 = float(aligned_words[_aligned_index_for_token(core_start, original_token_count, original_aligned_count)].get("start", 0.0))
+        core_t1 = float(aligned_words[_aligned_index_for_token(core_end - 1, original_token_count, original_aligned_count)].get("end", core_t0))
 
         window_text = " ".join(tokens[window_start:window_end]).strip()
         before = " ".join(tokens[max(0, window_start - 12):window_start])
         after = " ".join(tokens[window_end:min(len(tokens), window_end + 12)])
-        core_rel = (core_start - window_start, core_end_now - window_start)
-        current_phrase = " ".join(tokens[core_start:core_end_now]).strip()
-        raw_path: Path | None = None
-        enhanced_path: Path | None = None
-        errors: list[str] = []
-        transcripts: list[str] = []
-        candidate_rows: list[dict[str, Any]] = []
-        semantic_meta: dict[str, Any] = {"status": "not_needed"}
-        human_meta: dict[str, Any] = {"status": "not_needed"}
-        selected_phrase: str | None = None
-        selected_source = ""
-        known_name_span = "known_name" in set(str(value) for value in span.get("sources", []))
+        core_rel = (core_start - window_start, core_end - window_start)
         glossary_tokens = _known_name_tokens(known_names)
         glossary_instruction = (
             "Known on-screen participant names (reference only): " + ", ".join(glossary_tokens)
             + ". If the AUDIO clearly says one of these names, spell that name exactly. "
               "Never force a name when the audio says something else."
         ) if glossary_tokens else ""
-        try:
-            raw_path = vod_processor.extract_caption_micro_audio(
-                audio_path, start=time_start, end=time_end,
-                label=f"span_{core_start}_{core_end}", enhanced=False,
-            )
-            enhanced_path = vod_processor.extract_caption_micro_audio(
-                audio_path, start=time_start, end=time_end,
-                label=f"span_{core_start}_{core_end}", enhanced=True,
-            )
-            first_three = [
-                (raw_path, vod_processor.CAPTION_ACCURATE_MODEL, "raw acoustic", False, "Acoustic-only listen; no contextual guessing."),
-                (enhanced_path, vod_processor.CAPTION_ACCURATE_MODEL, "enhanced acoustic", False, "Independent enhanced-audio listen; preserve tiny function words."),
-                (raw_path, vod_processor.CAPTION_CROSSCHECK_MODEL, "context diverse", True, "Context may disambiguate, but audio always wins. " + glossary_instruction),
-            ]
+        raw_path: Path | None = None
+        enhanced_path: Path | None = None
+        errors: list[str] = []
+        transcripts: list[str] = []
+        ear_rows: list[dict[str, Any]] = []
+        candidate_rows: list[dict[str, Any]] = []
 
-            # V13 speed-only optimization: these are independent evidence ears.
-            # Run them concurrently, but consume results in the original fixed
-            # order so voting/output semantics stay deterministic.
-            with ThreadPoolExecutor(max_workers=min(CAPTION_PARALLEL_WORKERS, len(first_three)), thread_name_prefix="mimir-caption-micro") as executor:
+        def listen(ears: list[tuple[str, Path, str, str, bool, str]], prefix: str) -> None:
+            # Independent evidence ears run concurrently; results are consumed in
+            # the fixed ear order so the evidence (and every vote) is deterministic.
+            with ThreadPoolExecutor(max_workers=min(CAPTION_PARALLEL_WORKERS, len(ears)),
+                                    thread_name_prefix=prefix) as executor:
                 futures = [
-                    executor.submit(
-                        vod_processor.transcribe_caption_micro_pass,
-                        view,
-                        model=model,
-                        label=label,
-                        context_before=before,
-                        context_after=after,
-                        extra_instruction=instruction,
-                        use_context=use_context,
-                        known_names=known_names,
-                    )
-                    for view, model, label, use_context, instruction in first_three
+                    executor.submit(vod_processor.transcribe_caption_micro_pass, view, model=model, label=label,
+                                    context_before=before, context_after=after, extra_instruction=instruction,
+                                    use_context=use_context, known_names=known_names)
+                    for _ear, view, model, label, use_context, instruction in ears
                 ]
-                for future, (_view, _model, label, _use_context, _instruction) in zip(futures, first_three):
+                for future, (ear, _view, model, label, use_context, _instruction) in zip(futures, ears):
                     try:
                         text = str(future.result() or "").strip()
-                        if text:
-                            transcripts.append(text)
                     except Exception as error:
                         errors.append(f"{label}: {error}")
+                        continue
+                    if text:
+                        transcripts.append(text)
+                        ear_rows.append({"ear": ear, "model": model, "view": label, "prompted": use_context,
+                                         "heard_window": text[:400], "heard_core": " ".join(
+                                             _reference_phrase_for_core(window_text, text, *core_rel))})
 
-            candidate_rows, evidence = _candidate_votes(window_text=window_text, transcripts=transcripts, core_rel=core_rel)
-            if candidate_rows:
-                top = candidate_rows[0]
-                # V31: the primary gpt-transcribe text is authoritative. A local
-                # rewrite after only 2/3 ears was too eager and could create
-                # fluent-but-wrong captions. First round must be unanimous 3/3.
-                phrase = tuple(top.get("phrase", ()))
-                required = 3
-                if int(top.get("votes", 0)) >= required and phrase:
-                    selected_phrase = " ".join(phrase)
-                    selected_source = f"micro_strict_{int(top.get('votes', 0))}_of_{len(transcripts)}"
-
-            # No majority: two more DIFFERENT evidence views on this same tiny window only.
-            if selected_phrase is None and CAPTION_QUALITY_RETRY_LIMIT > 0:
-                extra = [
-                    (enhanced_path, vod_processor.CAPTION_CROSSCHECK_MODEL, "enhanced diverse", True, "Independent model on enhanced audio. " + glossary_instruction),
-                    (raw_path, vod_processor.CAPTION_ACCURATE_MODEL, "context precision", True, "Final context-guided precision listen; never repair grammar. " + glossary_instruction),
-                ]
-                with ThreadPoolExecutor(max_workers=min(CAPTION_PARALLEL_WORKERS, len(extra)), thread_name_prefix="mimir-caption-micro-extra") as executor:
-                    futures = [
-                        executor.submit(
-                            vod_processor.transcribe_caption_micro_pass,
-                            view,
-                            model=model,
-                            label=label,
-                            context_before=before,
-                            context_after=after,
-                            extra_instruction=instruction,
-                            use_context=use_context,
-                            known_names=known_names,
-                        )
-                        for view, model, label, use_context, instruction in extra
-                    ]
-                    for future, (_view, _model, label, _use_context, _instruction) in zip(futures, extra):
-                        try:
-                            text = str(future.result() or "").strip()
-                            if text:
-                                transcripts.append(text)
-                        except Exception as error:
-                            errors.append(f"{label}: {error}")
-                candidate_rows, evidence = _candidate_votes(window_text=window_text, transcripts=transcripts, core_rel=core_rel)
-                if candidate_rows:
-                    top = candidate_rows[0]
-                    phrase = tuple(top.get("phrase", ()))
-                    # After five independent local ears, require 4/5 to rewrite.
-                    # Deletion is never automatic in V31; preserving the primary
-                    # transcript is safer than silently dropping spoken words.
-                    if phrase and int(top.get("votes", 0)) >= 4:
-                        selected_phrase = " ".join(phrase)
-                        selected_source = f"micro_strict_{int(top.get('votes', 0))}_of_{len(transcripts)}"
-
-            # No phrase-specific spelling rules: a wording change needs the strict
-            # independent acoustic majority above, nothing else.
-            slang_meta: dict[str, Any] = {"status": "removed_no_phrase_specific_rules"}
-
-            # V31/V3: no general semantic tie-break can rewrite wording and no ??? mask can
-            # replace real primary text. If the acoustic evidence is not strong
-            # enough, preserve the high-accuracy gpt-transcribe phrase verbatim.
-            semantic_meta = {"status": "disabled_v31_primary_text_authority"}
-            uncertainty_meta: dict[str, Any] = {"score": 0.0, "eligible": False, "status": "disabled_v31_preserve_primary"}
-            if selected_phrase is None:
-                human_meta = {"status": "disabled_non_blocking"}
-
-            if selected_phrase is not None:
-                new_words = _caption_tokens(selected_phrase)
-                old_canon = _canon_phrase(tuple(tokens[core_start:core_end_now]))
-                new_canon = _canon_phrase(tuple(new_words))
-                if old_canon != new_canon:
-                    tokens[core_start:core_end_now] = new_words
-                    corrected += 1
-            else:
-                unresolved += 1
-
-            details.append({
-                "span": [core_start, core_end],
-                "sources": span.get("sources", []),
-                "reasons": span.get("reasons", []),
-                "audio_window": [round(time_start, 3), round(time_end, 3)],
-                "micro_passes": len(transcripts),
-                "candidate_votes": [
-                    {"phrase": " ".join(item.get("phrase", ())), "votes": int(item.get("votes", 0)), "sources": item.get("sources", [])}
-                    for item in candidate_rows[:8]
-                ],
-                "selected_source": selected_source,
-                "selected_phrase": selected_phrase,
-                "semantic_tiebreak": semantic_meta,
-                "streamer_slang_resolution": slang_meta,
-                "human_review": human_meta,
-                "uncertainty": uncertainty_meta,
-                "masked_unknown": selected_source == "uncertainty_mask",
-                "resolved": selected_phrase is not None,
-                "errors": errors[:6],
-            })
+        try:
+            raw_path = vod_processor.extract_caption_micro_audio(
+                audio_path, start=time_start, end=time_end, label=f"span_{core_start}_{core_end}", enhanced=False)
+            enhanced_path = vod_processor.extract_caption_micro_audio(
+                audio_path, start=time_start, end=time_end, label=f"span_{core_start}_{core_end}", enhanced=True)
+            listen([
+                ("asr_1", raw_path, vod_processor.CAPTION_ACCURATE_MODEL, "raw acoustic", False,
+                 "Acoustic-only listen; no contextual guessing."),
+                ("asr_2", enhanced_path, vod_processor.CAPTION_ACCURATE_MODEL, "enhanced acoustic", False,
+                 "Independent enhanced-audio listen; preserve tiny function words."),
+                ("asr_3", raw_path, vod_processor.CAPTION_CROSSCHECK_MODEL, "context diverse", True,
+                 "Context may disambiguate, but audio always wins. " + glossary_instruction),
+            ], "mimir-caption-micro")
+            candidate_rows, _evidence = _candidate_votes(window_text=window_text, transcripts=transcripts,
+                                                         core_rel=core_rel, sources=[r["ear"] for r in ear_rows])
+            top = candidate_rows[0] if candidate_rows else {}
+            # Unanimous, non-empty and at least three ears: the acoustic evidence settles the span.
+            settled = bool(top) and bool(top.get("phrase")) and int(top.get("votes", 0)) >= 3 \
+                and int(top.get("votes", 0)) == len(transcripts)
+            if not settled and CAPTION_QUALITY_RETRY_LIMIT > 0:
+                listen([
+                    ("asr_4", enhanced_path, vod_processor.CAPTION_CROSSCHECK_MODEL, "enhanced diverse", True,
+                     "Independent model on enhanced audio. " + glossary_instruction),
+                    ("asr_5", raw_path, vod_processor.CAPTION_ACCURATE_MODEL, "context precision", True,
+                     "Final context-guided precision listen; never repair grammar. " + glossary_instruction),
+                ], "mimir-caption-micro-extra")
+                candidate_rows, _evidence = _candidate_votes(window_text=window_text, transcripts=transcripts,
+                                                             core_rel=core_rel, sources=[r["ear"] for r in ear_rows])
+                top = candidate_rows[0] if candidate_rows else {}
         finally:
             for path in (raw_path, enhanced_path):
                 if path is not None:
@@ -945,16 +882,92 @@ def _micro_refine_caption(
                     except Exception:
                         pass
 
+        # The strict acoustic rule (deletion never automatic): 3/3 in the first round, 4/5 after.
+        needed = 3 if len(transcripts) <= 3 else 4
+        strict = ({"phrase": " ".join(top.get("phrase", ())), "votes": int(top.get("votes", 0)),
+                   "of": len(transcripts)} if top and top.get("phrase") and int(top.get("votes", 0)) >= needed
+                  else None)
+        crosscheck_ear = []
+        if crosscheck_text:
+            crosscheck_ear.append({
+                "ear": "crosscheck", "model": vod_processor.CAPTION_CROSSCHECK_MODEL, "view": "full clip",
+                "prompted": False,
+                "heard_window": " ".join(_reference_phrase_for_core(base_text, crosscheck_text, window_start, window_end)),
+                "heard_core": " ".join(_reference_phrase_for_core(base_text, crosscheck_text, core_start, core_end)),
+            })
+        window_vocabulary = {vod_processor.canonical_word(t) for t in _caption_tokens(window_text)}
+        for row in crosscheck_ear:
+            window_vocabulary.update(vod_processor.canonical_word(t) for t in _caption_tokens(row["heard_window"]))
+        span_id = f"span_{core_start}_{core_end}"
+        evidence = caption_judge.SpanEvidence(
+            span_id=span_id, core=(core_start, core_end), current=" ".join(tokens[core_start:core_end]),
+            window_text=window_text, context_before=before, context_after=after,
+            audio_window=(time_start, time_end),
+            suspicion=[str(x) for x in [*span.get("sources", []), *span.get("reasons", [])]],
+            ears=[*ear_rows, *crosscheck_ear], strict=strict,
+            clock=[(w, a, b) for w, a, b in clock if time_start - 1e-3 <= a and b <= time_end + 1e-3],
+            core_clock=[w for w, a, b in clock if a < core_t1 and core_t0 < b],
+            low_confidence=[(w, p) for w, p in doubtful if vod_processor.canonical_word(w) in window_vocabulary],
+        )
+        settled_decision = None
+        if top and top.get("phrase") and int(top.get("votes", 0)) >= 3 and int(top.get("votes", 0)) == len(transcripts):
+            settled_decision = caption_judge.SpanDecision(
+                span_id, " ".join(top.get("phrase", ())), True,
+                f"settled_unanimous_{int(top.get('votes', 0))}_of_{len(transcripts)}")
+        gathered.append({"span": span, "core": (core_start, core_end), "window": (time_start, time_end),
+                         "transcripts": transcripts, "candidate_rows": candidate_rows, "errors": errors,
+                         "evidence": evidence, "decision": settled_decision})
+
+    open_spans = [row["evidence"] for row in gathered if row["decision"] is None]
+    decisions, judge_meta = caption_judge.resolve_spans(
+        open_spans, primary_text=base_text, crosscheck_text=crosscheck_text,
+        verified_names=_known_name_tokens(known_names), clip_duration=duration, judge=judge)
+    for row in gathered:
+        if row["decision"] is None:
+            row["decision"] = decisions[row["evidence"].span_id]
+
+    corrected = 0
+    unresolved = skipped
+    details: list[dict[str, Any]] = []
+    # Right-to-left keeps earlier token indices stable when one local phrase changes length.
+    for row in sorted(gathered, key=lambda item: item["core"][0], reverse=True):
+        decision = row["decision"]
+        core_start, core_end = row["core"]
+        current = tokens[core_start:core_end]
+        if decision.phrase is not None:
+            new_words = _caption_tokens(decision.phrase)
+            if _canon_phrase(tuple(current)) != _canon_phrase(tuple(new_words)):
+                tokens[core_start:core_end] = new_words
+                corrected += 1
+        if not decision.resolved:
+            unresolved += 1
+        applied = decision.phrase if decision.phrase is not None else (" ".join(current) if decision.resolved else None)
+        details.append({
+            "span": [core_start, core_end],
+            "sources": row["span"].get("sources", []),
+            "reasons": row["span"].get("reasons", []),
+            "audio_window": [round(row["window"][0], 3), round(row["window"][1], 3)],
+            "micro_passes": len(row["transcripts"]),
+            "ears": [{k: e.get(k) for k in ("ear", "model", "view", "prompted")} for e in row["evidence"].ears],
+            "candidate_votes": [
+                {"phrase": " ".join(item.get("phrase", ())), "votes": int(item.get("votes", 0)), "sources": item.get("sources", [])}
+                for item in row["candidate_rows"][:8]
+            ],
+            "primary_phrase": " ".join(current),
+            "selected_source": decision.source,
+            "selected_phrase": applied,
+            "lexical_decision": decision.to_dict(),
+            "resolved": decision.resolved,
+            "errors": row["errors"][:6],
+        })
+
     return " ".join(tokens).strip(), {
         "checked_spans": len(suspect_spans),
         "corrected_spans": corrected,
         "unresolved_spans": unresolved,
-        "human_reviews": human_reviews,
-        "unknown_masks": unknown_masks,
         "details": list(reversed(details)),
+        "lexical_judge": judge_meta,
     }
-
-
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -1203,16 +1216,18 @@ def _transcribe_edited_words(
     diarization_text: str = "",
     known_names: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], float, str, dict[str, Any]]:
-    """Final-caption truth path with three strictly separated authorities.
+    """Final-caption truth path with strictly separated authorities.
 
-    WORDS   -> gpt-transcribe (primary, immutable unless a local acoustic vote is decisive)
-    CLOCK   -> whisper-1 native word timestamps on the exact final 48 kHz PCM
+    WORDS   -> gpt-transcribe primary; a suspect span changes only by the caption
+               judge's evidence-grounded verdict (caption_judge.py, strongest model)
+               or, without a judge, by the strict local acoustic vote (3/3, 4/5)
+    CLOCK   -> whisper-1 native word timestamps on the exact final 48 kHz PCM;
+               the judge never emits a time, its text is aligned to this clock
     SPEAKER -> diarization elsewhere; never allowed to move or rewrite a word
 
-    A single model-diverse full-clip cross-check only LOCATES suspicious spans.
-    It cannot replace the primary transcript. Local correction is allowed only
-    through the existing tiny-window acoustic vote (3/3, or 4/5 after retry).
-    There is no semantic rewriting, global clock calibration, silence snap,
+    The model-diverse full-clip cross-check (with token confidence) LOCATES
+    suspicious spans and is evidence; it never replaces the primary wholesale.
+    There is no free rewriting, global clock calibration, silence snap,
     diarized timing, hybrid timing or transcript-wide majority replacement.
     """
     verification_errors: list[str] = []
@@ -1301,11 +1316,12 @@ def _transcribe_edited_words(
         "checked_spans": 0,
         "corrected_spans": 0,
         "unresolved_spans": 0,
-        "human_reviews": 0,
-        "unknown_masks": 0,
         "details": [],
+        "lexical_judge": {"status": "not_needed"},
     }
     if suspect_spans:
+        from ai.editor import caption_judge
+
         refined_text, micro_meta = _micro_refine_caption(
             audio_path=audio_path,
             base_text=primary_text,
@@ -1313,6 +1329,10 @@ def _transcribe_edited_words(
             suspect_spans=suspect_spans,
             duration=duration,
             known_names=known_names,
+            timing_words=timing_words,
+            crosscheck_text=crosscheck_text,
+            crosscheck_words=crosscheck_words,
+            judge=caption_judge.default_judge(),
         )
 
     # V7 verified-name orthography lock.  Acoustic ASR often cannot distinguish
@@ -1397,10 +1417,12 @@ def _transcribe_edited_words(
         "known_names": _known_name_tokens(known_names),
         "known_name_orthography": known_name_orthography_meta,
         "micro_accuracy": micro_meta,
+        "lexical_judge": micro_meta.get("lexical_judge", {"status": "not_needed"}),
         "verification_errors": verification_errors,
         "policy": (
-            "gpt-transcribe wording authority + gpt-4o-transcribe disagreement locator; "
-            "strict local wording correction only + human-verified direct-address name orthography; "
+            "gpt-transcribe primary wording + model-diverse cross-check locator; disputed spans decided by the "
+            "caption judge from all ear evidence (grounding-guarded; strict 3/3-4/5 acoustic vote without it) "
+            "+ human-verified direct-address name orthography; "
             "whisper-1 native word clock with backward-only exact-PCM outlier guard; "
             "zero global calibration/diarized timing; speaker metadata cannot mutate words or time"
         ),

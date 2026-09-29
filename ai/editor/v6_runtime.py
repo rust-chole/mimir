@@ -3,7 +3,8 @@
 The single production path = frozen caption truth (``caption_truth.py``) +
 Pro Edit presentation with the evidence director and pixel proof
 (``pro_edit/direction.py``, ``render_proof.py``) + rendered-MP4 QC
-(``final_qc.py``) + bounded review (``final_review.py``) + this gate.
+(``final_qc.py``) + this gate. There is no AI reviewer: the acceptance layer
+after the gate is a HUMAN, who gets a review packet (``human_review.py``).
 
 * ``--rerender`` (alias ``--force-v6``) re-runs only the presentation /
   render / QC stages; every upstream cache stays valid.
@@ -354,8 +355,7 @@ def final_quality_gate(*, run: V6Run, final_output: str | Path, profile_path: st
                        main_proof: Mapping[str, Any] | None, final_proof: Mapping[str, Any] | None,
                        intro_proof: Mapping[str, Any] | None, story_intact: tuple[bool, str],
                        intro_handoff: Mapping[str, Any] | None, render_status: str,
-                       display_labels: Sequence[str] = (), qc_rows: Sequence[Mapping[str, Any]] = (),
-                       review: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                       display_labels: Sequence[str] = (), qc_rows: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """Deterministic acceptance on the final candidate. Never raises."""
     checks: list[dict[str, Any]] = []
 
@@ -403,13 +403,6 @@ def final_quality_gate(*, run: V6Run, final_output: str | Path, profile_path: st
                                                                             for r in degraded[:6]),
                              fallbacks=list(degraded)))
     checks.extend(dict(row) for row in qc_rows)
-    if review:
-        status = str(review.get("status", ""))
-        if status == "reviewed" and not review.get("warnings"):
-            checks.append(_check("final_review", "pass", str(review.get("summary", "")) or "no finding"))
-        else:
-            detail = "; ".join(str(w) for w in (review.get("warnings") or [])[:4]) or str(review.get("reason", status))
-            checks.append(_check("final_review", "warn", detail, review=dict(review)))
     failed = [c for c in checks if c["status"] == "fail"]
     warned = [c for c in checks if c["status"] == "warn"]
     status = GATE_FAILED if failed else ("passed_with_warnings" if warned else GATE_PASSED)

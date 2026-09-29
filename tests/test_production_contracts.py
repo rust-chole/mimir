@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import json
+import os
 import pkgutil
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import ai
-from ai.editor import final_review, intro_analyzer, intro_bounds, intro_renderer, meme_renderer, teaser_analyzer
+from ai.editor import human_review, intro_analyzer, intro_bounds, intro_renderer, meme_renderer, teaser_analyzer
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -177,23 +182,120 @@ class EffectsChainVersionTests(unittest.TestCase):
         self.assertNotRegex(source, r'_contains_clip\(meme_slot_path, "clips", selected_clip_index, \d')
 
 
-class ReviewerAuthorityTests(unittest.TestCase):
-    def test_reviewer_can_only_trigger_bounded_repairs_or_warn(self) -> None:
-        repairs, warnings = final_review.decide([
-            {"type": "headline_contradicts_video", "confidence": 0.93, "explanation": "x"},
-            {"type": "half_cut_face", "confidence": 0.55, "explanation": "unsure"},
-            {"type": "caption_unreadable", "confidence": 0.99, "explanation": "no repair exists"},
-        ])
-        self.assertEqual(repairs, ["drop_headline"])
-        self.assertEqual(len(warnings), 2)
+class ModelRoutingTests(unittest.TestCase):
+    STRONG = {"caption_judge", "edit_director"}
 
-    def test_reviewer_unavailable_is_recorded_never_a_silent_pass(self) -> None:
-        with mock.patch.object(final_review, "default_reviewer", return_value=None):
-            result = final_review.review_final(final_review.ReviewInput(
-                candidate=Path("c.mp4"), intro_source=Path("s.mp4"), timeline_doc={}, headline="", transcript=""))
-        self.assertEqual(result.status, "not_run")
-        self.assertTrue(result.warnings)
+    def test_astra_is_spent_on_captions_and_editing_only(self) -> None:
+        """Defaults (no .env, no MIMIR_* overrides): the strongest model decides caption words and
+        editorial intent; scouting, drafting, classification and support stay on cheaper tiers."""
+        code = ("import json, dotenv; dotenv.load_dotenv = lambda *a, **k: False\n"
+                "from ai import model_config as m\n"
+                "print(json.dumps({'plan': m.model_plan(), 'astra': m.DEFAULT_ASTRA_MODEL}))")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("MIMIR_")}
+        out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True,
+                             check=True).stdout
+        data = json.loads(out)
+        plan, astra = data["plan"], data["astra"]
+        self.assertEqual(astra, "gpt-6-astra")
+        for role in self.STRONG:
+            self.assertEqual(plan[role]["model"], astra, role)
+        for role, row in plan.items():
+            if role not in self.STRONG:
+                self.assertNotEqual(row["model"], astra, f"{role} must not spend Astra budget")
 
+    def test_the_edit_director_runs_on_the_director_model(self) -> None:
+        from ai import model_config
+        from ai.editor.pro_edit.config import load_config
+
+        config = load_config(environ={})
+        self.assertEqual((config.model, config.reasoning_effort),
+                         (model_config.EDIT_DIRECTOR_MODEL, model_config.EDIT_DIRECTOR_REASONING_EFFORT))
+
+
+class EditDirectorIntentTests(unittest.TestCase):
+    GEOMETRY = re.compile(r"crop|zoom|scale|coord|pixel|^x\d?$|^y\d?$|^x0|^y0|^x1|^y1|width|height|position|box|"
+                          r"rect|offset|center_x|center_y|^cx$|^cy$", re.I)
+
+    def test_the_director_schema_can_only_express_intent(self) -> None:
+        from ai.editor.pro_edit.schema import planner_json_schema
+
+        names = []
+        for _path, obj in _objects(planner_json_schema("pro_stream_v1")):
+            names.extend(obj["properties"])
+        self.assertTrue(names)
+        self.assertEqual([n for n in names if self.GEOMETRY.search(n)], [])
+
+    def test_scene_evidence_reaches_the_director_as_words(self) -> None:
+        import dataclasses
+        from types import SimpleNamespace
+
+        import pro_edit_fixtures as fx
+        from ai.editor.pro_edit import request as planner_request
+        from ai.editor.pro_edit import stage
+        from ai.editor.pro_edit.style import get_style_pack
+        from ai.editor.pro_edit.subjects import SubjectSample, SubjectTrack
+
+        workspace = fx.Workspace()
+        self.addCleanup(workspace.cleanup)
+        context = fx.make_context(workspace)
+        face = SubjectTrack("face_1", "face", (SubjectSample(1.0, 0.8, 0.2, 0.1, 0.15, 0.9),), speaker_id="A")
+        context = dataclasses.replace(context, subject_tracks=(face,), scene_changes=(3.0, 9.5))
+        request = SimpleNamespace(config=SimpleNamespace(caption_activity=False, caption_ui=False,
+                                                         caption_layout=False), force=False)
+        evidence = stage.director_evidence(request, SimpleNamespace(artifacts=object()), context, fx.media())
+        self.assertEqual(evidence["faces"], [{"subject_id": "face_1", "kind": "face", "where": "upper-right",
+                                              "size": "small", "speaker_id": "A"}])
+        self.assertIn("layout", evidence)
+        payload = planner_request.build_payload(dataclasses.replace(context, director_evidence=evidence),
+                                                get_style_pack("pro_stream_v1"))
+        self.assertEqual(payload["shot_cuts_s"], [3.0, 9.5])
+        self.assertEqual(payload["scene"]["faces"][0]["where"], "upper-right")
+        for key in ("speaker_names", "motion_events", "story_spans", "caption_words", "subjects"):
+            self.assertIn(key, payload)
+        # Evidence carries region words, never boxes the director could echo back.
+        def keys(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    yield k
+                    yield from keys(v)
+            elif isinstance(node, list):
+                for v in node:
+                    yield from keys(v)
+        self.assertEqual([k for k in keys(payload["scene"]) if self.GEOMETRY.search(k)], [])
+
+
+class HumanAcceptanceTests(unittest.TestCase):
+    def test_no_model_reviews_the_final_short(self) -> None:
+        """The acceptance layer is a human; no AI reviewer or reviewer-triggered repair exists."""
+        self.assertIsNone(importlib.util.find_spec("ai.editor.final_review"))
+        offenders = [str(path.relative_to(ROOT)) for path in (ROOT / "ai").rglob("*.py")
+                     if re.search(r"final_review|MIMIR_FINAL_REVIEW|render_static_camera",
+                                  path.read_text(encoding="utf-8-sig"))]
+        self.assertEqual(offenders, [])
+
+    def test_review_packet_points_at_uncertain_and_changed_words_on_the_final_clock(self) -> None:
+        doc = {"intro": {"duration": 2.0, "paced": [10.0, 12.0]}, "restart": {"main_restart_paced": 1.0}}
+        truth = {
+            "words": [[0, "gone", 0.4, 0.6, "A", "S1"], [1, "Marra", 5.0, 5.3, "A", "S1"],
+                      [2, "said", 5.4, 5.6, "A", "S1"], [3, "stop", 8.0, 8.3, "B", "Mira"]],
+            "uncertain": [{"word_ids": [1], "reason": "asr_ears_disagree"},
+                          {"word_ids": [0], "reason": "asr_ears_disagree"}],     # trimmed by the restart
+            "lexical_decisions": [{"changed": True, "paced_start": 8.0, "from": "top", "to": "stop",
+                                   "decided_by": "caption judge", "confidence": 0.9},
+                                  {"changed": False, "paced_start": 5.4, "from": "said", "to": "said"}],
+        }
+        packet = human_review.build_review_packet(
+            published=Path("x_short.mp4"), source=Path("x.mp4"), status="published",
+            qc_rows=[{"check": "a", "status": "pass"}], timeline_doc=doc, truth=truth, headline="",
+            degradations=["face_tracking -> stable_wide: no face"])
+        focus = [(item["kind"], item["final_s"]) for item in packet["focus"]]
+        self.assertEqual(focus, [("caption_uncertain", 6.0), ("caption_changed_by_judge", 9.0)])
+        self.assertEqual(packet["speakers"], {"Mira": 1, "S1": 3})
+        text = human_review.render_markdown(packet)
+        self.assertIn('0:06.0 caption "Marra"', text)
+        self.assertIn('"top" -> "stop"', text)
+        self.assertIn("none (no grounded headline was approved)", text)
+        self.assertIn("face_tracking -> stable_wide", text)
 
 if __name__ == "__main__":
     unittest.main()
