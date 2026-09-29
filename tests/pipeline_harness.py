@@ -288,6 +288,8 @@ def main() -> int:
         "final_output": str(final),
         "human_review": result.get("human_review"),
         "story_integrity": state.get("story_integrity"),
+        "artifact_index": state.get("artifact_index"),
+        "state_file": str(result["state_file"]),
         "pacing_inputs": list(PACING_INPUTS),
         "qc_report": json.loads(final.with_suffix(".qc.json").read_text(encoding="utf-8")),
         "final_md5": md5(final),

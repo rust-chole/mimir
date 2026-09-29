@@ -1068,6 +1068,63 @@ def _ranked_candidates(analysis: dict[str, Any]) -> list[tuple[int, dict[str, An
     return [*terra, *rest]
 
 
+def _write_artifact_index(target: Path, *, state: dict[str, Any], prep: Any, v6_summary: dict[str, Any] | None,
+                          final_video: Path, final_timeline: Path | None, qc_report: Path | None,
+                          review_sheet: Path | None, speaker_profile: Path | None = None) -> Path:
+    """One place that points at every artifact a real-VOD A/B comparison needs (paths + key facts)."""
+    stages = state.get("stages", {}) if isinstance(state.get("stages"), dict) else {}
+
+    def stage_path(name: str) -> str | None:
+        row = stages.get(name) if isinstance(stages.get(name), dict) else {}
+        return row.get("path")
+
+    truth_path = stage_path("caption_truth_v6")
+    truth = _load_json(Path(truth_path)) if truth_path and Path(truth_path).is_file() else {}
+    lexical = truth.get("lexical_decisions") or []
+    artifacts = getattr(prep, "artifacts", None)
+
+    def artifact(name: str) -> str | None:
+        value = getattr(artifacts, name, None) if artifacts is not None else None
+        return str(value) if value is not None and Path(value).is_file() else None
+
+    timeline_doc = _load_json(final_timeline) if final_timeline and Path(final_timeline).is_file() else None
+    index = {
+        "version": 1,
+        "source": state.get("source", {}).get("path"),
+        "status": state.get("publish_status") or state.get("run_status"),
+        "final_video": str(final_video),
+        "story": {"selected_clip": state.get("selected_clip"), "integrity": state.get("story_integrity"),
+                  "clip_analysis": stage_path("clip_analysis"), "timeline": stage_path("timeline"),
+                  "protected_paced": ((timeline_doc or {}).get("restart") or {}).get("protected_paced")},
+        "captions": {
+            "truth": truth_path,
+            "judge": truth.get("lexical_judge"),
+            "clock": {k: (truth.get("clock_health") or {}).get(k) for k in ("status", "source", "reason",
+                                                                              "recovery_attempted")},
+            "judge_changed_spans": sum(1 for r in lexical if r.get("changed") and r.get("decided_by") == "caption_judge"),
+            "judge_answers_set_aside": sum(1 for r in lexical if r.get("guard")),
+            "uncertain": truth.get("uncertain"),
+            "entity_decisions": truth.get("entity_decisions"),
+            "speaker_issues": truth.get("speaker_issues"),
+        },
+        "speakers": {"roster": truth.get("roster"), "profile": str(speaker_profile) if speaker_profile else None,
+                     "captions_ass": stage_path("captions")},
+        "intro": {"teaser": stage_path("teaser_analysis"), "headline": stage_path("intro_analysis"),
+                  "final_timeline": str(final_timeline) if final_timeline else None,
+                  "cold_open": (timeline_doc or {}).get("intro")},
+        "edit": {"pro_edit": state.get("pro_edit"), "director_plan": artifact("plan"),
+                 "context": artifact("context"), "resolved_plan": artifact("resolved"),
+                 "camera_plan": artifact("camera_plan"), "render_proof": artifact("render_proof"),
+                 "v6_manifest": (v6_summary or {}).get("manifest")},
+        "qc": {"report": str(qc_report) if qc_report else None, "gate": (state.get("v6") or {}).get("gate"),
+               "repairs": (state.get("final_qc") or {}).get("repairs")},
+        "human_review": str(review_sheet) if review_sheet else None,
+        "at": _now(),
+    }
+    _write_json_atomic(target, index)
+    return target
+
+
 def _camera_unsafe(main_proof: dict[str, Any] | None, intro_proof: dict[str, Any] | None) -> str:
     """Why the rendered camera is unsafe ("" = safe): planned camera not reached / unprovable in
     pixels, or required story content cropped. A no-op camera is always safe."""
@@ -4559,6 +4616,14 @@ def run_pipeline(
     publish_sig = _stage_signature("publish", inputs=[candidate], options={"gate": gate.get("status")})
     if gate.get("status") == v6_runtime.GATE_FAILED:
         rejected = _reject_candidate(candidate, video_path, gate, state)
+        try:
+            _write_artifact_index(rejected.with_suffix(".artifacts.json"), state=state, prep=pro_prep_ref,
+                                  v6_summary=v6_summary, final_video=rejected,
+                                  final_timeline=intro_renderer.final_timeline_path(final_preview_path),
+                                  qc_report=rejected.with_suffix(".qc.json"), review_sheet=None,
+                                  speaker_profile=name_lock_profile)
+        except Exception as error:   # the index is a convenience; the rejection stands
+            print(f"⚠️ artifact index not written: {type(error).__name__}: {error}")
         book.record("publish", "failed", None, path=rejected, note="final QC rejected the candidate",
                     elapsed=time.perf_counter() - started)
         state["run_status"] = "rejected"
@@ -4594,6 +4659,14 @@ def run_pipeline(
                         "source": str(video_path), "published": str(published_path), "at": _now()})
     state["publish_status"] = publish_status
     state["human_review"] = str(review_sheet)
+    try:
+        state["artifact_index"] = str(_write_artifact_index(
+            published_path.with_suffix(".artifacts.json"), state=state, prep=pro_prep_ref, v6_summary=v6_summary,
+            final_video=published_path, final_timeline=intro_renderer.final_timeline_path(final_preview_path),
+            qc_report=published_path.with_suffix(".qc.json"), review_sheet=review_sheet,
+            speaker_profile=name_lock_profile))
+    except Exception as error:   # the index is a convenience; publishing stands
+        print(f"⚠️ artifact index not written: {type(error).__name__}: {error}")
     _stage_done(published_path)
     book.record(
         "publish",

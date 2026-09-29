@@ -26,6 +26,12 @@ cache), `--no-memes`, `--verbose`.
 
 1. **Story** — whole-VOD transcript + visual facts; Luna scouts money moments, Terra
    judges the story, protected ranges keep setup / escalation / payoff / reaction.
+   A post-selection **causal integrity** check then asks whether the chosen short keeps
+   what its payoff needs (payoff inside, no boundary through a running sentence, a cause
+   before and a consequence after, no protected range cut). It never re-ranks: it passes,
+   makes ONE bounded speech-aligned expansion (protecting what it adds), warns, or — only
+   when the candidate lacks the payoff it claims and another candidate keeps its payoff —
+   reselects. No beat-length quotas: a one-word reaction or a silent visual setup counts.
 2. **Pacing** — dead air is cut only where it does not touch protected story.
 3. **Caption truth** — on the exact final audio: primary `gpt-transcribe`, a
    model-diverse cross-check (with token confidence) and the Whisper word clock.
@@ -34,10 +40,17 @@ cache), `--no-memes`, `--verbose`.
    every other span goes, in one call, to the **caption judge (Astra 6)** with all the
    evidence (both transcripts, every ear's model/view/wording, token confidence,
    verified names, measured clock words). It decides **what** was said; a deterministic
-   guard rejects any word no ear heard (then the strict 3/3-4/5 acoustic vote decides),
-   and "not settled" keeps the primary word marked uncertain. It never touches **when**:
-   timing is the measured word clock (plus a backward-only acoustic guard for late phrase
-   starts); speakers come from diarization + your voice-confirmed names; verified-name
+   guard checks every word it CHANGES has acoustic support at the disputed spot (an
+   unprompted ear or the clock heard it, or two prompted ears did; the context never
+   counts) and that the ears it cites carry the change — otherwise that span alone falls
+   back to the strict 3/3-4/5 vote, else to the primary word marked uncertain. It never
+   touches **when**: timing is the measured word clock (plus a backward-only acoustic
+   guard for late phrase starts). The clock is health-checked (several symptoms, not one
+   number); a damaged clock is re-measured on overlapping ~10 s chunks of the same audio
+   and spliced in only where it was damaged (healthy anchors never move), with the
+   whole-VOD clock as a second measured source; no synthetic timing exists, and only a
+   clock that stays corrupt after recovery blocks. Speakers come from diarization + your
+   voice-confirmed names; verified-name
    spelling the name lock cannot decide is a closed choice for the judge (verified
    spelling / keep / uncertain). The result is **frozen**, with who decided each word.
 4. **Cold open** — the model chooses *which* moment; its length is measured from the
@@ -50,7 +63,10 @@ cache), `--no-memes`, `--verbose`.
    (gameplay / facecam / screen share), UI/HUD regions, action regions and required
    visual content, given as region words. It cannot output coordinates: the
    deterministic compiler computes every crop/zoom and proves it in pixels. A stable
-   wide shot is a valid choice. Optional single meme / SFX placed away from captions
+   wide shot is a valid choice. Motion is not automatically action: motion explained by
+   UI/HUD/chat text, a person's own movement, a transient burst or an overlay-like corner
+   is kept as evidence but never a framing target; a measured gameplay / screen-share
+   layout gives the screen priority. Optional single meme / SFX placed away from captions
    and never in the cold open.
 6. **Final QC** on the rendered MP4 (see below) -> publish or reject -> **human review**.
 
@@ -64,9 +80,27 @@ its measured onset, nothing extra, nothing lost to the restart; no caption colli
 protected story ranges present; the peak recurs in the story; effects clear of
 captions; caption truth unchanged since freeze; camera plan proven in pixels.
 
-Repairs are deterministic and happen at most once: an effect that makes the file fail
-any check is dropped, a headline that fails its check is removed; the repaired file is
-re-checked and the repair is disclosed (published as degraded).
+Three classes, on purpose:
+
+- **Block** only objective corruption: unreadable media, wrong composition clock or
+  intro source, captions in the cold open, wrong intro audio, proven A/V drift, burned
+  words differing from the frozen truth, protected story removed, camera pixels not
+  reached after the repair round, a published file that is not the QC-verified bytes, a
+  word clock still corrupt after recovery.
+- **Repair once** per subsystem, then re-check: a damaged word clock (re-measured), a cut
+  sentence / missing setup-reaction (story expansion), an unsafe camera (stable static
+  camera, cold open back to clean footage), a failing effect (dropped), a failing
+  headline (removed). Repairs are disclosed.
+- **Warn** (published as degraded, never rejected): no headline, no effect, weak face
+  tracking, anonymous speakers, unresolved words shown as uncertain, a conservative wide
+  camera, low director confidence, calm unexplained holds, a weak optional story beat.
+
+## Cache integrity
+
+Stage inputs and the source are identified by content (sha256, cached), so a moved or
+re-extracted byte-identical project never re-runs a paid stage; critical outputs (paced
+clip, timeline, frozen caption truth, presentation render, composed candidate, published
+file) record their sha256 and an edited or stale file is recomputed, never reused.
 
 ## Human acceptance
 
@@ -74,6 +108,15 @@ No model reviews the final short. `<name>_short.review.md` lists, on the publish
 file's clock, every caption word the evidence could not settle, every word the caption
 judge changed, judge-decided name spellings, the cold open and headline, effects,
 speaker labels and every disclosed degradation, plus Accept / Reject boxes.
+
+## Real-VOD A/B validation
+
+Every run writes `<name>_short.artifacts.json` (or `_REJECTED.artifacts.json`) next to the
+output: story + boundaries + integrity report, protected ranges, frozen caption truth,
+lexical decisions and uncertain spans, clock health/recovery, speaker roster, cold-open
+event and measured bounds, director plan, camera plan, pixel proof, QC report, review
+sheet. `python compare_runs.py A B` puts two runs side by side (an index or any branch's
+`vod_output/state/<stem>_pipeline.json`); it lists facts, the human decides.
 
 ## Model routing
 

@@ -202,6 +202,30 @@ class PipelineEndToEndTests(unittest.TestCase):
         for name, row in self.qc("camera_unsafe").items():
             self.assertEqual(row["status"], "pass", (name, row["detail"]))
 
+    def test_every_run_leaves_a_comparable_artifact_index(self) -> None:
+        run = self.results["run"]
+        index_path = Path(run["artifact_index"])
+        self.assertEqual(index_path, Path(run["final_output"]).with_suffix(".artifacts.json"))
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        for section in ("story", "captions", "speakers", "intro", "edit", "qc", "human_review"):
+            self.assertIn(section, index)
+        self.assertTrue(Path(index["captions"]["truth"]).is_file())
+        self.assertTrue(Path(index["edit"]["director_plan"]).is_file())
+        self.assertTrue(Path(index["edit"]["render_proof"]).is_file())
+        # The harness fakes the paid caption stage (no clock report there); the real clock path is
+        # covered by tests/test_caption_clock.py. The index must still expose the clock fields.
+        self.assertEqual(set(index["captions"]["clock"]), {"status", "source", "reason", "recovery_attempted"})
+        self.assertIsNotNone(index["intro"]["cold_open"])
+        rejected = [n for n in self.results["broken_render"]["rejected"] if n.endswith("_REJECTED.artifacts.json")]
+        self.assertTrue(rejected)                                          # rejected runs are comparable too
+        import compare_runs
+
+        report = Path(self._tmp.name) / "ab.md"
+        compare_runs.main([str(index_path), self.results["story_repair"]["state_file"], "--out", str(report)])
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("| story integrity **(differs)** |", text)
+        self.assertIn("the human decides", text)
+
 
 if __name__ == "__main__":
     unittest.main()

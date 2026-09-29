@@ -55,8 +55,10 @@ class StrictSchemaTests(unittest.TestCase):
 class HardcodeAuditTests(unittest.TestCase):
     # Identifiers of development videos, people and phrases. Tests may use them as
     # fixtures; production code may never special-case them.
-    FORBIDDEN = ("kai16", "kaityla", "kai tyla", "tyla", "speedates", "speedcuce", "speedtakla", "shawty", "shorty",
-                 "yusuf")
+    FORBIDDEN = ("kai", "kai16", "kaityla", "kai tyla", "tyla", "speedate", "speedates", "speedcuce", "speedtakla",
+                 "shawty", "shorty", "yusuf", "caseoh",
+                 # names / phrases used by this repository's own test fixtures
+                 "marra", "brenna", "brenner", "kayla", "kayler", "jonah", "word twelve", "harness clip")
 
     def test_production_code_has_no_test_video_specifics(self) -> None:
         offenders = []
