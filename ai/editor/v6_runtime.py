@@ -278,8 +278,12 @@ def check_presentation(manifest_path: str | Path | None, expected_signature: str
     if retimed:
         problems.append(f"{retimed} retimed word(s)")
     metrics = manifest.get("metrics", {}) or {}
-    if problems:
+    # Truth mismatch / retimed words are objective (BLOCK); too many lines is readability (WARN).
+    truth_problems = [p for p in problems if "lines" not in p]
+    if truth_problems:
         return _check("caption_presentation", "fail", "; ".join(problems))
+    if problems:
+        return _check("caption_presentation", "warn", "; ".join(problems))
     return _check("caption_presentation", "pass",
                   f"{len(pages)} pages, max 2 lines, legibility={json.dumps(metrics.get('legibility', {}))}")
 
@@ -304,7 +308,8 @@ def check_camera(prep: Any, direction_required: bool = True) -> list[dict[str, A
     if direction_required and plan_doc is None:
         rows.append(_check("hold_reasons", "fail", "camera plan artifact missing"))
     elif unexplained:
-        rows.append(_check("hold_reasons", "fail", f"{len(unexplained)} long static region(s) without a reason"))
+        # A calm, held camera is a legitimate edit (less editing, more context): disclose, never reject.
+        rows.append(_check("hold_reasons", "warn", f"{len(unexplained)} long static region(s) without a reason"))
     else:
         rows.append(_check("hold_reasons", "pass", f"{len(holds)} long HOLD region(s), all explained"))
     return rows

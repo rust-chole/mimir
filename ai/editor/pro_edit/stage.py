@@ -1001,6 +1001,39 @@ def render_with_fallback(
     return Path(baseline())
 
 
+def render_static_camera(prep: ProEditPreparation, *, output_path: Path) -> tuple[Path, dict[str, Any]]:
+    """Deterministic camera repair: the same verified caption presentation with NO camera move.
+
+    A stable wide shot is always a valid edit. Rendered (once) when the planned
+    camera was not reached in pixels or cropped required story content. Captions
+    stay the frozen-truth presentation; only the camera path becomes identity.
+    Returns the render and its proof (no camera op to prove; story geometry
+    re-checked on the identity path)."""
+    from ai.editor.pro_edit.camera import CameraPath
+
+    if prep.resolved is None or prep.media is None or prep.caps is None or prep.artifacts is None:
+        raise ProEditError("static repair needs a prepared Pro Edit render")
+    ass = prep.presentation_ass if prep.presentation_ass is not None else prep.caption_path
+    if ass is None:
+        raise ProEditError("static repair has no caption file")
+    static = dataclasses.replace(prep.resolved, ops=(), path=CameraPath(prep.resolved.frame_count, ()),
+                                 recommendations=())
+    verify_truth(prep, "static repair")
+    result = render_camera_captions(
+        edited_clip=prep.media.path, caption_file=Path(ass), output_path=Path(output_path), resolved=static,
+        caps=prep.caps, source_media=prep.media, script_path=prep.artifacts.filter_script.with_name(
+            prep.artifacts.filter_script.stem + "_static" + prep.artifacts.filter_script.suffix),
+        interpolation=prep.interpolation, keep_failed=prep.keep_failed,
+        fonts_dir=prep.caption_fonts_dir if prep.presentation_ass is not None else None)
+    verify_truth(prep, "static repair render")
+    geometry = (render_proof.story_geometry_check(static, prep.context, get_style_pack(static.style_name))
+                if prep.context is not None else
+                {"status": "passed", "frames_checked": 0, "violations": [], "violation_count": 0})
+    proof = {"status": "no_camera_ops", "reason": "static camera repair: identity camera path", "samples": [],
+             "story_geometry": geometry, "render": str(result.output_path)}
+    return result.output_path, proof
+
+
 def render_intro_source(prep: ProEditPreparation, *, clean_clip: Path, outcome: dict[str, Any]) -> Path:
     """Clean paced clip with camera ONLY on the selected teaser frames.
 

@@ -358,7 +358,74 @@ def _contains_clip(path: str | Path, list_key: str, clip_index: int, version: in
     return _package_clip(path, list_key, clip_index) is not None
 
 
+# ------------------------------------------------------------
+# CONTENT IDENTITY (cache integrity)
+# ------------------------------------------------------------
+# Stage inputs and the source are identified by CONTENT (sha256), so a moved or
+# re-extracted byte-identical project never re-bills a stage, while a modified
+# file always does. Digests are cached by (path, size, mtime) so an unchanged
+# file is hashed once. Critical outputs also record their sha256 and are
+# verified before reuse: a stale or edited artifact is never silently reused.
+CRITICAL_STAGE_OUTPUTS = frozenset({
+    "pacing_cut", "timeline", "caption_truth_v6", "caption_render", "intro_final_base", "meme_render", "publish",
+})
+_HASH_LOCK = threading.Lock()
+_HASH_CACHE: dict[str, str] | None = None
+_LEGACY_SIGNATURES: dict[str, str] = {}
+
+
+def _hash_cache_path() -> Path:
+    return STATE_DIR / "content_hashes.json"
+
+
+def _content_digest(path: str | Path) -> str | None:
+    """sha256 of a file's bytes (None if missing), cached by (path, size, mtime)."""
+    global _HASH_CACHE
+    path = Path(path).resolve()
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if not path.is_file():
+        return None
+    key = f"{path}|{int(stat.st_size)}|{int(stat.st_mtime_ns)}"
+    with _HASH_LOCK:
+        if _HASH_CACHE is None:
+            try:
+                loaded = json.loads(_hash_cache_path().read_text(encoding="utf-8"))
+                _HASH_CACHE = {str(k): str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+            except (OSError, ValueError):
+                _HASH_CACHE = {}
+        cached = _HASH_CACHE.get(key)
+    if cached:
+        return cached
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 << 20), b""):
+            digest.update(chunk)
+    value = digest.hexdigest()
+    with _HASH_LOCK:
+        _HASH_CACHE[key] = value
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            _write_json_atomic(_hash_cache_path(), _HASH_CACHE)
+        except Exception:
+            pass                      # the cache is an optimisation; the digest itself is exact
+    return value
+
+
 def _file_fingerprint(path: str | Path) -> dict[str, Any]:
+    """Path-independent content identity of a stage input."""
+    path = Path(path).resolve()
+    if not path.exists():
+        return {"name": path.name, "exists": False}
+    if path.is_dir():
+        return {"name": path.name, "exists": True, "dir": True}
+    return {"exists": True, "size": int(path.stat().st_size), "sha256": _content_digest(path)}
+
+
+def _legacy_file_fingerprint(path: str | Path) -> dict[str, Any]:
+    """The pre-content-hash fingerprint (path + size + mtime): accepted once, then upgraded."""
     path = Path(path).resolve()
     if not path.exists():
         return {"path": str(path), "exists": False}
@@ -411,15 +478,19 @@ def _stage_signature(
     modules: Iterable[Any] = (),
     options: dict[str, Any] | None = None,
 ) -> str:
-    return _hash(
-        {
-            "pipeline_version": PIPELINE_VERSION,
-            "stage": name,
-            "inputs": [_file_fingerprint(path) for path in inputs],
-            "modules": [_module_fingerprint(module) for module in modules],
-            "options": options or {},
-        }
-    )
+    inputs = list(inputs)
+    modules = list(modules)
+    common = {
+        "pipeline_version": PIPELINE_VERSION,
+        "stage": name,
+        "modules": [_module_fingerprint(module) for module in modules],
+        "options": options or {},
+    }
+    signature = _hash({**common, "inputs": [_file_fingerprint(path) for path in inputs]})
+    # Records written before content identity carry the path/mtime form; it proves the
+    # same files (same path, size and mtime), so it is accepted once and upgraded.
+    _LEGACY_SIGNATURES[signature] = _hash({**common, "inputs": [_legacy_file_fingerprint(path) for path in inputs]})
+    return signature
 
 
 def _module_paths(modules: Iterable[Any]) -> list[Path]:
@@ -528,6 +599,7 @@ def _source_fingerprint(video_path: Path) -> dict[str, Any]:
         "path": str(video_path.resolve()),
         "size": int(stat.st_size),
         "mtime_ns": int(stat.st_mtime_ns),
+        "sha256": _content_digest(video_path),
     }
 
 
@@ -554,6 +626,9 @@ def _same_source(state: dict[str, Any] | None, source: dict[str, Any]) -> bool:
     old = state.get("source", {})
     if not isinstance(old, dict):
         return False
+    if old.get("sha256") and source.get("sha256"):
+        # Content identity: a moved / re-extracted byte-identical source is the same source.
+        return old["sha256"] == source["sha256"] and int(old.get("size", -1)) == int(source["size"])
 
     return (
         str(old.get("path", "")).casefold() == str(source["path"]).casefold()
@@ -617,6 +692,8 @@ class StageBook:
             record["signature"] = signature
         if path is not None:
             record["path"] = str(Path(path).resolve())
+            if name in CRITICAL_STAGE_OUTPUTS and Path(path).is_file():
+                record["sha256"] = _content_digest(path)
         if note:
             record["note"] = note
         if elapsed is not None:
@@ -636,11 +713,13 @@ class StageBook:
     ) -> bool:
         """Reuse only artifacts recorded with the exact current stage signature.
 
-        ``output`` and ``freshness`` remain accepted for call-site stability, but V8
-        intentionally does not use mtime-only fallback. Old/untracked artifacts must
-        never bypass a changed model, option, source or code signature.
+        Old/untracked artifacts never bypass a changed model, option, source or code
+        signature (no mtime-only fallback; ``freshness`` is accepted for call-site
+        stability). A CRITICAL output additionally must still have the sha256 it was
+        recorded with (checked at ``output``, its current expected location), so an
+        edited or stale file is recomputed instead of silently reused.
         """
-        del output, freshness
+        del freshness
 
         if self.force or name in self.rerun:
             return False
@@ -657,7 +736,18 @@ class StageBook:
             return False
         if record.get("status") in {"fallback", "failed"}:
             return False
-        return record.get("signature") == signature
+        recorded = record.get("signature")
+        if recorded != signature:
+            if recorded is None or recorded != _LEGACY_SIGNATURES.get(signature):
+                return False
+            record["signature"] = signature        # same files, pre-content-identity record: upgrade once
+        expected = record.get("sha256")
+        if expected:
+            target = output or record.get("path")
+            if not target or _content_digest(target) != expected:
+                self.warn(f"{name}: recorded artifact changed since it was produced (sha256); recomputing")
+                return False
+        return True
 
 
 class RuntimeProfiler:
@@ -976,6 +1066,20 @@ def _ranked_candidates(analysis: dict[str, Any]) -> list[tuple[int, dict[str, An
     terra = [item for item in valid if item[1].get("terra_selected") is True]
     rest = sorted((item for item in valid if item[1].get("terra_selected") is not True), key=score_key, reverse=True)
     return [*terra, *rest]
+
+
+def _camera_unsafe(main_proof: dict[str, Any] | None, intro_proof: dict[str, Any] | None) -> str:
+    """Why the rendered camera is unsafe ("" = safe): planned camera not reached / unprovable in
+    pixels, or required story content cropped. A no-op camera is always safe."""
+    main = main_proof or {}
+    if str(main.get("status", "")) in ("failed", "unavailable") and main.get("render"):
+        return f"main camera proof {main.get('status')}: {str(main.get('reason', ''))[:120]}"
+    if str((main.get("story_geometry") or {}).get("status", "")) == "failed":
+        return "camera cropped required story content"
+    intro = intro_proof or {}
+    if str(intro.get("status", "")) == "failed" or str((intro.get("story_geometry") or {}).get("status", "")) == "failed":
+        return "cold-open camera not reached or cropped required content"
+    return ""
 
 
 def _story_integrity(
@@ -1769,6 +1873,9 @@ def _fast_resume(
     final_raw = state.get("final_output")
     if not final_raw or not _valid_file(final_raw, MIN_VIDEO_BYTES):
         return None
+    published = (state.get("stages") or {}).get("publish") or {}
+    if published.get("sha256") and _content_digest(final_raw) != published["sha256"]:
+        return None                    # the published file was replaced/edited: never reuse it blindly
 
     selected = state.get("selected_clip", {})
     if not isinstance(selected, dict):
@@ -4350,21 +4457,59 @@ def run_pipeline(
     candidate = final_source
     main_render_used = captioned_preview_path
     candidate_doc = final_timeline_doc
-    qc_rows = _evaluate(candidate, main_render_used, candidate_doc)
-
     repairs: list[str] = []
+
+    # Camera subsystem (one deterministic round): a camera plan that was not reached in
+    # pixels, or that cropped required story content, is replaced by a stable static
+    # camera over the same frozen-truth presentation; the cold open returns to clean
+    # footage. The repaired render is re-proven by the gate and re-checked by QC.
+    camera_unsafe = _camera_unsafe(v6_main_proof, v6_intro_proof)
+    if camera_unsafe and pro_prep_ref is not None and getattr(pro_prep_ref, "ready", False):
+        print(f"\n🛠️ Camera repair (tek tur): {camera_unsafe} -> stable static camera")
+        try:
+            had_effect = final_source != final_preview_path
+            static_path = captioned_preview_path.with_name(captioned_preview_path.stem + "_static"
+                                                           + captioned_preview_path.suffix)
+            main_render_used, v6_main_proof = pro_edit_pkg.stage.render_static_camera(
+                pro_prep_ref, output_path=static_path)
+            temp_candidates.append(main_render_used)
+            if intro_source_path != edited_clip_path:
+                intro_source_path = edited_clip_path
+                qc_common["intro_source"] = edited_clip_path
+                v6_intro_proof = {"status": "no_camera_ops", "reason": "camera repair: clean cold open",
+                                  "samples": []}
+            rendered = intro_renderer.run_renderer(
+                intro_json_path=intro_path, clip_index=selected_clip_index, edited_clip_path=intro_source_path,
+                captioned_preview_path=main_render_used, caption_path=caption_path)
+            final_preview_path = _activate_final_preview(rendered[0])
+            candidate_doc = intro_renderer.load_final_timeline(final_preview_path) or candidate_doc
+            candidate = final_preview_path
+            if had_effect:
+                candidate = Path(meme_renderer.render_memes(
+                    discovery_json_path=meme_discovery_path, clip_index=selected_clip_index,
+                    base_video_path=final_preview_path,
+                    forbidden_bands=_final_caption_bands(v6_burned_ass))[0]).resolve()
+            v6_run.fallback("camera_direction", f"camera repair: {camera_unsafe} -> static camera",
+                            "static_camera_repair")
+            repairs.append("static_camera")
+        except Exception as error:   # no repair possible: the gate judges the original proofs
+            book.warn(f"Camera repair başarısız: {type(error).__name__}: {error}")
+
+    qc_rows = _evaluate(candidate, main_render_used, candidate_doc)
     failed_checks = {row["check"] for row in qc_rows if row["status"] == "fail"}
     # An effect is optional presentation: whatever QC failure a candidate WITH an
     # effect shows, the repair is to drop the effect (the base is then re-checked;
     # a failure that was the base's own still rejects).
+    content_repairs: list[str] = []
     if candidate != final_preview_path and failed_checks:
-        repairs.append("drop_effects")
+        content_repairs.append("drop_effects")
     if "intro_headline" in failed_checks and headline_text:
-        repairs.append("drop_headline")
-    if repairs:
-        print(f"\n🛠️ Deterministic repair (tek tur): {', '.join(repairs)}")
+        content_repairs.append("drop_headline")
+    repairs.extend(content_repairs)
+    if content_repairs:
+        print(f"\n🛠️ Deterministic repair (tek tur): {', '.join(content_repairs)}")
         try:
-            if "drop_headline" in repairs:
+            if "drop_headline" in content_repairs:
                 _write_fallback_intro(intro_path, teaser_path, timeline_path, transcript_path, timeline_data,
                                       selected_clip_index, "deterministic repair: headline failed QC")
                 intro_record = _package_clip(intro_path, "intros", selected_clip_index)
@@ -4379,7 +4524,7 @@ def run_pipeline(
                                 "headline_dropped")
             candidate = final_preview_path
             # (A candidate with an effect that failed anything already carries drop_effects.)
-            if "drop_effects" in repairs:
+            if "drop_effects" in content_repairs:
                 selected_meme_count = 0
                 v6_run.fallback("memes", "deterministic repair: effect removed after the effect candidate failed "
                                 + ", ".join(sorted(failed_checks)), "effect_dropped")
@@ -4387,7 +4532,7 @@ def run_pipeline(
         except Exception as error:
             book.warn(f"Deterministic repair başarısız: {type(error).__name__}: {error}")
             qc_rows = [*qc_rows, final_qc._check("deterministic_repair", "fail",
-                                                 f"{', '.join(repairs)} failed: {type(error).__name__}: {error}")]
+                                                 f"{', '.join(content_repairs)} failed: {type(error).__name__}: {error}")]
 
     v6_summary = _finish_v6(
         v6_mod=v6_mod,
@@ -4425,9 +4570,13 @@ def run_pipeline(
             + f"\nİnceleme kopyası: {rejected}\nRapor: {rejected.with_suffix('.qc.json')}"
         )
 
+    candidate_sha = _content_digest(candidate)
     published_path = _publish_final(candidate, video_path)
     if not _valid_file(published_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Published final short oluşmadı.")
+    if _content_digest(published_path) != candidate_sha:
+        raise ShortsPipelineError("Yayınlanan dosya final QC'den geçen aday ile aynı değil (sha256); "
+                                  f"yayın geçersiz: {published_path}")
     publish_status = "published" if gate.get("status") == v6_runtime.GATE_PASSED else "published_degraded"
     blocking = set(getattr(v6_runtime, "BLOCKING_FALLBACKS", ()))
     review_packet = human_review.build_review_packet(
@@ -4440,6 +4589,7 @@ def run_pipeline(
     review_sheet = human_review.write_review_packet(published_path, review_packet)
     _write_json_atomic(published_path.with_suffix(".qc.json"),
                        {"status": gate.get("status"), "gate": gate, "repairs": repairs,
+                        "sha256": candidate_sha,
                         "human_review": {**review_packet, "sheet": str(review_sheet)},
                         "source": str(video_path), "published": str(published_path), "at": _now()})
     state["publish_status"] = publish_status

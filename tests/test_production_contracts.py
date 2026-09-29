@@ -264,12 +264,60 @@ class EditDirectorIntentTests(unittest.TestCase):
         self.assertEqual([k for k in keys(payload["scene"]) if self.GEOMETRY.search(k)], [])
 
 
+class BalancedGatePolicyTests(unittest.TestCase):
+    """BLOCK only objective corruption; repair what is repairable; warn on quality uncertainty."""
+
+    def test_quality_only_subsystems_never_block(self) -> None:
+        from ai.editor import v6_runtime
+
+        warn_only = {"face_tracking", "camera_direction", "memes", "intro_headline", "caption_lexical_judge",
+                     "caption_entity_judge", "caption_clock", "editorial_energy", "caption_placement"}
+        self.assertEqual(warn_only & set(v6_runtime.BLOCKING_FALLBACKS), set())
+
+    def test_an_unexplained_calm_hold_is_disclosed_not_rejected(self) -> None:
+        import json
+        import tempfile
+        from types import SimpleNamespace
+
+        from ai.editor import v6_runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "camera_plan.json"
+            plan.write_text(json.dumps({"holds": [{"window": [0, 9], "reason": ""}]}), encoding="utf-8")
+            prep = SimpleNamespace(resolved=SimpleNamespace(ops=(), metrics={}), direction={"status": "directed"},
+                                   artifacts=SimpleNamespace(camera_plan=plan))
+            rows = {r["check"]: r["status"] for r in v6_runtime.check_camera(prep, False)}
+        self.assertEqual(rows["hold_reasons"], "warn")
+
+    def test_presentation_truth_mismatch_blocks_but_line_count_warns(self) -> None:
+        import json
+        import tempfile
+
+        from ai.editor import v6_runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "m.json"
+            manifest.write_text(json.dumps({"pages": [{"page_id": 1, "lines": ["a", "b", "c"]}],
+                                            "truth": {"caption_signature": "sig"}}), encoding="utf-8")
+            self.assertEqual(v6_runtime.check_presentation(manifest, "sig")["status"], "warn")
+            self.assertEqual(v6_runtime.check_presentation(manifest, "other")["status"], "fail")
+
+    def test_unsafe_camera_is_detected_for_the_one_repair_round(self) -> None:
+        from ai import shorts_pipeline as sp
+
+        self.assertEqual(sp._camera_unsafe({"status": "passed", "story_geometry": {"status": "passed"}}, None), "")
+        self.assertEqual(sp._camera_unsafe({"status": "no_camera_ops"}, {"status": "no_camera_ops"}), "")
+        self.assertIn("proof failed", sp._camera_unsafe({"status": "failed", "render": "x.mp4"}, None))
+        self.assertIn("cropped", sp._camera_unsafe({"status": "passed", "story_geometry": {"status": "failed"}}, None))
+        self.assertIn("cold-open", sp._camera_unsafe({"status": "passed"}, {"status": "failed"}))
+
+
 class HumanAcceptanceTests(unittest.TestCase):
     def test_no_model_reviews_the_final_short(self) -> None:
         """The acceptance layer is a human; no AI reviewer or reviewer-triggered repair exists."""
         self.assertIsNone(importlib.util.find_spec("ai.editor.final_review"))
         offenders = [str(path.relative_to(ROOT)) for path in (ROOT / "ai").rglob("*.py")
-                     if re.search(r"final_review|MIMIR_FINAL_REVIEW|render_static_camera",
+                     if re.search(r"final_review|MIMIR_FINAL_REVIEW",
                                   path.read_text(encoding="utf-8-sig"))]
         self.assertEqual(offenders, [])
 

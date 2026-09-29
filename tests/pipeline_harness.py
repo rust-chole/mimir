@@ -20,6 +20,8 @@ Modes (there is ONE production path; modes only inject faults):
                    bounded repair drops the effect and publishes the re-checked base, DEGRADED
     story_repair   the selected clip starts inside a running sentence -> story integrity completes
                    it once and pacing/timeline receive the adjusted copy
+    camera_unsafe  the planned camera is not reached in pixels -> ONE deterministic static-camera
+                   repair, re-proven by the gate and re-checked by QC -> published DEGRADED, not rejected
 """
 from __future__ import annotations
 
@@ -190,7 +192,7 @@ def main() -> int:
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
                                                           "stage_crash", "planner_down", "memes", "effect_broken",
-                                                          "story_repair"])
+                                                          "story_repair", "camera_unsafe"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -226,6 +228,18 @@ def main() -> int:
             raise RuntimeError("harness-injected stage crash")
 
         stage.prepare_pro_edit = crash
+
+    if args.mode == "camera_unsafe":
+        from ai.editor.pro_edit import stage
+
+        real_prove = stage.prove_main_render
+
+        def failed_proof(prep, rendered, burned_ass):
+            proof = real_prove(prep, rendered, burned_ass)
+            return {**proof, "status": "failed", "reason": "harness-injected: planned camera not reached",
+                    "render": str(rendered)}
+
+        stage.prove_main_render = failed_proof
 
     if args.mode == "effect_broken":
         import subprocess

@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "pipeline_harness.py"
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "effect_broken",
-         "story_repair")
+         "story_repair", "camera_unsafe")
 
 
 def make_source(path: Path) -> Path:
@@ -192,6 +192,15 @@ class PipelineEndToEndTests(unittest.TestCase):
         self.assertIn("story_integrity", Path(repaired["pacing_inputs"][0]).parts)
         self.assertIn(repaired["status"], ("published", "published_degraded"))
         self.assertIn("## Story (causal integrity)", Path(repaired["human_review"]).read_text(encoding="utf-8"))
+
+    def test_an_unsafe_camera_is_repaired_once_to_a_static_camera_not_rejected(self) -> None:
+        run = self.results["camera_unsafe"]
+        self.assertEqual(run["status"], "published_degraded", run.get("v6"))
+        self.assertIn("static_camera", run["final_qc"]["repairs"])
+        self.assertIn(("camera_direction", "static_camera_repair"), self.fallbacks("camera_unsafe"))
+        self.assertEqual(run["v6"]["subsystems"]["camera_pixels_main"], "no_camera_ops")
+        for name, row in self.qc("camera_unsafe").items():
+            self.assertEqual(row["status"], "pass", (name, row["detail"]))
 
 
 if __name__ == "__main__":
