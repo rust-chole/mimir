@@ -53,7 +53,7 @@ from ai.editor.pro_edit.story import StorySpan
 from ai.editor.pro_edit.style import StylePack
 from ai.editor.pro_edit.subjects import SubjectTrack, track_reliability
 
-DIRECTION_VERSION = 2
+DIRECTION_VERSION = 3
 LONG_STATIC_S = 6.0                   # an unexplained static stretch longer than this needs a decision
 MIN_ADDED_TURN_S = 3.0                # added emphasis only on a sustained single-speaker turn
 ADDED_EVENT_MAX_S = 4.0
@@ -74,6 +74,7 @@ DOMINANT_SHARE = 0.8                  # one speaker owns the window
 FACECAM_MAX_HEIGHT = 0.12
 FACECAM_CORNER = 0.32
 SCREEN_CONTENT_TYPES = frozenset({"gameplay", "streamer_gameplay"})
+LAYOUT_PRIORITY_MIN_CONFIDENCE = 0.6  # the layout classifier's own "clearly supported" level
 TWO_SHOT_ROLES = frozenset({StoryRole.ESCALATION, StoryRole.PAYOFF, StoryRole.REACTION})
 SCREEN_PEAK_ROLES = frozenset({StoryRole.HOOK, StoryRole.PAYOFF, StoryRole.REACTION})
 GROUP_MIN_SUBJECTS = 3
@@ -89,6 +90,12 @@ class ShotIntent(str, Enum):
     ACTION_REGION = "ACTION_REGION"
     GAMEPLAY_PRIORITY = "GAMEPLAY_PRIORITY"
     SCREEN_PRIORITY = "SCREEN_PRIORITY"
+
+
+# Measured content layouts in which the screen content owns the frame (faces are never framed over it).
+LAYOUT_PRIORITY = {"GAMEPLAY_FACE_CAM": ShotIntent.GAMEPLAY_PRIORITY,
+                   "FULLSCREEN_GAMEPLAY": ShotIntent.GAMEPLAY_PRIORITY,
+                   "SCREEN_SHARE": ShotIntent.SCREEN_PRIORITY}
 
 
 @dataclass(frozen=True)
@@ -193,6 +200,15 @@ def screen_priority(context: EditContext) -> tuple[str, str]:
     content = str(context.layout_content_type or "").casefold()
     if content in SCREEN_CONTENT_TYPES:
         return ShotIntent.GAMEPLAY_PRIORITY.value, f"visual report layout content_type={content}"
+    # The local content-layout classification measured before planning (director evidence).
+    layout = (context.director_evidence or {}).get("layout") or {}
+    measured = str(layout.get("class", ""))
+    try:
+        confidence = float(layout.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if measured in LAYOUT_PRIORITY and confidence >= LAYOUT_PRIORITY_MIN_CONFIDENCE:
+        return LAYOUT_PRIORITY[measured].value, f"measured layout {measured} ({confidence:.2f})"
     visible_len = max(1e-6, context.clip.duration_s - context.clip.visible_start_s)
     for track in context.subject_tracks:
         if track.kind != "face":

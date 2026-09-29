@@ -72,6 +72,9 @@ Rules:
 - Gameplay / screen content with UI or an action region: keep it readable and whole; never frame it away to
   chase a face. A facecam reaction can be featured only when the action is not what matters in that moment.
 - Never cross a shot cut with a subject-locked move; a new shot restarts the framing decision.
+- scene.action_regions are corroborated story action. scene.ambiguous_motion is motion better explained by
+  UI/chat/HUD, a person's own movement, a transient burst or an overlay-like corner: it is NEVER a reason to
+  move the camera there. When the action location is unclear, keep the context wide.
 - Evidence boxes are given as region words (where/size). You never output positions, boxes or numbers
   for the frame; the engine computes every crop from your intent and the evidence.
 - Prefer static_clean (or no event) when uncertain. UNCERTAIN => LESS EDITING, never invent an effect.

@@ -393,9 +393,13 @@ def director_evidence(request: ProEditRequest, prep: ProEditPreparation, context
         boxes = background_mod.ui_boxes(background, 0.0, context.clip.duration_s)
         evidence["ui_regions"] = [{**_box_words(box), "persistence": round(float(value), 2)}
                                   for box, value in sorted(boxes, key=lambda row: -row[1])[:8]]
-    actions = derive_action_regions(context.spans, occupancy)
+    actions = derive_action_regions(context.spans, occupancy, ui=background, faces=context.subject_tracks)
     evidence["action_regions"] = [{"story_span_id": a.story_span_id, "window": [round(a.start, 2), round(a.end, 2)],
-                                   **_box_words(a.bbox), "confidence": round(a.confidence, 2)} for a in actions[:16]]
+                                   **_box_words(a.bbox), "confidence": round(a.confidence, 2)}
+                                  for a in actions if a.status == "action"][:16]
+    evidence["ambiguous_motion"] = [{"story_span_id": a.story_span_id, **_box_words(a.bbox), "kind": a.status,
+                                     "why": a.note, "note": "not a framing target; keep the context wide"}
+                                    for a in actions if a.status != "action"][:16]
     evidence["faces"] = []
     for track in context.subject_tracks:
         if not track.samples:
@@ -498,8 +502,11 @@ def _placement_evidence(request: ProEditRequest, prep: ProEditPreparation, conte
                            "classes": ["person (upright full body)"]}
     else:
         info["objects"] = {"mode": "off", "classes": []}
-    actions = derive_action_regions(context.spans, raw_occupancy, objects=objects)
+    actions = derive_action_regions(context.spans, raw_occupancy, objects=objects, ui=background,
+                                    faces=context.subject_tracks)
     for action in actions:
+        if action.status == "ui_motion":
+            continue                   # persistent UI/HUD/chat is avoided through the UI occupancy itself
         out = _output_box(*action.bbox, width, height, base)
         if out is not None:
             boxes.append(TimedBox(action.start, action.end, out, "action_region", weight=action.confidence))
