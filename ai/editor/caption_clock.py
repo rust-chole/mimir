@@ -284,6 +284,17 @@ def splice(primary: Sequence[Mapping[str, Any]], recovered: Sequence[Mapping[str
     for index, (start, end) in enumerate(regions):
         p = by_region_p[index]
         r = sorted(by_region_r[index], key=lambda x: (float(x["start"]), float(x["end"])))
+
+        # Preserve the established broad-recovery semantics for collapse,
+        # missing coverage and chronology damage. Only when the region is
+        # otherwise structurally sound do we repair isolated invalid anchors.
+        broad_reason = _region_damaged(p, r, start=start, end=end)
+        if broad_reason:
+            out.extend({**row, "timing_source": row.get("timing_source", "clock_recovery")} for row in r)
+            replaced.append({"region": [round(start, 3), round(end, 3)], "reason": broad_reason,
+                             "primary_words": len(p), "recovered_words": len(r)})
+            continue
+
         used: set[int] = set()
         fixed: list[dict[str, Any]] = []
         invalid_count = 0
@@ -303,13 +314,7 @@ def splice(primary: Sequence[Mapping[str, Any]], recovered: Sequence[Mapping[str
             replaced.append({"region": [round(start, 3), round(end, 3)], "reason": "invalid_anchors",
                              "primary_words": len(p), "recovered_words": len(r),
                              "invalid_anchors": invalid_count})
-        why = _region_damaged(fixed, r, start=start, end=end)
-        if why:
-            out.extend({**row, "timing_source": row.get("timing_source", "clock_recovery")} for row in r)
-            replaced.append({"region": [round(start, 3), round(end, 3)], "reason": why,
-                             "primary_words": len(p), "recovered_words": len(r)})
-        else:
-            out.extend(fixed)
+        out.extend(fixed)
     if unmapped_primary:
         replaced.append({"region": None, "reason": "outside_audio",
                          "primary_words": unmapped_primary, "recovered_words": 0})
