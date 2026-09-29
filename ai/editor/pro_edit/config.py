@@ -28,6 +28,8 @@ MIMIR_PRO_EDIT_ENERGY_WINDOW_MS=<300..2000>      energy window (default 800)
 MIMIR_PRO_EDIT_ENERGY_BUDGET=<2..10>             max energy inside one window (default 4)
 MIMIR_PRO_EDIT_ENERGY_TABLE=<JSON object>        override event energies (known keys, integers 0..5)
 MIMIR_PRO_EDIT_PLANNER_TIMEOUT=<seconds>       (default 300: the director reasons at high effort)
+MIMIR_PRO_EDIT_VISION=0|1            low-detail adaptive storyboard for the existing director call (default 1)
+MIMIR_PRO_EDIT_VISION_FRAMES=<4..12>  visual budget (default 8; never high/original detail)
 MIMIR_EDIT_DIRECTOR_MODEL / MIMIR_EDIT_DIRECTOR_REASONING   (ai/model_config.py; default Astra 6 / high)
 MIMIR_PRO_EDIT_MODEL / MIMIR_PRO_EDIT_REASONING             (legacy per-run override of the two above)
 MIMIR_PRO_EDIT_STYLE=pro_stream_v1
@@ -89,6 +91,8 @@ class ProEditConfig:
     energy_table: tuple[tuple[str, int], ...] = ()
     replay_path: str | None = None
     planner_timeout_s: float = 300.0
+    director_vision: bool = True
+    director_vision_frames: int = 8
     v6: bool = False
     problems: tuple[str, ...] = field(default_factory=tuple)
 
@@ -121,6 +125,8 @@ class ProEditConfig:
             "energy_budget": self.energy_budget,
             "energy_table": [list(item) for item in self.energy_table],
             "replay_path": (self.replay_path or "") if self.planner == "replay" else "",
+            "director_vision": self.director_vision,
+            "director_vision_frames": self.director_vision_frames,
             **({"v6": True} if self.v6 else {}),
         }
 
@@ -231,6 +237,7 @@ def load_config(override_enabled: bool | None = None, environ: Mapping[str, str]
         description = ""
     window_ms = _bounded_int(env, "MIMIR_PRO_EDIT_ENERGY_WINDOW_MS", 800, 300, 2000, problems)
     budget = _bounded_int(env, "MIMIR_PRO_EDIT_ENERGY_BUDGET", 4, 2, 10, problems)
+    vision_frames = _bounded_int(env, "MIMIR_PRO_EDIT_VISION_FRAMES", 8, 4, 12, problems)
     from ai.editor.pro_edit.editorial_energy import parse_energy_table
 
     table, table_problem = parse_energy_table(env.get("MIMIR_PRO_EDIT_ENERGY_TABLE"))
@@ -267,6 +274,8 @@ def load_config(override_enabled: bool | None = None, environ: Mapping[str, str]
         energy_table=tuple(sorted(table.items())),
         replay_path=replay,
         planner_timeout_s=timeout,
+        director_vision=_flag(env.get("MIMIR_PRO_EDIT_VISION"), True),
+        director_vision_frames=vision_frames,
         v6=v6_enabled,
         problems=tuple(problems),
     )

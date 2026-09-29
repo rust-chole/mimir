@@ -92,7 +92,7 @@ class OpenAIResponsesProvider:
                 model=self.model,
                 reasoning={"effort": self.reasoning_effort},
                 instructions=request.instructions,
-                input=request.input_text(),
+                input=request.input_value(),
                 text={"format": {"type": "json_schema", "name": request.schema_name, "strict": True,
                                  "schema": dict(request.schema)}},
             )

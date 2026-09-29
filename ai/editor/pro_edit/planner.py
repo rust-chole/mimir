@@ -175,13 +175,15 @@ def parse_planner_json(text: str) -> dict[str, Any]:
 class ProviderEditPlanner:
     """request -> provider -> parse -> validate (-> one repair) -> outcome."""
 
-    def __init__(self, provider: PlannerProvider, *, max_repairs: int = MAX_REPAIR_ATTEMPTS) -> None:
+    def __init__(self, provider: PlannerProvider, *, max_repairs: int = MAX_REPAIR_ATTEMPTS,
+                 visual_inputs: tuple[Any, ...] = ()) -> None:
         self.provider = provider
         self.max_repairs = max(0, min(MAX_REPAIR_ATTEMPTS, int(max_repairs)))
+        self.visual_inputs = tuple(visual_inputs)
         self.name = f"{provider.name}:{provider.model}"
 
     def plan(self, context: EditContext, style: StylePack) -> PlannerOutcome:
-        request = build_planner_request(context, style)
+        request = build_planner_request(context, style, self.visual_inputs)
         response = self.provider.complete(request)
         exchanges = [(request, response)]
         notes: list[str] = []

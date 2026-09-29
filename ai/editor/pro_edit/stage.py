@@ -58,6 +58,7 @@ from ai.editor.pro_edit.caption_presentation import (
 from ai.editor.pro_edit.config import ProEditConfig
 from ai.editor.pro_edit.context import ContextInputs, EditContext, build_edit_context
 from ai.editor.pro_edit.direction import DIRECTION_VERSION, DirectionReport, direct_plan, explain_holds
+from ai.editor.pro_edit.director_vision import DirectorFrame, build_visual_context
 from ai.editor.pro_edit import editorial_energy
 from ai.editor.pro_edit.diagnostics import (
     ArtifactPaths,
@@ -167,6 +168,7 @@ class ProEditPreparation:
     diagnostics: Diagnostics = field(default_factory=Diagnostics)
     v6: bool = False
     direction: dict[str, Any] = field(default_factory=dict)
+    director_images: tuple[DirectorFrame, ...] = ()
     context: EditContext | None = None
 
     @property
@@ -193,7 +195,7 @@ class ProEditPreparation:
 # SELECTION
 # ============================================================
 
-def select_planner(config: ProEditConfig) -> EditPlanner:
+def select_planner(config: ProEditConfig, visual_inputs: tuple[DirectorFrame, ...] = ()) -> EditPlanner:
     if config.planner == "rules":
         return RuleBasedEditPlanner()
     if config.planner == "static":
@@ -201,7 +203,8 @@ def select_planner(config: ProEditConfig) -> EditPlanner:
     if config.planner == "replay" and config.replay_path:
         return ProviderEditPlanner(ReplayProvider(config.replay_path))
     return ProviderEditPlanner(OpenAIResponsesProvider(config.model, config.reasoning_effort,
-                                                       timeout_s=config.planner_timeout_s))
+                                                       timeout_s=config.planner_timeout_s),
+                               visual_inputs=visual_inputs)
 
 
 def _scene_changes(report_path: Path | None) -> list[float]:
@@ -277,7 +280,7 @@ def _plan_outcome(request: ProEditRequest, context: EditContext, prep: ProEditPr
             return outcome_from_cached(cached["plan"], context, style, str(cached.get("planner", "cache")))
         except PlannerOutputError as error:
             prep.warnings.append(f"Pro Edit cached plan ignored: {error}")
-    planner = request.planner or select_planner(request.config)
+    planner = request.planner or select_planner(request.config, prep.director_images)
     try:
         return planner.plan(context, style)
     except (PlannerUnavailableError, PlannerOutputError) as error:
@@ -820,7 +823,21 @@ def prepare_pro_edit(request: ProEditRequest) -> ProEditPreparation:
             raise CaptionIntegrityError("context caption references differ from the authoritative profile")
 
         style = get_style_pack(config.style)
-        context = dataclasses.replace(context, director_evidence=director_evidence(request, prep, context, media))
+        evidence = director_evidence(request, prep, context, media)
+        if config.director_vision and config.planner == "model" and request.planner is None:
+            prep.director_images, vision = build_visual_context(
+                str(request.edited_clip_path), context, max_frames=config.director_vision_frames)
+            evidence["visual_context"] = vision
+            if vision.get("status") == "unavailable":
+                prep.warnings.append("Astra visual context unavailable; JSON-only director used. "
+                                     + str(vision.get("reason", ""))[:220])
+        else:
+            evidence["visual_context"] = {
+                "status": "disabled" if not config.director_vision else "not_applicable",
+                "frames": [],
+                "policy": "JSON-only edit director",
+            }
+        context = dataclasses.replace(context, director_evidence=evidence)
         prep.planner_cache_key = planner_cache_key(context, config)
         outcome = _plan_outcome(request, context, prep)
         plan = outcome.plan

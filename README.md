@@ -22,6 +22,12 @@ Useful options: `--creator "Name"` (a verified name the headline may use),
 transcription, story discovery and caption ASR stay cached), `--force` (ignore every
 cache), `--no-memes`, `--verbose`.
 
+The Astra edit director receives a bounded **8-frame low-detail adaptive storyboard** by
+default (`MIMIR_PRO_EDIT_VISION=0` disables it; `MIMIR_PRO_EDIT_VISION_FRAMES=4..12`
+changes the budget). This adds no second Astra call: frames are read-only evidence inside
+the existing director request. Astra still emits intent only; deterministic code owns
+crop, zoom, timing and pixels. Visual sampling failure falls back to JSON-only planning.
+
 ## What happens
 
 1. **Story** — whole-VOD transcript + visual facts; Luna scouts money moments, Terra

@@ -212,6 +212,16 @@ class ModelRoutingTests(unittest.TestCase):
         config = load_config(environ={})
         self.assertEqual((config.model, config.reasoning_effort),
                          (model_config.EDIT_DIRECTOR_MODEL, model_config.EDIT_DIRECTOR_REASONING_EFFORT))
+        self.assertTrue(config.director_vision)
+        self.assertEqual(config.director_vision_frames, 8)
+
+    def test_director_vision_budget_is_bounded_and_disableable(self) -> None:
+        from ai.editor.pro_edit.config import load_config
+
+        disabled = load_config(environ={"MIMIR_PRO_EDIT_VISION": "0", "MIMIR_PRO_EDIT_VISION_FRAMES": "99"})
+        self.assertFalse(disabled.director_vision)
+        self.assertEqual(disabled.director_vision_frames, 8)
+        self.assertTrue(any("VISION_FRAMES" in problem for problem in disabled.problems))
 
 
 class EditDirectorIntentTests(unittest.TestCase):
@@ -226,6 +236,29 @@ class EditDirectorIntentTests(unittest.TestCase):
             names.extend(obj["properties"])
         self.assertTrue(names)
         self.assertEqual([n for n in names if self.GEOMETRY.search(n)], [])
+
+    def test_visual_frames_are_low_detail_and_never_persist_base64(self) -> None:
+        import dataclasses
+        import pro_edit_fixtures as fx
+        from ai.editor.pro_edit import request as planner_request
+        from ai.editor.pro_edit.director_vision import DirectorFrame
+        from ai.editor.pro_edit.style import get_style_pack
+
+        workspace = fx.Workspace()
+        self.addCleanup(workspace.cleanup)
+        context = fx.make_context(workspace)
+        frame = DirectorFrame(1, 2.0, 2.0, "story:payoff", 320, 180, "abc",
+                              "data:image/jpeg;base64,QUJD")
+        evidence = {"visual_context": {"status": "ready", "frames": [frame.manifest()]}}
+        req = planner_request.build_planner_request(
+            dataclasses.replace(context, director_evidence=evidence), get_style_pack("pro_stream_v1"), (frame,))
+        value = req.input_value()
+        self.assertIsInstance(value, list)
+        image_items = [item for item in value[0]["content"] if item.get("type") == "input_image"]
+        self.assertEqual(image_items[0]["detail"], "low")
+        artifact = req.to_artifact()
+        self.assertNotIn("base64", json.dumps(artifact))
+        self.assertEqual(artifact["visual_inputs"][0]["sha256"], "abc")
 
     def test_scene_evidence_reaches_the_director_as_words(self) -> None:
         import dataclasses

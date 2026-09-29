@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ai.editor.pro_edit.context import EditContext
 from ai.editor.pro_edit.policy import effect_budget
@@ -75,6 +75,9 @@ Rules:
 - scene.action_regions are corroborated story action. scene.ambiguous_motion is motion better explained by
   UI/chat/HUD, a person's own movement, a transient burst or an overlay-like corner: it is NEVER a reason to
   move the camera there. When the action location is unclear, keep the context wide.
+- When scene.visual_context says frames are attached, use them to understand what the structured evidence
+  refers to and what must remain visible. They are coarse LOW-detail evidence, not a geometry authority.
+  Never derive crop coordinates from the frames and never contradict protected/required visual evidence.
 - Evidence boxes are given as region words (where/size). You never output positions, boxes or numbers
   for the frame; the engine computes every crop from your intent and the evidence.
 - Prefer static_clean (or no event) when uncertain. UNCERTAIN => LESS EDITING, never invent an effect.
@@ -97,14 +100,33 @@ class PlannerRequest:
     payload: Mapping[str, Any]
     schema: Mapping[str, Any]
     schema_name: str = SCHEMA_NAME
+    visual_inputs: tuple[Any, ...] = ()
 
     def input_text(self) -> str:
         return json.dumps(self.payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
+    def input_value(self) -> Any:
+        """Responses API input. Base64 images are sent live and never written to artifacts."""
+        if not self.visual_inputs:
+            return self.input_text()
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": self.input_text()}]
+        for index, frame in enumerate(self.visual_inputs, start=1):
+            manifest = frame.manifest()
+            content.append({
+                "type": "input_text",
+                "text": (
+                    f"VISUAL_FRAME_{index}: sampled_t={manifest['sampled_t']}s; "
+                    f"reason={manifest['reason']}. Read-only evidence; do not output crop coordinates."
+                ),
+            })
+            content.append(frame.api_item())
+        return [{"role": "user", "content": content}]
+
     def to_artifact(self) -> dict[str, Any]:
         return {"request_version": PLANNER_REQUEST_VERSION, "request_id": self.request_id, "kind": self.kind,
                 "schema_name": self.schema_name, "instructions": self.instructions,
-                "payload": dict(self.payload), "schema": dict(self.schema)}
+                "payload": dict(self.payload), "schema": dict(self.schema),
+                "visual_inputs": [frame.manifest() for frame in self.visual_inputs]}
 
 
 def _request_id(instructions: str, payload: Mapping[str, Any], schema: Mapping[str, Any]) -> str:
@@ -188,10 +210,12 @@ def build_payload(context: EditContext, style: StylePack) -> dict[str, Any]:
     }
 
 
-def build_planner_request(context: EditContext, style: StylePack) -> PlannerRequest:
+def build_planner_request(context: EditContext, style: StylePack,
+                          visual_inputs: Sequence[Any] = ()) -> PlannerRequest:
     payload = build_payload(context, style)
     schema = planner_json_schema(style.name)
-    return PlannerRequest(_request_id(SYSTEM_PROMPT, payload, schema), "plan", SYSTEM_PROMPT, payload, schema)
+    return PlannerRequest(_request_id(SYSTEM_PROMPT, payload, schema), "plan", SYSTEM_PROMPT, payload, schema,
+                          visual_inputs=tuple(visual_inputs))
 
 
 def build_repair_request(original: PlannerRequest, invalid_text: str, errors: list[str],
