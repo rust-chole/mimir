@@ -100,6 +100,52 @@ class JudgeGuardTests(unittest.TestCase):
         unsure = self.decide(span, "use_heard", "Mara", confidence=0.3)[0]
         self.assertEqual((unsure.phrase, unsure.resolved), (None, False))                  # low confidence = uncertain
 
+    def test_a_word_only_in_the_primary_context_is_not_evidence(self) -> None:
+        span = self.span(window_text="then Marra told me to wait here", context_after="to wait here")
+        accepted, problem = self.decide(span, "use_heard", "wait")
+        self.assertIsNone(accepted)
+        self.assertIn("no ear heard at the disputed core", problem)
+
+    def test_one_context_prompted_ear_is_not_enough_two_are(self) -> None:
+        ears = [{"ear": "asr_1", "heard_core": "Marra", "prompted": False},
+                {"ear": "asr_3", "heard_core": "Mara", "prompted": True},
+                {"ear": "asr_4", "heard_core": "Marra", "prompted": True}]
+        span = self.span(ears=ears, core_clock=[])
+        self.assertIsNone(self.decide(span, "use_heard", "Mara", ears=("asr_3",))[0])     # a context echo
+        ears[2]["heard_core"] = "Mara"
+        accepted, _ = self.decide(self.span(ears=ears, core_clock=[]), "use_heard", "Mara", ears=("asr_3", "asr_4"))
+        self.assertEqual(accepted.phrase, "Mara")
+        self.assertIn("prompted only", accepted.grounding[0][1])
+
+    def test_the_cited_ears_must_carry_the_change(self) -> None:
+        span = self.span(ears=[{"ear": "asr_1", "heard_core": "Mara", "prompted": False},
+                               {"ear": "asr_2", "heard_core": "Marra", "prompted": False}], core_clock=[])
+        accepted, problem = self.decide(span, "use_heard", "Mara", ears=("asr_2",))
+        self.assertIsNone(accepted)
+        self.assertIn("cited ears do not carry", problem)
+
+    def test_unchanged_words_need_no_support_and_evidence_may_combine(self) -> None:
+        span = self.span(current="go to the store now", window_text="so go to the store now ok",
+                         ears=[{"ear": "asr_1", "heard_core": "go to a store now", "prompted": False},
+                               {"ear": "asr_2", "heard_core": "go to the stall now", "prompted": False}],
+                         core_clock=["go", "to", "a", "stall", "now"])
+        accepted, _ = self.decide(span, "use_heard", "go to a stall now", ears=("asr_1", "asr_2"))
+        self.assertEqual(accepted.phrase, "go to a stall now")
+        self.assertEqual([word for word, _ in accepted.grounding], ["a", "stall"])      # only the changes
+
+    def test_a_rejected_answer_falls_back_per_span(self) -> None:
+        strict = self.span(strict={"phrase": "Mara", "votes": 4, "of": 5})
+        decisions, meta = caption_judge.resolve_spans(
+            [strict, self.span(span_id="t")], primary_text="x", crosscheck_text="",
+            judge=lambda **_: {"decisions": [
+                {"span_id": sid, "verdict": "use_heard", "text": "Maria", "supporting_ears": ["asr_1"],
+                 "confidence": 0.9, "reason": ""} for sid in ("s", "t")]})
+        self.assertEqual((decisions["s"].phrase, decisions["s"].source), ("Mara", "strict_vote_4_of_5"))
+        self.assertEqual((decisions["t"].phrase, decisions["t"].resolved), (None, False))   # primary + uncertain
+        self.assertTrue(decisions["t"].guard)
+        self.assertEqual(meta["status"], "judged")                                         # the run goes on
+        self.assertEqual(len(meta["guard_rejected"]), 2)
+
     def test_verified_name_may_be_used_when_an_ear_heard_a_near_spelling(self) -> None:
         span = self.span()
         accepted, _ = caption_judge.check_span_decision(

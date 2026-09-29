@@ -70,14 +70,19 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
                       "near": row.get("near")})
 
     for row in truth.get("lexical_decisions", []) or []:
-        if not row.get("changed"):
-            continue
         final = _to_final(timeline_doc, float(row.get("paced_start", 0.0)))
         if final is None:
             continue
-        focus.append({"kind": "caption_changed_by_judge", "final_s": round(final, 3),
-                      "from": str(row.get("from", "")), "to": str(row.get("to", "")),
-                      "decided_by": str(row.get("decided_by", "")), "confidence": row.get("confidence")})
+        if row.get("guard"):
+            # The judge's answer failed the deterministic grounding check: the strict
+            # acoustic vote (or the primary words, marked uncertain) was used instead.
+            focus.append({"kind": "judge_answer_set_aside", "final_s": round(final, 3),
+                          "shown": str(row.get("to", "")), "decided_by": str(row.get("decided_by", "")),
+                          "why": str(row.get("guard", ""))[:160]})
+        elif row.get("changed"):
+            focus.append({"kind": "caption_changed_by_judge", "final_s": round(final, 3),
+                          "from": str(row.get("from", "")), "to": str(row.get("to", "")),
+                          "decided_by": str(row.get("decided_by", "")), "confidence": row.get("confidence")})
 
     for row in truth.get("entity_decisions", []) or []:
         index = row.get("word_id")
@@ -139,6 +144,9 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
         elif kind == "caption_changed_by_judge":
             lines.append(f"- [ ] {at} caption changed from the primary transcript: \"{item['from']}\" -> "
                          f"\"{item['to']}\" ({item.get('decided_by', '')}, confidence {item.get('confidence')})")
+        elif kind == "judge_answer_set_aside":
+            lines.append(f"- [ ] {at} caption \"{item['shown']}\": the caption judge's answer lacked acoustic "
+                         f"support ({item['why']}); {item['decided_by']} was used instead")
         elif kind == "name_spelling_by_judge":
             lines.append(f"- [ ] {at} name spelling \"{item['from']}\" -> \"{item['to']}\" "
                          f"(confidence {item.get('confidence')})")

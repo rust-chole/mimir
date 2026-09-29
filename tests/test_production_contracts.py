@@ -282,18 +282,22 @@ class HumanAcceptanceTests(unittest.TestCase):
                           {"word_ids": [0], "reason": "asr_ears_disagree"}],     # trimmed by the restart
             "lexical_decisions": [{"changed": True, "paced_start": 8.0, "from": "top", "to": "stop",
                                    "decided_by": "caption judge", "confidence": 0.9},
-                                  {"changed": False, "paced_start": 5.4, "from": "said", "to": "said"}],
+                                  {"changed": False, "paced_start": 5.4, "from": "said", "to": "said"},
+                                  {"changed": False, "paced_start": 8.0, "from": "stop", "to": "stop",
+                                   "decided_by": "strict_vote", "guard": "changed word(s) no ear heard: top"}],
         }
         packet = human_review.build_review_packet(
             published=Path("x_short.mp4"), source=Path("x.mp4"), status="published",
             qc_rows=[{"check": "a", "status": "pass"}], timeline_doc=doc, truth=truth, headline="",
             degradations=["face_tracking -> stable_wide: no face"])
         focus = [(item["kind"], item["final_s"]) for item in packet["focus"]]
-        self.assertEqual(focus, [("caption_uncertain", 6.0), ("caption_changed_by_judge", 9.0)])
+        self.assertEqual(focus, [("caption_uncertain", 6.0), ("caption_changed_by_judge", 9.0),
+                                 ("judge_answer_set_aside", 9.0)])
         self.assertEqual(packet["speakers"], {"Mira": 1, "S1": 3})
         text = human_review.render_markdown(packet)
         self.assertIn('0:06.0 caption "Marra"', text)
         self.assertIn('"top" -> "stop"', text)
+        self.assertIn("lacked acoustic support", text)
         self.assertIn("none (no grounded headline was approved)", text)
         self.assertIn("face_tracking -> stable_wide", text)
 

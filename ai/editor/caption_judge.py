@@ -16,11 +16,17 @@ Two bounded decisions:
    ear (model, audio view, prompted or not, what it heard in the window and in
    the disputed core), the verified names, why the span is suspect, and the
    measured clock words inside the window. Verdicts: ``keep_primary`` |
-   ``use_heard`` | ``unresolved``. A ``use_heard`` text is accepted only when
-   every word was heard by some ear or the word clock (or is a verified name),
-   the change stays local, and a deletion is backed by a majority of ears that
-   heard nothing where the clock has no word. A rejected or missing decision
-   falls back to the strict acoustic vote for that span.
+   ``use_heard`` | ``unresolved``. Balanced grounding of a ``use_heard`` text:
+   only the CHANGED words need support (words kept from the primary need none),
+   and each changed word must have ACOUSTIC support at the disputed core: an
+   unprompted ear or the measured clock heard it there, or at least two
+   context-prompted ears did (one prompted ear can echo its context), or it is a
+   verified name respelling a near-spelling some ear heard. The primary text
+   and the surrounding context never count as support for a new word. The ears
+   the judge cites must actually carry the change; the change stays local; a
+   deletion needs a majority of ears (and the clock) hearing nothing. A
+   decision that fails this falls back, for that span only, to the strict
+   acoustic vote, else to the primary words marked uncertain.
 
 2. Verified-name spelling (caption truth freeze). A closed choice per candidate
    word: ``canonical`` (the verified spelling) | ``keep`` | ``uncertain``.
@@ -37,13 +43,16 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Any, Callable, Mapping, Sequence
 
 from ai import model_config
+from ai.editor import participant_name_lock as name_lock
 
-JUDGE_VERSION = 1
+JUDGE_VERSION = 2
 MIN_CONFIDENCE = float(os.getenv("MIMIR_CAPTION_JUDGE_MIN_CONFIDENCE", "0.6") or 0.6)
 MAX_EXTRA_TOKENS = 3             # a span decision is a local repair, never a rewrite
+MIN_PROMPTED_SUPPORT = 2         # context-prompted ears needed when no unprompted ear / clock heard a word
 JUDGE_TIMEOUT_S = float(os.getenv("MIMIR_CAPTION_JUDGE_TIMEOUT", "300") or 300)
 
 # judge(name=..., instructions=..., payload=..., schema=...) -> parsed JSON object
@@ -182,16 +191,26 @@ class SpanEvidence:
             "crosscheck_low_confidence": [[w, round(p, 3)] for w, p in self.low_confidence],
         }
 
-    def heard_vocabulary(self, verified_names: Sequence[str] = ()) -> set[str]:
-        """Every canonical word some evidence source actually heard in this window."""
-        heard: set[str] = set()
-        for text in [self.window_text, self.current, *(e.get("heard_window", "") for e in self.ears),
-                     *(e.get("heard_core", "") for e in self.ears), *(w for w, _a, _b in self.clock)]:
-            heard.update(_canon(t) for t in _tokens(text))
-        for name in verified_names:
-            heard.update(_canon(t) for t in _tokens(name))
-        heard.discard("")
-        return heard
+    def token_support(self, token: str) -> dict[str, Any]:
+        """Who heard ``token`` AT THE DISPUTED CORE (never the context window, never the primary)."""
+        wanted = _canon(token)
+        unprompted, prompted = [], []
+        for ear in self.ears:
+            if wanted in {_canon(t) for t in _tokens(ear.get("heard_core", ""))}:
+                (prompted if ear.get("prompted") else unprompted).append(str(ear["ear"]))
+        clock = wanted in {_canon(t) for w in self.core_clock for t in _tokens(w)}
+        return {"unprompted": unprompted, "prompted": prompted, "clock": clock}
+
+    def name_respelling(self, token: str, verified_names: Sequence[str]) -> bool:
+        """A verified-name token that respells a near-spelling heard at the core (existing name exception)."""
+        wanted = _canon(token)
+        if wanted not in {_canon(t) for name in verified_names for t in _tokens(name)}:
+            return False
+        heard = [_canon(t) for t in _tokens(self.current)]
+        heard += [_canon(t) for ear in self.ears for t in _tokens(ear.get("heard_core", ""))]
+        heard += [_canon(t) for w in self.core_clock for t in _tokens(w)]
+        return any(h and (h == wanted or name_lock.confusion_score(h, wanted) >= name_lock.MIN_CONFUSION)
+                   for h in heard)
 
     def ear_ids(self) -> set[str]:
         return {str(e["ear"]) for e in self.ears} | {"clock", "primary"}
@@ -207,11 +226,13 @@ class SpanDecision:
     reason: str = ""
     supporting_ears: tuple[str, ...] = ()
     guard: str = ""             # why a judge decision was not accepted (then strict decided)
+    grounding: tuple[tuple[str, str], ...] = ()   # (changed word, what heard it) for an accepted change
 
     def to_dict(self) -> dict[str, Any]:
         return {"span_id": self.span_id, "phrase": self.phrase, "resolved": self.resolved, "source": self.source,
                 "confidence": self.confidence, "reason": self.reason[:300],
-                "supporting_ears": list(self.supporting_ears), "guard": self.guard}
+                "supporting_ears": list(self.supporting_ears), "guard": self.guard,
+                "grounding": [list(row) for row in self.grounding]}
 
 
 def strict_decision(span: SpanEvidence, *, guard: str = "") -> SpanDecision:
@@ -222,6 +243,16 @@ def strict_decision(span: SpanEvidence, *, guard: str = "") -> SpanDecision:
         return SpanDecision(span.span_id, phrase, True,
                             f"strict_vote_{int(strict.get('votes', 0))}_of_{int(strict.get('of', 0))}", guard=guard)
     return SpanDecision(span.span_id, None, False, "strict_vote", guard=guard)
+
+
+def changed_tokens(old: Sequence[str], new: Sequence[str]) -> list[str]:
+    """Words of ``new`` that are not an in-order carry-over of ``old`` (by canonical form)."""
+    matcher = SequenceMatcher(None, [_canon(t) for t in old], [_canon(t) for t in new], autojunk=False)
+    changed: list[str] = []
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "insert"):
+            changed.extend(new[j1:j2])
+    return changed
 
 
 def check_span_decision(span: SpanEvidence, row: Mapping[str, Any], verified_names: Sequence[str] = ()
@@ -251,11 +282,31 @@ def check_span_decision(span: SpanEvidence, row: Mapping[str, Any], verified_nam
         if silent * 2 <= len(span.ears) or span.core_clock:
             return None, "deletion without a majority of ears (and the clock) hearing nothing"
         return SpanDecision(span.span_id, "", True, "caption_judge", confidence, reason, supporters), ""
-    vocabulary = span.heard_vocabulary(verified_names)
-    unheard = [t for t in new if _canon(t) not in vocabulary]
-    if unheard:
-        return None, "word(s) no ear heard: " + ", ".join(unheard[:4])
-    return SpanDecision(span.span_id, " ".join(new), True, "caption_judge", confidence, reason, supporters), ""
+    grounding: list[tuple[str, str]] = []
+    unsupported: list[str] = []
+    carried = 0                 # changed words the CITED ears (or the clock, if cited) actually heard
+    changed = changed_tokens(old, new)
+    for token in changed:
+        support = span.token_support(token)
+        heard_by = set(support["unprompted"]) | set(support["prompted"]) | ({"clock"} if support["clock"] else set())
+        if support["unprompted"] or support["clock"]:
+            grounding.append((token, "+".join(sorted(heard_by))))
+        elif len(support["prompted"]) >= MIN_PROMPTED_SUPPORT:
+            grounding.append((token, "+".join(sorted(heard_by)) + " (prompted only)"))
+        elif span.name_respelling(token, verified_names):
+            grounding.append((token, "verified name respelling a near-spelling heard at the core"))
+            carried += 1
+            continue
+        else:
+            unsupported.append(token)
+            continue
+        carried += 1 if heard_by & set(supporters) else 0
+    if unsupported:
+        return None, "changed word(s) no ear heard at the disputed core: " + ", ".join(unsupported[:4])
+    if changed and carried * 2 < len(changed):
+        return None, "the cited ears do not carry the change (" + ", ".join(supporters) + ")"
+    return SpanDecision(span.span_id, " ".join(new), True, "caption_judge", confidence, reason, supporters,
+                        grounding=tuple(grounding)), ""
 
 
 # ============================================================
