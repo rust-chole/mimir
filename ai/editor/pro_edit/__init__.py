@@ -32,6 +32,7 @@ from ai.editor.pro_edit import (
     context,
     diagnostics,
     direction,
+    director_vision,
     editorial_energy,
     errors,
     executor,
@@ -68,7 +69,7 @@ PRO_EDIT_VERSION = 5
 MODULES = (
     camera, caption_action, caption_background, caption_brand, caption_guard, caption_layout, caption_legibility,
     caption_occupancy, caption_placement, caption_platform,
-    caption_presentation, caption_primitives, config, context, diagnostics, direction, editorial_energy, errors,
+    caption_presentation, caption_primitives, config, context, diagnostics, direction, director_vision, editorial_energy, errors,
     executor,
     ffmpeg_filters, font_metrics, framing,
     intro_timeline, media, planner, policy, presets, providers, request, schema, speaker_link, stage,
