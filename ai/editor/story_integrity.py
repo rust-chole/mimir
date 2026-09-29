@@ -38,7 +38,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-STORY_INTEGRITY_VERSION = 1
+STORY_INTEGRITY_VERSION = 2
 # Generic speech/safety bounds (not tuned to any video, not beat-length targets).
 PHRASE_GAP_S = 0.45          # a pause this long separates phrases
 SCENE_GAP_S = 1.90           # never expand across a pause this long (scene/topic break)
@@ -146,7 +146,24 @@ class IntegrityResult:
                 "checks": self.checks, "recheck": self.recheck}
 
 
-def _payoff(clip: Mapping[str, Any]) -> tuple[float, float] | None:
+def _primary_money_moment(clip: Mapping[str, Any],
+                          money_moments: Sequence[Mapping[str, Any]] = ()) -> Mapping[str, Any] | None:
+    wanted = str(clip.get("primary_moment_id", "")).strip()
+    if not wanted:
+        return None
+    for row in money_moments:
+        if isinstance(row, Mapping) and str(row.get("moment_id", "")).strip() == wanted:
+            a, b = _f(row.get("start"), -1.0), _f(row.get("end"), -1.0)
+            if a >= 0 and b > a:
+                return row
+    return None
+
+
+def _payoff(clip: Mapping[str, Any], money_moments: Sequence[Mapping[str, Any]] = ()
+            ) -> tuple[float, float] | None:
+    primary = _primary_money_moment(clip, money_moments)
+    if primary is not None:
+        return _f(primary.get("start")), _f(primary.get("end"))
     a, b = _f(clip.get("payoff_start"), -1.0), _f(clip.get("payoff_end"), -1.0)
     if a >= 0 and b > a:
         return a, b
@@ -163,7 +180,8 @@ def _protected(clip: Mapping[str, Any]) -> list[tuple[float, float]]:
     return rows
 
 
-def assess(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: float, max_duration: float
+def assess(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: float, max_duration: float,
+           money_moments: Sequence[Mapping[str, Any]] = ()
            ) -> tuple[list[dict[str, Any]], float, float, list[dict[str, Any]]]:
     """(checks, wanted_start, wanted_end, protections to add). Pure: nothing is changed here."""
     start, end = _f(clip.get("start")), _f(clip.get("end"))
@@ -176,7 +194,7 @@ def assess(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: floa
     def check(name: str, status: str, detail: str) -> None:
         checks.append({"check": name, "status": status, "detail": detail})
 
-    payoff = _payoff(clip)
+    payoff = _payoff(clip, money_moments)
     if payoff is None:
         check("payoff_present", "warn", "the candidate records no payoff; nothing to verify")
     else:
@@ -262,14 +280,16 @@ def assess(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: floa
     return checks, final_start, final_end, protect[:MAX_ADDED_PROTECTIONS]
 
 
-def review(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: float, max_duration: float
-           ) -> IntegrityResult:
+def review(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: float, max_duration: float,
+           money_moments: Sequence[Mapping[str, Any]] = ()) -> IntegrityResult:
     start, end = _f(clip.get("start")), _f(clip.get("end"))
-    checks, want_start, want_end, protect = assess(clip, evidence, source_duration=source_duration,
-                                                   max_duration=max_duration)
-    if any(c["check"] == "payoff_present" and c["status"] == "fail" for c in checks):
-        return IntegrityResult("reselect", dict(clip), checks, "the candidate lacks the payoff it claims",
-                               (start, end), (start, end))
+    checks, want_start, want_end, protect = assess(
+        clip, evidence, source_duration=source_duration, max_duration=max_duration,
+        money_moments=money_moments)
+    failed = [c for c in checks if c["status"] == "fail"]
+    if failed:
+        reason = "; ".join(f"{c['check']}: {c['detail']}" for c in failed)
+        return IntegrityResult("reselect", dict(clip), checks, reason, (start, end), (start, end))
     repaired = dict(clip)
     status = "pass"
     if want_start < start - 1e-6 or want_end > end + 1e-6 or protect:
@@ -280,7 +300,8 @@ def review(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: floa
         repaired["story_integrity"] = {"expanded_from": [round(start, 3), round(end, 3)]}
         status = "repaired"
     # Re-check the repaired story once (no second repair round).
-    recheck, *_ = assess(repaired, evidence, source_duration=source_duration, max_duration=max_duration)
+    recheck, *_ = assess(repaired, evidence, source_duration=source_duration, max_duration=max_duration,
+                         money_moments=money_moments)
     if status == "pass" and any(c["status"] == "warn" for c in checks):
         status = "warn"
     reasons = [f"{c['check']}: {c['detail']}" for c in checks if c["status"] != "pass"]
@@ -289,10 +310,12 @@ def review(clip: Mapping[str, Any], evidence: Evidence, *, source_duration: floa
 
 
 def review_selection(clips: Sequence[Any], selected_index: int, *, evidence: Evidence, source_duration: float,
-                     max_duration: float, rank: Sequence[int], user_pinned: bool
+                     max_duration: float, rank: Sequence[int], user_pinned: bool,
+                     money_moments: Sequence[Mapping[str, Any]] = ()
                      ) -> tuple[int, IntegrityResult, list[dict[str, Any]]]:
     """(index to use, its result, alternates considered). ``rank`` = candidate positions in selection order."""
-    first = review(clips[selected_index - 1], evidence, source_duration=source_duration, max_duration=max_duration)
+    first = review(clips[selected_index - 1], evidence, source_duration=source_duration, max_duration=max_duration,
+                   money_moments=money_moments)
     if first.status != "reselect" or user_pinned:
         if first.status == "reselect":
             first.status, first.reason = "warn", first.reason + " (clip pinned by the user: kept)"
@@ -301,7 +324,8 @@ def review_selection(clips: Sequence[Any], selected_index: int, *, evidence: Evi
     for position in rank:
         if position == selected_index or not isinstance(clips[position - 1], Mapping):
             continue
-        result = review(clips[position - 1], evidence, source_duration=source_duration, max_duration=max_duration)
+        result = review(clips[position - 1], evidence, source_duration=source_duration, max_duration=max_duration,
+                        money_moments=money_moments)
         considered.append({"clip_index": position, "status": result.status})
         if result.status != "reselect":
             result.reason = (f"reselected from clip {selected_index} ({first.reason}); " + result.reason)

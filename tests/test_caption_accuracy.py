@@ -122,7 +122,13 @@ class JudgeGuardTests(unittest.TestCase):
                                {"ear": "asr_2", "heard_core": "Marra", "prompted": False}], core_clock=[])
         accepted, problem = self.decide(span, "use_heard", "Mara", ears=("asr_2",))
         self.assertIsNone(accepted)
-        self.assertIn("cited ears do not carry", problem)
+        self.assertIn("do not carry", problem)
+        accepted, problem = self.decide(span, "use_heard", "Mara", ears=("asr_1", "asr_2"))
+        self.assertIsNone(accepted)
+        self.assertIn("asr_2", problem)
+        accepted, problem = self.decide(span, "use_heard", "Mara", ears=("asr_1", "made_up_ear"))
+        self.assertIsNone(accepted)
+        self.assertIn("unknown supporting ear", problem)
 
     def test_unchanged_words_need_no_support_and_evidence_may_combine(self) -> None:
         span = self.span(current="go to the store now", window_text="so go to the store now ok",

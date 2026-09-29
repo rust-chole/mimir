@@ -6,9 +6,8 @@ structurally usable, and repairs it with MEASURED evidence when it is not:
 
     health    multiple symptoms, never one brittle number:
               FATAL  no lexical words | transcript-sized collapse into one instant |
-                     most words outside the audio | most durations zero/negative
-              SOFT   some words outside the audio | many zero/negative durations |
-                     onset regressions beyond jitter | clock covers too few of the words
+                     any lexical anchor outside the final audio | any zero/negative duration
+              SOFT   onset regressions beyond jitter | clock covers too few of the words
 
               three separate answers (so the logic stays readable):
                 usable_for_publish      no fatal symptom
@@ -149,14 +148,13 @@ def assess(rows: Sequence[Mapping[str, Any]], *, duration: float, expected_words
                            "coverage": round(coverage, 3)})
     if pileup >= max(COLLAPSE_MIN_WORDS, COLLAPSE_SHARE * n):
         health.fatal.append("collapsed_to_one_instant")
-    if outside > 0.5 * n:
-        health.fatal.append("mostly_outside_audio")
-    elif outside:
-        health.soft.append("words_outside_audio")
-    if nonpositive > 0.5 * n:
-        health.fatal.append("mostly_nonpositive_durations")
-    elif nonpositive > 0.2 * n:
-        health.soft.append("many_nonpositive_durations")
+    # Objective timing corruption is not a quality preference. Even one invalid
+    # lexical anchor enters measured recovery; publication is allowed only when
+    # no objectively invalid anchor survives the bounded recovery attempts.
+    if outside:
+        health.fatal.append("words_outside_audio")
+    if nonpositive:
+        health.fatal.append("nonpositive_durations")
     if regressions > max(1, 0.05 * n):
         health.soft.append("onset_regressions")
     if expected_words > 0 and coverage < 0.5:
@@ -173,8 +171,6 @@ def _region_damaged(primary: Sequence[Mapping[str, Any]], recovered: Sequence[Ma
         return "missing_words"
     if len(primary) >= 4 and _largest_pileup(primary) >= max(4, 0.5 * len(primary)):
         return "collapsed"
-    if primary and sum(1 for r in primary if float(r["end"]) <= float(r["start"])) > 0.5 * len(primary):
-        return "nonpositive_durations"
     starts = [float(r["start"]) for r in primary]
     if sum(1 for a, b in zip(starts, starts[1:]) if b < a - JITTER_S) > max(1, 0.2 * len(primary)):
         return "onset_regressions"
@@ -248,11 +244,14 @@ def merge_chunks(chunks: Sequence[tuple[tuple[float, float], Sequence[Mapping[st
 
 
 def splice(primary: Sequence[Mapping[str, Any]], recovered: Sequence[Mapping[str, Any]],
-           regions: Sequence[tuple[float, float]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+           regions: Sequence[tuple[float, float]], *, duration: float | None = None
+           ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Primary words where the primary is locally fine, recovered words only where it is damaged.
 
-    Kept primary words keep their ORIGINAL order (nothing is re-sorted to look healthier);
-    a region with no re-measured words always keeps the primary."""
+    Healthy primary anchors keep their ORIGINAL values. Isolated objectively
+    invalid anchors are repaired only from matching measured recovery anchors;
+    broad replacement remains reserved for collapse/missing/chronology damage.
+    """
 
     def region_of(row: Mapping[str, Any]) -> int | None:
         t = float(row["start"])
@@ -264,25 +263,56 @@ def splice(primary: Sequence[Mapping[str, Any]], recovered: Sequence[Mapping[str
 
     by_region_p: list[list[dict[str, Any]]] = [[] for _ in regions]
     by_region_r: list[list[dict[str, Any]]] = [[] for _ in regions]
+    unmapped_primary = 0
     for row in primary:
         index = region_of(row)
-        if index is not None:          # a primary word beyond the audio has no region
+        if index is not None:
             by_region_p[index].append(dict(row))
+        else:
+            unmapped_primary += 1
     for row in recovered:
         index = region_of(row)
         if index is not None:
             by_region_r[index].append(dict(row))
+
+    def invalid(row: Mapping[str, Any]) -> bool:
+        a, b = float(row["start"]), float(row["end"])
+        return b <= a or (duration is not None and (a < -RANGE_TOL_S or b > duration + RANGE_TOL_S))
+
     out: list[dict[str, Any]] = []
     replaced: list[dict[str, Any]] = []
     for index, (start, end) in enumerate(regions):
-        p, r = by_region_p[index], sorted(by_region_r[index], key=lambda x: (float(x["start"]), float(x["end"])))
-        why = _region_damaged(p, r, start=start, end=end)
+        p = by_region_p[index]
+        r = sorted(by_region_r[index], key=lambda x: (float(x["start"]), float(x["end"])))
+        used: set[int] = set()
+        fixed: list[dict[str, Any]] = []
+        invalid_count = 0
+        for row in p:
+            if not invalid(row):
+                fixed.append(row)
+                continue
+            invalid_count += 1
+            choices = [(abs(float(candidate["start"]) - float(row["start"])), j, candidate)
+                       for j, candidate in enumerate(r)
+                       if j not in used and _canon(candidate["word"]) == _canon(row["word"]) and not invalid(candidate)]
+            if choices:
+                _delta, chosen_index, chosen = min(choices, key=lambda item: item[0])
+                used.add(chosen_index)
+                fixed.append({**chosen, "timing_source": chosen.get("timing_source", "clock_recovery")})
+        if invalid_count:
+            replaced.append({"region": [round(start, 3), round(end, 3)], "reason": "invalid_anchors",
+                             "primary_words": len(p), "recovered_words": len(r),
+                             "invalid_anchors": invalid_count})
+        why = _region_damaged(fixed, r, start=start, end=end)
         if why:
             out.extend({**row, "timing_source": row.get("timing_source", "clock_recovery")} for row in r)
             replaced.append({"region": [round(start, 3), round(end, 3)], "reason": why,
                              "primary_words": len(p), "recovered_words": len(r)})
         else:
-            out.extend(p)
+            out.extend(fixed)
+    if unmapped_primary:
+        replaced.append({"region": None, "reason": "outside_audio",
+                         "primary_words": unmapped_primary, "recovered_words": 0})
     return out, replaced
 
 
@@ -349,7 +379,7 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
     try:
         chunked, chunk_report = chunked_recovery(audio_path, duration, timer=timer, cutter=cutter)
         chunked = [{**row, "timing_source": "whisper_chunk_recovery"} for row in chunked]
-        spliced, replaced = splice(primary, chunked, regions)
+        spliced, replaced = splice(primary, chunked, regions, duration=duration)
         health = assess(spliced, duration=duration, expected_words=expected_words)
         report["attempts"].append({"method": "overlapping_chunks_exact_final_audio", "health": health.to_dict(),
                                    "replaced_regions": replaced, **chunk_report, "selected": False,
@@ -365,7 +395,7 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
     if reference is not None:
         try:
             ref_rows = [{**dict(r), "timing_source": "vod_reference_clock"} for r in reference() or []]
-            spliced, replaced = splice(primary, ref_rows, regions)
+            spliced, replaced = splice(primary, ref_rows, regions, duration=duration)
             health = assess(spliced, duration=duration, expected_words=expected_words)
             healthier = clearly_healthier(health, replaced)
             report["attempts"].append({"method": "independent_whole_vod_clock", "health": health.to_dict(),

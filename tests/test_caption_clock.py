@@ -51,9 +51,16 @@ class ChunkFakes:
 class HealthTests(unittest.TestCase):
     def test_healthy_clock_with_normal_imperfections(self) -> None:
         clock = evenly(40)
-        clock[5]["end"] = clock[5]["start"]                          # a few zero-length words
         clock[9]["start"] = clock[8]["start"] - 0.1                   # small jitter
         self.assertTrue(cc.assess(clock, duration=17.0, expected_words=42).healthy)
+
+    def test_any_nonpositive_or_outside_anchor_is_objective_corruption(self) -> None:
+        clock = evenly(20)
+        clock[5]["end"] = clock[5]["start"]
+        self.assertIn("nonpositive_durations", cc.assess(clock, duration=10.0, expected_words=20).fatal)
+        clock = evenly(20)
+        clock[-1]["end"] = 12.0
+        self.assertIn("words_outside_audio", cc.assess(clock, duration=10.0, expected_words=20).fatal)
 
     def test_repeated_words_are_not_a_collapse(self) -> None:
         clock = rows([("no", 1.0, 1.2), ("no", 1.3, 1.5), ("no", 1.6, 1.8), ("no", 1.9, 2.1), ("way", 2.2, 2.6)])
@@ -73,18 +80,16 @@ class HealthTests(unittest.TestCase):
         collapsed = [{"word": f"w{i}", "start": 3.0, "end": 3.0} for i in range(20)]
         health = cc.assess(collapsed, duration=10.0, expected_words=20)
         self.assertIn("collapsed_to_one_instant", health.fatal)
-        self.assertIn("mostly_nonpositive_durations", health.fatal)
+        self.assertIn("nonpositive_durations", health.fatal)
         negative = [{"word": f"w{i}", "start": 1 + i, "end": 0.5 + i} for i in range(6)]
-        self.assertIn("mostly_nonpositive_durations", cc.assess(negative, duration=9.0).fatal)
+        self.assertIn("nonpositive_durations", cc.assess(negative, duration=9.0).fatal)
 
     def test_one_ordinary_soft_symptom_is_not_enough_to_distrust_the_clock(self) -> None:
         clock = evenly(10)
-        clock[-1]["end"] = 9.0                                                             # one word past the end
-        health = cc.assess(clock, duration=4.2, expected_words=10)
-        self.assertEqual(health.soft, ["words_outside_audio"])
+        clock[3]["start"], clock[7]["start"] = 0.0, 0.0
+        health = cc.assess(clock, duration=5.0, expected_words=10)
+        self.assertIn("onset_regressions", health.soft)
         self.assertTrue(health.healthy and health.usable_for_publish)
-        clock[3]["start"], clock[7]["start"] = 0.0, 0.0                                    # + regressions
-        self.assertFalse(cc.assess(clock, duration=4.2, expected_words=10).healthy)
 
     def test_low_coverage_alone_asks_for_one_recovery_attempt_but_never_blocks(self) -> None:
         health = cc.assess(evenly(10), duration=5.0, expected_words=25)                    # 40 % of the words
@@ -125,6 +130,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((report["status"], report["recovery_attempted"]), ("healthy", False))
         self.assertEqual(data["words"], true_clock())
 
+    def test_isolated_invalid_anchor_is_remeasured_without_moving_neighbors(self) -> None:
+        truth = true_clock()
+        primary = [dict(r) for r in truth]
+        primary[12]["end"] = primary[12]["start"]
+        unchanged = {r["word"]: (r["start"], r["end"]) for i, r in enumerate(primary) if i != 12}
+        data, report = self.recover(primary, ChunkFakes(truth))
+        self.assertEqual(report["status"], "recovered")
+        fixed = {r["word"]: r for r in data["words"]}
+        self.assertEqual((fixed[truth[12]["word"]]["start"], fixed[truth[12]["word"]]["end"]),
+                         (truth[12]["start"], truth[12]["end"]))
+        for word, anchor in unchanged.items():
+            self.assertEqual((fixed[word]["start"], fixed[word]["end"]), anchor)
+
     def test_recovery_splices_only_the_damaged_region(self) -> None:
         truth = true_clock()
         primary = [dict(r) for r in truth]
@@ -152,6 +170,10 @@ class RecoveryTests(unittest.TestCase):
         zero = [{"word": f"w{i}", "start": 1.0 + i * 0.3, "end": 1.0 + i * 0.3} for i in range(30)]
         with self.assertRaises(cc.ClockUnavailable):                   # zero durations after all recovery
             self.recover(zero, ChunkFakes(zero))
+        one_bad = true_clock()
+        one_bad[10]["end"] = one_bad[10]["start"]
+        with self.assertRaises(cc.ClockUnavailable):
+            self.recover(one_bad, ChunkFakes(one_bad))
         self.assertFalse([name for name in dir(cc) if re.search("interpol|synthetic|distribute", name, re.I)])
 
     def test_independent_reference_clock_only_when_structurally_healthier(self) -> None:

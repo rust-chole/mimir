@@ -63,6 +63,15 @@ class CacheIntegrityTests(unittest.TestCase):
         self.assertFalse(book.reusable("pacing_cut", "sig", lambda: True, output=output))
         self.assertTrue(any("sha256" in w for w in book.state["warnings"]))
 
+    def test_critical_sha_rechecks_bytes_even_when_size_and_mtime_are_preserved(self) -> None:
+        output = self.file("same_metadata.mp4", b"AAAA")
+        book = self.book()
+        book.record("pacing_cut", "done", "sig", path=output)
+        stat = output.stat()
+        output.write_bytes(b"BBBB")
+        os.utime(output, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertFalse(book.reusable("pacing_cut", "sig", lambda: True, output=output))
+
     def test_non_critical_outputs_are_not_hashed(self) -> None:
         book = self.book()
         book.record("speaker_preflight", "done", "sig", path=self.file("scan.json", b"{}"))

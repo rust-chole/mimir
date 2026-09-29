@@ -78,6 +78,18 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual(result.status, "repaired")
         self.assertGreaterEqual(result.final[1], 25.5)
 
+    def test_original_money_moment_cannot_be_hidden_by_sanitized_clip_payoff(self) -> None:
+        ev = evidence(phrase(12.0, 10), phrase(20.0, 6), phrase(23.0, 4), phrase(60.0, 10), phrase(64.0, 6))
+        broken = {**clip(30.0, 50.0, payoff=(35.0, 36.0)), "primary_moment_id": "m001"}
+        good = {**clip(59.0, 67.0, payoff=(64.0, 65.0)), "primary_moment_id": "m002"}
+        moments = [{"moment_id": "m001", "start": 20.0, "end": 22.0},
+                   {"moment_id": "m002", "start": 64.0, "end": 65.0}]
+        index, result, _ = si.review_selection(
+            [broken, good], 1, evidence=ev, source_duration=120.0, max_duration=MAX,
+            rank=[1, 2], user_pinned=False, money_moments=moments)
+        self.assertEqual(index, 2)
+        self.assertTrue(result.status.startswith("reselected"))
+
     def test_missing_payoff_reselects_only_with_an_alternate_and_never_a_pinned_clip(self) -> None:
         ev = evidence(phrase(12.0, 10), phrase(20.0, 6), phrase(23.0, 4), phrase(60.0, 10), phrase(64.0, 6))
         broken = clip(30.0, 50.0, payoff=(20.0, 22.0))                               # claims a payoff it lacks

@@ -264,7 +264,11 @@ def check_span_decision(span: SpanEvidence, row: Mapping[str, Any], verified_nam
     except (TypeError, ValueError):
         confidence = 0.0
     reason = str(row.get("reason", ""))
-    supporters = tuple(str(e) for e in row.get("supporting_ears", []) or [] if str(e) in span.ear_ids())
+    declared_supporters = tuple(str(e) for e in row.get("supporting_ears", []) or [])
+    unknown_supporters = tuple(e for e in declared_supporters if e not in span.ear_ids())
+    if unknown_supporters:
+        return None, "unknown supporting ear(s): " + ", ".join(unknown_supporters)
+    supporters = declared_supporters
     if verdict == "unresolved" or (verdict in ("keep_primary", "use_heard") and confidence < MIN_CONFIDENCE):
         return SpanDecision(span.span_id, None, False, "caption_judge", confidence, reason, supporters), ""
     if verdict == "keep_primary":
@@ -284,7 +288,7 @@ def check_span_decision(span: SpanEvidence, row: Mapping[str, Any], verified_nam
         return SpanDecision(span.span_id, "", True, "caption_judge", confidence, reason, supporters), ""
     grounding: list[tuple[str, str]] = []
     unsupported: list[str] = []
-    carried = 0                 # changed words the CITED ears (or the clock, if cited) actually heard
+    supporter_hits = {ear: 0 for ear in supporters}
     changed = changed_tokens(old, new)
     for token in changed:
         support = span.token_support(token)
@@ -295,16 +299,21 @@ def check_span_decision(span: SpanEvidence, row: Mapping[str, Any], verified_nam
             grounding.append((token, "+".join(sorted(heard_by)) + " (prompted only)"))
         elif span.name_respelling(token, verified_names):
             grounding.append((token, "verified name respelling a near-spelling heard at the core"))
-            carried += 1
+            for ear in supporters:
+                if ear in heard_by:
+                    supporter_hits[ear] += 1
             continue
         else:
             unsupported.append(token)
             continue
-        carried += 1 if heard_by & set(supporters) else 0
+        for ear in supporters:
+            if ear in heard_by:
+                supporter_hits[ear] += 1
     if unsupported:
         return None, "changed word(s) no ear heard at the disputed core: " + ", ".join(unsupported[:4])
-    if changed and carried * 2 < len(changed):
-        return None, "the cited ears do not carry the change (" + ", ".join(supporters) + ")"
+    irrelevant = [ear for ear, hits in supporter_hits.items() if hits == 0]
+    if changed and irrelevant:
+        return None, "declared supporting ear(s) do not carry any changed token: " + ", ".join(irrelevant)
     return SpanDecision(span.span_id, " ".join(new), True, "caption_judge", confidence, reason, supporters,
                         grounding=tuple(grounding)), ""
 

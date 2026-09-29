@@ -378,8 +378,8 @@ def _hash_cache_path() -> Path:
     return STATE_DIR / "content_hashes.json"
 
 
-def _content_digest(path: str | Path) -> str | None:
-    """sha256 of a file's bytes (None if missing), cached by (path, size, mtime)."""
+def _content_digest(path: str | Path, *, cached: bool = True) -> str | None:
+    """sha256 of file bytes; critical verification bypasses the metadata-keyed cache."""
     global _HASH_CACHE
     path = Path(path).resolve()
     try:
@@ -389,28 +389,31 @@ def _content_digest(path: str | Path) -> str | None:
     if not path.is_file():
         return None
     key = f"{path}|{int(stat.st_size)}|{int(stat.st_mtime_ns)}"
-    with _HASH_LOCK:
-        if _HASH_CACHE is None:
-            try:
-                loaded = json.loads(_hash_cache_path().read_text(encoding="utf-8"))
-                _HASH_CACHE = {str(k): str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
-            except (OSError, ValueError):
-                _HASH_CACHE = {}
-        cached = _HASH_CACHE.get(key)
     if cached:
-        return cached
+        with _HASH_LOCK:
+            if _HASH_CACHE is None:
+                try:
+                    loaded = json.loads(_hash_cache_path().read_text(encoding="utf-8"))
+                    _HASH_CACHE = {str(k): str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+                except (OSError, ValueError):
+                    _HASH_CACHE = {}
+            cached_value = _HASH_CACHE.get(key)
+        if cached_value:
+            return cached_value
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(8 << 20), b""):
             digest.update(chunk)
     value = digest.hexdigest()
-    with _HASH_LOCK:
-        _HASH_CACHE[key] = value
-        try:
-            STATE_DIR.mkdir(parents=True, exist_ok=True)
-            _write_json_atomic(_hash_cache_path(), _HASH_CACHE)
-        except Exception:
-            pass                      # the cache is an optimisation; the digest itself is exact
+    if cached:
+        with _HASH_LOCK:
+            assert _HASH_CACHE is not None
+            _HASH_CACHE[key] = value
+            try:
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                _write_json_atomic(_hash_cache_path(), _HASH_CACHE)
+            except Exception:
+                pass
     return value
 
 
@@ -693,7 +696,7 @@ class StageBook:
         if path is not None:
             record["path"] = str(Path(path).resolve())
             if name in CRITICAL_STAGE_OUTPUTS and Path(path).is_file():
-                record["sha256"] = _content_digest(path)
+                record["sha256"] = _content_digest(path, cached=False)
         if note:
             record["note"] = note
         if elapsed is not None:
@@ -744,7 +747,7 @@ class StageBook:
         expected = record.get("sha256")
         if expected:
             target = output or record.get("path")
-            if not target or _content_digest(target) != expected:
+            if not target or _content_digest(target, cached=False) != expected:
                 self.warn(f"{name}: recorded artifact changed since it was produced (sha256); recomputing")
                 return False
         return True
@@ -1167,7 +1170,8 @@ def _story_integrity(
     index, result, considered = story_integrity.review_selection(
         clips, selected_clip_index, evidence=evidence, source_duration=duration,
         max_duration=float(getattr(clip_analyzer, "MAX_CLIP_DURATION", 55.0)),
-        rank=[position for position, _clip in _ranked_candidates(analysis_data)], user_pinned=user_pinned)
+        rank=[position for position, _clip in _ranked_candidates(analysis_data)], user_pinned=user_pinned,
+        money_moments=[row for row in analysis_data.get("money_moments", []) or [] if isinstance(row, dict)])
     report = {**result.to_dict(), "selected_clip_index": index, "originally_selected": selected_clip_index,
               "alternates_considered": considered}
     target = analysis_path.parent / "story_integrity" / analysis_path.name
@@ -1931,7 +1935,7 @@ def _fast_resume(
     if not final_raw or not _valid_file(final_raw, MIN_VIDEO_BYTES):
         return None
     published = (state.get("stages") or {}).get("publish") or {}
-    if published.get("sha256") and _content_digest(final_raw) != published["sha256"]:
+    if published.get("sha256") and _content_digest(final_raw, cached=False) != published["sha256"]:
         return None                    # the published file was replaced/edited: never reuse it blindly
 
     selected = state.get("selected_clip", {})
@@ -4635,11 +4639,11 @@ def run_pipeline(
             + f"\nİnceleme kopyası: {rejected}\nRapor: {rejected.with_suffix('.qc.json')}"
         )
 
-    candidate_sha = _content_digest(candidate)
+    candidate_sha = _content_digest(candidate, cached=False)
     published_path = _publish_final(candidate, video_path)
     if not _valid_file(published_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Published final short oluşmadı.")
-    if _content_digest(published_path) != candidate_sha:
+    if _content_digest(published_path, cached=False) != candidate_sha:
         raise ShortsPipelineError("Yayınlanan dosya final QC'den geçen aday ile aynı değil (sha256); "
                                   f"yayın geçersiz: {published_path}")
     publish_status = "published" if gate.get("status") == v6_runtime.GATE_PASSED else "published_degraded"
