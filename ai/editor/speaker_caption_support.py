@@ -762,8 +762,9 @@ def _micro_refine_caption(
 
     1. Evidence: three independent local ears per span (raw + enhanced acoustic,
        one context-diverse); two more when the first three are not unanimous.
-    2. Decision: a span that >=3 ears heard identically is settled by that
-       unanimous acoustic evidence. Every other span goes, in ONE batched call,
+    2. Decision: a span that >=3 ears heard identically, or whose strict 4/5 majority
+       holds every unprompted acoustic ear, is settled by that acoustic evidence (no
+       strong-model call). Every other span goes, in ONE batched call,
        to the caption judge (caption_judge.py, the strongest model) with all the
        evidence; each verdict passes a deterministic grounding guard, else the
        strict acoustic vote (4/5) decides that span.
@@ -909,11 +910,18 @@ def _micro_refine_caption(
             core_clock=[w for w, a, b in clock if a < core_t1 and core_t0 < b],
             low_confidence=[(w, p) for w, p in doubtful if vod_processor.canonical_word(w) in window_vocabulary],
         )
+        # Strongly settled acoustic evidence needs no strong-model call: every ear agrees (>= 3),
+        # or the strict 4/5 majority holds EVERY unprompted acoustic ear (only a context-prompted
+        # ear dissents, which is the ear most likely to echo its context).
         settled_decision = None
-        if top and top.get("phrase") and int(top.get("votes", 0)) >= 3 and int(top.get("votes", 0)) == len(transcripts):
+        votes = int(top.get("votes", 0)) if top else 0
+        unprompted = {row["ear"] for row in ear_rows if not row.get("prompted")}
+        if top and top.get("phrase") and votes >= 3 and votes == len(transcripts):
             settled_decision = caption_judge.SpanDecision(
-                span_id, " ".join(top.get("phrase", ())), True,
-                f"settled_unanimous_{int(top.get('votes', 0))}_of_{len(transcripts)}")
+                span_id, " ".join(top.get("phrase", ())), True, f"settled_unanimous_{votes}_of_{len(transcripts)}")
+        elif strict is not None and unprompted and unprompted <= set(top.get("sources", [])):
+            settled_decision = caption_judge.SpanDecision(
+                span_id, strict["phrase"], True, f"settled_acoustic_{votes}_of_{len(transcripts)}")
         gathered.append({"span": span, "core": (core_start, core_end), "window": (time_start, time_end),
                          "transcripts": transcripts, "candidate_rows": candidate_rows, "errors": errors,
                          "evidence": evidence, "decision": settled_decision})

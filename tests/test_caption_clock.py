@@ -77,11 +77,22 @@ class HealthTests(unittest.TestCase):
         negative = [{"word": f"w{i}", "start": 1 + i, "end": 0.5 + i} for i in range(6)]
         self.assertIn("mostly_nonpositive_durations", cc.assess(negative, duration=9.0).fatal)
 
-    def test_one_soft_symptom_is_not_enough_to_distrust_the_clock(self) -> None:
+    def test_one_ordinary_soft_symptom_is_not_enough_to_distrust_the_clock(self) -> None:
         clock = evenly(10)
-        self.assertTrue(cc.assess(clock, duration=5.0, expected_words=25).healthy)        # low coverage only
+        clock[-1]["end"] = 9.0                                                             # one word past the end
+        health = cc.assess(clock, duration=4.2, expected_words=10)
+        self.assertEqual(health.soft, ["words_outside_audio"])
+        self.assertTrue(health.healthy and health.usable_for_publish)
         clock[3]["start"], clock[7]["start"] = 0.0, 0.0                                    # + regressions
-        self.assertFalse(cc.assess(clock, duration=5.0, expected_words=25).healthy)
+        self.assertFalse(cc.assess(clock, duration=4.2, expected_words=10).healthy)
+
+    def test_low_coverage_alone_asks_for_one_recovery_attempt_but_never_blocks(self) -> None:
+        health = cc.assess(evenly(10), duration=5.0, expected_words=25)                    # 40 % of the words
+        self.assertEqual((health.fatal, health.soft), ([], ["low_coverage"]))
+        self.assertTrue(health.needs_recovery_attempt)
+        self.assertTrue(health.usable_for_publish)
+        nearly = cc.assess(evenly(99), duration=45.0, expected_words=100)                 # 0.99 is not "low"
+        self.assertFalse(nearly.needs_recovery_attempt)
 
 
 class ChunkMergeTests(unittest.TestCase):
@@ -151,6 +162,40 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(report["attempts"][-1]["healthier_than_primary"])
         with self.assertRaises(cc.ClockUnavailable):
             self.recover(collapsed, ChunkFakes(truth, fail=True), reference=lambda: collapsed)
+
+    def low_coverage_primary(self):
+        truth = true_clock()
+        return truth, [r for r in truth if r["start"] < 11.0]                              # ~36 % coverage, no fatal
+
+    def test_low_coverage_attempts_recovery_and_a_healthier_recovery_wins(self) -> None:
+        truth, primary = self.low_coverage_primary()
+        fakes = ChunkFakes(truth)
+        data, report = self.recover(primary, fakes)
+        self.assertTrue(fakes.calls)                                                        # the attempt was made
+        self.assertEqual((report["status"], report["selected"]), ("recovered", "whisper_chunk_recovery"))
+        self.assertEqual(report["primary_health"]["soft"], ["low_coverage"])
+        early = [(r["start"], r["end"]) for r in data["words"] if r["start"] < 9.0]
+        self.assertEqual(early, [(r["start"], r["end"]) for r in primary if r["start"] < 9.0])   # anchors untouched
+        self.assertEqual(len(data["words"]), len(truth))
+
+    def test_low_coverage_keeps_the_original_measured_clock_when_recovery_fails_or_is_no_better(self) -> None:
+        truth, primary = self.low_coverage_primary()
+        for fakes in (ChunkFakes(truth, fail=True), ChunkFakes(primary)):                  # fails / hears no more
+            data, report = self.recover(primary, fakes)
+            self.assertTrue(fakes.calls)
+            self.assertEqual((report["status"], report["selected"]), ("degraded", "whisper_primary"))
+            self.assertIn("original measured clock is kept", report["reason"])
+            self.assertEqual(data["words"], primary)                                         # never blocked
+
+    def test_a_fatally_broken_clock_attempts_recovery_and_blocks_only_without_a_survivor(self) -> None:
+        truth = true_clock()
+        collapsed = [{**r, "start": 7.0, "end": 7.0} for r in truth]
+        data, report = self.recover(collapsed, ChunkFakes(truth))
+        self.assertEqual(report["status"], "recovered")
+        fakes = ChunkFakes(truth, fail=True)
+        with self.assertRaises(cc.ClockUnavailable):
+            self.recover(collapsed, fakes)
+        self.assertTrue(fakes.calls)                                                         # tried before blocking
 
     def test_soft_symptoms_after_recovery_publish_degraded(self) -> None:
         sparse = true_clock()[::3]                                     # measured but covers a third of the words

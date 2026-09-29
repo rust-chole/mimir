@@ -246,6 +246,26 @@ class SuspicionToResolutionTests(unittest.TestCase):
         self.assertEqual([w["word"] for w in words][1], "Mara")
         self.assertTrue(quality["micro_accuracy"]["details"][0]["selected_source"].startswith("settled_unanimous"))
 
+    def by_ear(self, heard: dict[str, str]):
+        labels = {"raw acoustic": "asr_1", "enhanced acoustic": "asr_2", "context diverse": "asr_3",
+                  "enhanced diverse": "asr_4", "context precision": "asr_5"}
+        return lambda label: f"then {heard[labels[label]]} told me"
+
+    def test_a_strong_acoustic_majority_is_settled_without_the_strong_model(self) -> None:
+        judge, calls = self.fake_judge("unresolved")
+        heard = {"asr_1": "Mara", "asr_2": "Mara", "asr_3": "Marra", "asr_4": "Mara", "asr_5": "Mara"}
+        words, quality, micro_calls = self.run_stage(self.by_ear(heard), judge)
+        self.assertEqual(len(micro_calls), 5)
+        self.assertEqual(calls, [])                                   # only a prompted ear dissented
+        self.assertEqual([w["word"] for w in words][1], "Mara")
+        self.assertEqual(quality["micro_accuracy"]["details"][0]["selected_source"], "settled_acoustic_4_of_5")
+
+    def test_an_unprompted_dissent_still_reaches_the_judge(self) -> None:
+        judge, calls = self.fake_judge("unresolved")
+        heard = {"asr_1": "Mara", "asr_2": "Marra", "asr_3": "Mara", "asr_4": "Mara", "asr_5": "Mara"}
+        self.run_stage(self.by_ear(heard), judge)
+        self.assertEqual(len(calls), 1)                                # one batched call, never per word
+
     def test_judge_decides_a_split_span_from_the_evidence_and_the_clock_keeps_timing(self) -> None:
         judge, calls = self.fake_judge("use_heard", "Mara")
         words, quality, micro_calls = self.run_stage(self.split_answers(), judge)

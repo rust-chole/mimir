@@ -36,8 +36,9 @@ cache), `--no-memes`, `--verbose`.
 3. **Caption truth** — on the exact final audio: primary `gpt-transcribe`, a
    model-diverse cross-check (with token confidence) and the Whisper word clock.
    Disagreements, low-confidence words and near-miss names are re-heard in small
-   local windows by 3-5 independent ears. A span the ears hear unanimously is settled;
-   every other span goes, in one call, to the **caption judge (Astra 6)** with all the
+   local windows by 3-5 independent ears. A span the ears hear unanimously — or whose
+   4/5 majority holds every unprompted acoustic ear — is settled without a model call;
+   every other span goes, in ONE batched call, to the **caption judge (Astra 6)** with all the
    evidence (both transcripts, every ear's model/view/wording, token confidence,
    verified names, measured clock words). It decides **what** was said; a deterministic
    guard checks every word it CHANGES has acoustic support at the disputed spot (an
@@ -46,10 +47,13 @@ cache), `--no-memes`, `--verbose`.
    back to the strict 3/3-4/5 vote, else to the primary word marked uncertain. It never
    touches **when**: timing is the measured word clock (plus a backward-only acoustic
    guard for late phrase starts). The clock is health-checked (several symptoms, not one
-   number); a damaged clock is re-measured on overlapping ~10 s chunks of the same audio
-   and spliced in only where it was damaged (healthy anchors never move), with the
-   whole-VOD clock as a second measured source; no synthetic timing exists, and only a
-   clock that stays corrupt after recovery blocks. Speakers come from diarization + your
+   number); a healthy clock is used at once with zero extra calls. A damaged clock — or
+   one covering fewer than half of the words — gets ONE measured recovery attempt:
+   overlapping ~10 s chunks of the same audio, spliced in only where the clock was damaged
+   (healthy anchors never move), with the whole-VOD clock as a second measured source. A
+   recovery is used only if clearly healthier; otherwise the original measured clock is
+   kept as a disclosed degradation. No synthetic timing exists, and only a clock that
+   stays corrupt after recovery blocks. Speakers come from diarization + your
    voice-confirmed names; verified-name
    spelling the name lock cannot decide is a closed choice for the judge (verified
    spelling / keep / uncertain). The result is **frozen**, with who decided each word.

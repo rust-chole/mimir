@@ -134,6 +134,9 @@ class ProEditPreparation:
     status: str
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
+    # One decode per preparation for the scene maps shared by the director evidence and
+    # caption placement (a forced rerender must not analyse the same clip twice).
+    scene_maps: dict[str, Any] = field(default_factory=dict)
     output_path: Path | None = None
     plan_id: str = ""
     render_options: dict[str, Any] = field(default_factory=dict)
@@ -339,6 +342,22 @@ def _track_boxes(track: Any, kind: str, start: float, end: float, width: int, he
     return rows
 
 
+def _scene_map(prep: "ProEditPreparation", kind: str, compute: Callable[[], Any]) -> Any:
+    """(map, status) of ``kind`` computed at most once per preparation; a failure is shared too."""
+    maps = getattr(prep, "scene_maps", None)
+    if maps is None:
+        return compute()
+    if kind not in maps:
+        try:
+            maps[kind] = ("ok", compute())
+        except Exception as error:  # remembered: never re-decode a clip that already failed
+            maps[kind] = ("error", error)
+    state, value = maps[kind]
+    if state == "error":
+        raise value
+    return value
+
+
 def coarse_region(cx: float, cy: float) -> str:
     """A region WORD for a normalized point (the director reasons with words, never coordinates)."""
     col = "left" if cx < 1 / 3 else ("right" if cx > 2 / 3 else "center")
@@ -372,14 +391,14 @@ def director_evidence(request: ProEditRequest, prep: ProEditPreparation, context
     assert prep.artifacts is not None
     if config.caption_activity:
         try:
-            occupancy, _status = load_or_analyze(prep.artifacts.caption_occupancy, media, context.clip_identity,
-                                                 force=request.force)
+            occupancy, _status = _scene_map(prep, "occupancy", lambda: load_or_analyze(
+                prep.artifacts.caption_occupancy, media, context.clip_identity, force=request.force))
         except Exception as error:
             evidence["activity"] = f"unavailable: {type(error).__name__}"
     if config.caption_ui or config.caption_layout:
         try:
-            background, _status = background_mod.load_or_analyze(prep.artifacts.caption_background, media,
-                                                                 context.clip_identity, force=request.force)
+            background, _status = _scene_map(prep, "background", lambda: background_mod.load_or_analyze(
+                prep.artifacts.caption_background, media, context.clip_identity, force=request.force))
         except Exception as error:
             evidence["ui"] = f"unavailable: {type(error).__name__}"
     try:
@@ -448,8 +467,8 @@ def _placement_evidence(request: ProEditRequest, prep: ProEditPreparation, conte
     if config.caption_activity:
         assert prep.artifacts is not None
         try:
-            found, status = load_or_analyze(prep.artifacts.caption_occupancy, media, context.clip_identity,
-                                            force=request.force)
+            found, status = _scene_map(prep, "occupancy", lambda: load_or_analyze(
+                prep.artifacts.caption_occupancy, media, context.clip_identity, force=request.force))
             raw_occupancy = found
             occupancy = found if full_frame else OutputMappedOccupancy(found, base, (width, height))
             info["activity"] = {"status": status, "samples": len(found.times), "confidence": round(found.confidence, 3)}
@@ -463,8 +482,8 @@ def _placement_evidence(request: ProEditRequest, prep: ProEditPreparation, conte
     if config.caption_legibility or config.caption_ui or config.caption_layout:
         assert prep.artifacts is not None
         try:
-            found_bg, status = background_mod.load_or_analyze(prep.artifacts.caption_background, media,
-                                                              context.clip_identity, force=request.force)
+            found_bg, status = _scene_map(prep, "background", lambda: background_mod.load_or_analyze(
+                prep.artifacts.caption_background, media, context.clip_identity, force=request.force))
             background = found_bg
             info["background"] = {"status": status, "samples": len(found_bg.samples),
                                   "confidence": round(found_bg.confidence, 3),

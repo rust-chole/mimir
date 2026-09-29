@@ -103,6 +103,29 @@ class LayoutPriorityTests(unittest.TestCase):
         if evidence["ambiguous_motion"]:
             self.assertEqual(evidence["ambiguous_motion"][0]["note"], "not a framing target; keep the context wide")
 
+    def test_the_scene_maps_are_decoded_once_per_preparation(self) -> None:
+        from ai.editor.pro_edit import stage
+
+        prep = stage.ProEditPreparation(status="ready")
+        calls = []
+
+        def analyse():
+            calls.append(1)
+            return ("map", "analyzed")
+
+        self.assertEqual(stage._scene_map(prep, "occupancy", analyse), ("map", "analyzed"))
+        self.assertEqual(stage._scene_map(prep, "occupancy", analyse), ("map", "analyzed"))
+        self.assertEqual(len(calls), 1)                            # a forced rerender decodes once, not twice
+
+        def broken():
+            calls.append(1)
+            raise ValueError("no usable activity samples")
+
+        for _ in range(2):
+            with self.assertRaises(ValueError):
+                stage._scene_map(prep, "background", broken)
+        self.assertEqual(len(calls), 2)                            # a failed decode is not retried
+
 
 if __name__ == "__main__":
     unittest.main()

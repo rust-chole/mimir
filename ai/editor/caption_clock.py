@@ -9,7 +9,15 @@ structurally usable, and repairs it with MEASURED evidence when it is not:
                      most words outside the audio | most durations zero/negative
               SOFT   some words outside the audio | many zero/negative durations |
                      onset regressions beyond jitter | clock covers too few of the words
-              healthy = no fatal symptom and at most one soft symptom
+
+              three separate answers (so the logic stays readable):
+                usable_for_publish      no fatal symptom
+                needs_recovery_attempt  a fatal symptom, two or more soft symptoms, or
+                                        low coverage on its own (caption timing is too
+                                        valuable to leave on half a clock: worth ONE
+                                        measured recovery attempt, never a block by itself)
+                healthy                 no recovery attempt needed -> used immediately,
+                                        zero extra calls
 
     recovery  1. re-time the exact final audio in overlapping chunks (~10 s, small
                  overlap), merge the chunk clocks by overlap ownership, dedupe
@@ -20,11 +28,12 @@ structurally usable, and repairs it with MEASURED evidence when it is not:
                  it is structurally healthier, spliced the same way
               every candidate is re-checked; diarization is never a word clock
 
-    decision  a healthy clock is used; otherwise the structurally best measured
-              clock is used with a disclosed degradation when it has no FATAL
-              symptom; if every measured clock is still fatally broken the
-              caption stage BLOCKS (ClockUnavailable). No synthetic, global or
-              interpolated timing exists here.
+    decision  a healthy clock is used; otherwise a recovery candidate is used only
+              when it is clearly healthier (healthy itself, or strictly fewer
+              symptoms); failing that, the original measured clock stays as a
+              disclosed degradation when it is usable for publish; if every measured
+              clock is still fatally broken the caption stage BLOCKS
+              (ClockUnavailable). No synthetic, global or interpolated timing exists.
 """
 from __future__ import annotations
 
@@ -34,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-CLOCK_VERSION = 1
+CLOCK_VERSION = 2
 # Generic media/algorithm parameters (not tuned to any video).
 CHUNK_S = float(os.getenv("MIMIR_CLOCK_CHUNK_SECONDS", "10") or 10)
 OVERLAP_S = float(os.getenv("MIMIR_CLOCK_CHUNK_OVERLAP", "1.5") or 1.5)
@@ -88,15 +97,24 @@ class ClockHealth:
     metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def usable_for_publish(self) -> bool:
+        return not self.fatal
+
+    @property
+    def needs_recovery_attempt(self) -> bool:
+        return bool(self.fatal) or len(self.soft) >= 2 or "low_coverage" in self.soft
+
+    @property
     def healthy(self) -> bool:
-        return not self.fatal and len(self.soft) <= 1
+        return not self.needs_recovery_attempt
 
     @property
     def rank(self) -> tuple[int, int]:
         return len(self.fatal), len(self.soft)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"healthy": self.healthy, "fatal": list(self.fatal), "soft": list(self.soft),
+        return {"healthy": self.healthy, "needs_recovery_attempt": self.needs_recovery_attempt,
+                "usable_for_publish": self.usable_for_publish, "fatal": list(self.fatal), "soft": list(self.soft),
                 "metrics": dict(self.metrics)}
 
 
@@ -316,11 +334,15 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
                               "primary_health": primary_health.to_dict(), "recovery_attempted": False,
                               "attempts": [], "selected": "whisper_primary", "status": "healthy",
                               "reason": "primary measured clock is structurally healthy"}
-    if primary_health.healthy:
+    if not primary_health.needs_recovery_attempt:
         return {**dict(primary_data or {}), "words": primary}, report
 
     report["recovery_attempted"] = True
     candidates: list[tuple[ClockHealth, str, list[dict[str, Any]]]] = [(primary_health, "whisper_primary", primary)]
+
+    def clearly_healthier(health: ClockHealth, replaced: Sequence[Any]) -> bool:
+        """A recovery only wins when it re-measured something AND is healthy or strictly less sick."""
+        return bool(replaced) and (health.healthy or health.rank < primary_health.rank)
 
     windows = chunk_windows(duration)
     regions = ownership(windows)
@@ -332,7 +354,7 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
         report["attempts"].append({"method": "overlapping_chunks_exact_final_audio", "health": health.to_dict(),
                                    "replaced_regions": replaced, **chunk_report, "selected": False,
                                    **({} if replaced else {"note": "no damaged region could be re-measured"})})
-        if replaced:
+        if clearly_healthier(health, replaced):
             candidates.append((health, "whisper_chunk_recovery", spliced))
             if health.healthy:
                 return _select(report, candidates[-1], primary_data)
@@ -345,7 +367,7 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
             ref_rows = [{**dict(r), "timing_source": "vod_reference_clock"} for r in reference() or []]
             spliced, replaced = splice(primary, ref_rows, regions)
             health = assess(spliced, duration=duration, expected_words=expected_words)
-            healthier = bool(replaced) and health.rank < primary_health.rank
+            healthier = clearly_healthier(health, replaced)
             report["attempts"].append({"method": "independent_whole_vod_clock", "health": health.to_dict(),
                                        "replaced_regions": replaced, "healthier_than_primary": healthier,
                                        "selected": False})
@@ -357,8 +379,8 @@ def recover_clock(primary_data: Mapping[str, Any] | None, *, audio_path: Path, d
             report["attempts"].append({"method": "independent_whole_vod_clock", "selected": False,
                                        "error": f"{type(error).__name__}: {str(error)[:200]}"})
 
-    best = min(candidates, key=lambda row: row[0].rank)
-    if best[0].fatal:
+    best = min(candidates, key=lambda row: row[0].rank)      # ties keep the original measured clock
+    if not best[0].usable_for_publish:
         report.update(status="unavailable", selected=None,
                       reason="no measured clock survived recovery: " + ", ".join(best[0].fatal))
         raise ClockUnavailable(report["reason"])
@@ -374,7 +396,9 @@ def _select(report: dict[str, Any], candidate: tuple[ClockHealth, str, list[dict
             attempt.get("method") == "independent_whole_vod_clock" and source == "vod_reference_clock")
     report.update(source=source, selected=source, selected_health=health.to_dict(),
                   status="degraded" if degraded else ("recovered" if source != "whisper_primary" else "healthy"),
-                  reason=("best measured clock has soft symptoms: " + ", ".join(health.soft)) if degraded
-                  else f"{source} is structurally healthy")
+                  reason=((("recovery was not clearly healthier; the original measured clock is kept"
+                            if source == "whisper_primary" else f"{source} is the least damaged measured clock")
+                           + " (" + ", ".join(health.soft) + ")") if degraded
+                          else f"{source} is structurally healthy"))
     clean = [{k: v for k, v in row.items() if k != "chunk"} for row in rows]
     return {**dict(primary_data or {}), "words": clean, "clock_source": source}, report
