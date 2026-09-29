@@ -40,6 +40,7 @@ from ai.editor import (
     speaker_caption_support,
     speaker_naming,
     speaker_role_judge,
+    story_integrity,
     teaser_analyzer,
     timeline,
     v6_runtime,
@@ -920,18 +921,16 @@ def _select_clip(
             f"clip_index={requested_clip_index} bulunamadı. Toplam klip: {len(valid)}"
         )
 
-    # Terra final judge is the authoritative selector. Do not override that
-    # decision with a duration heuristic.
-    terra_selected = [
-        item
-        for item in valid
-        if item[1].get(
-            "terra_selected"
-        ) is True
-    ]
+    return _ranked_candidates(analysis)[0]
 
-    if terra_selected:
-        return terra_selected[0]
+
+def _ranked_candidates(analysis: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+    """Every candidate in the order the selector prefers it (Terra's pick first)."""
+    valid = [
+        (position, clip)
+        for position, clip in enumerate(analysis.get("clips", []) or [], start=1)
+        if isinstance(clip, dict)
+    ]
 
     def score_key(item: tuple[int, dict[str, Any]]) -> tuple[float, int, float, int]:
         position, clip = item
@@ -972,8 +971,55 @@ def _select_clip(
             -position,
         )
 
-    valid.sort(key=score_key, reverse=True)
-    return valid[0]
+    # Terra final judge is the authoritative selector. Do not override that
+    # decision with a duration heuristic.
+    terra = [item for item in valid if item[1].get("terra_selected") is True]
+    rest = sorted((item for item in valid if item[1].get("terra_selected") is not True), key=score_key, reverse=True)
+    return [*terra, *rest]
+
+
+def _story_integrity(
+    *,
+    analysis_path: Path,
+    analysis_data: dict[str, Any],
+    selected_clip_index: int,
+    transcript_path: Path,
+    visual_report_path: Path | None,
+    user_pinned: bool,
+    source_duration: float,
+) -> tuple[int, dict[str, Any], Path, dict[str, Any]]:
+    """Post-selection causal integrity (never re-ranks). Returns (index, clip, analysis path for
+    pacing/timeline, report). A repaired story is handed to pacing/timeline as a copy of the
+    analysis with the same file name (identical downstream artifact names); the cached AI
+    analysis itself is never modified."""
+    transcript = _load_json(transcript_path)
+    duration = float(source_duration or 0.0)   # the probed video (never the last spoken word)
+    visual: list[dict[str, Any]] = []
+    if visual_report_path is not None:
+        try:
+            visual = clip_analyzer.build_visual_events(clip_analyzer.load_visual_report(visual_report_path),
+                                                       duration)
+        except Exception:
+            visual = []
+    evidence = story_integrity.Evidence.build(transcript, visual)
+    clips = analysis_data.get("clips", []) or []
+    index, result, considered = story_integrity.review_selection(
+        clips, selected_clip_index, evidence=evidence, source_duration=duration,
+        max_duration=float(getattr(clip_analyzer, "MAX_CLIP_DURATION", 55.0)),
+        rank=[position for position, _clip in _ranked_candidates(analysis_data)], user_pinned=user_pinned)
+    report = {**result.to_dict(), "selected_clip_index": index, "originally_selected": selected_clip_index,
+              "alternates_considered": considered}
+    target = analysis_path.parent / "story_integrity" / analysis_path.name
+    if "repaired" not in result.status:
+        return index, clips[index - 1], analysis_path, report
+    adjusted = json.loads(json.dumps(analysis_data))
+    adjusted["clips"][index - 1] = result.clip
+    adjusted["story_integrity"] = report
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing = _load_json(target) if target.is_file() else None
+    if existing != adjusted:          # unchanged content keeps its mtime (downstream caches stay valid)
+        _write_json_atomic(target, adjusted)
+    return index, result.clip, target, report
 
 
 def _timeline_clip(timeline_data: dict[str, Any], clip_index: int) -> dict[str, Any]:
@@ -1657,6 +1703,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         caption_clock,
         caption_judge,
         caption_truth,
+        story_integrity,
         teaser_analyzer,
         intro_peak_support,
         intro_analyzer,
@@ -2433,6 +2480,16 @@ def run_pipeline(
     analysis_data = _load_json(analysis_path)
     selected_clip_index, selected_clip = _select_clip(analysis_data, clip_index)
 
+    # Post-selection causal story integrity (CCR selection stays authoritative).
+    selected_clip_index, selected_clip, story_analysis_path, integrity_report = _story_integrity(
+        analysis_path=analysis_path, analysis_data=analysis_data, selected_clip_index=selected_clip_index,
+        transcript_path=transcript_path, visual_report_path=source_visual_report_path,
+        user_pinned=clip_index is not None, source_duration=_probe_video_duration(video_path))
+    state["story_integrity"] = integrity_report
+    print(f"\n🧭 Story integrity: {integrity_report['status']} — {integrity_report['reason']}")
+    if integrity_report["status"] != "pass":
+        book.warn(f"Story integrity {integrity_report['status']}: {integrity_report['reason']}")
+
     try:
         selected_score = float(selected_clip.get("score", 0.0))
     except (TypeError, ValueError):
@@ -2588,7 +2645,7 @@ def run_pipeline(
     pacing_path = _pacing_path(analysis_path)
     pacing_sig = _stage_signature(
         "pacing",
-        inputs=[analysis_path, transcript_path],
+        inputs=[story_analysis_path, transcript_path],
         modules=[pacing],
     )
     _run_simple_stage(
@@ -2600,11 +2657,11 @@ def run_pipeline(
         output=pacing_path,
         validator=lambda: _valid_json(pacing_path),
         runner=lambda: pacing.create_pacing_analysis(
-            analysis_path=analysis_path,
+            analysis_path=story_analysis_path,
             transcript_path=transcript_path,
         ),
         freshness=[
-            analysis_path,
+            story_analysis_path,
             transcript_path,
             *_module_paths([pacing]),
         ],
@@ -2619,7 +2676,7 @@ def run_pipeline(
     timeline_version = int(getattr(timeline, "TIMELINE_VERSION", 3))
     timeline_sig = _stage_signature(
         "timeline",
-        inputs=[analysis_path, transcript_path, pacing_path],
+        inputs=[story_analysis_path, transcript_path, pacing_path],
         modules=[timeline],
         options={"clip_index": selected_clip_index},
     )
@@ -2640,12 +2697,12 @@ def run_pipeline(
             )
         ),
         runner=lambda: timeline.create_edit_timeline(
-            analysis_path=analysis_path,
+            analysis_path=story_analysis_path,
             transcript_path=transcript_path,
             pacing_path=pacing_path,
         ),
         freshness=[
-            analysis_path,
+            story_analysis_path,
             transcript_path,
             pacing_path,
             *_module_paths([timeline]),
@@ -3619,7 +3676,7 @@ def run_pipeline(
                     timeline_path,
                     edited_clip_path,
                     caption_path,
-                    analysis_path,
+                    story_analysis_path,
                     teaser_path,
                     intro_path,
                     pro_speaker_profile,
@@ -4379,7 +4436,7 @@ def run_pipeline(
         effect_windows=_effect_windows(candidate) if candidate != final_preview_path else [],
         degradations=[f"{row['subsystem']} -> {row['level']}: {row['reason']}" for row in v6_run.fallbacks
                       if row.get("subsystem") not in blocking],
-        repairs=repairs)
+        repairs=repairs, story=state.get("story_integrity"))
     review_sheet = human_review.write_review_packet(published_path, review_packet)
     _write_json_atomic(published_path.with_suffix(".qc.json"),
                        {"status": gate.get("status"), "gate": gate, "repairs": repairs,

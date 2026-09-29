@@ -32,7 +32,8 @@ from ai.editor.pro_edit.media import probe_media
 ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "pipeline_harness.py"
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
-MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "effect_broken")
+MODES = ("run", "no_headline", "broken_render", "stage_crash", "planner_down", "memes", "effect_broken",
+         "story_repair")
 
 
 def make_source(path: Path) -> Path:
@@ -181,6 +182,17 @@ class PipelineEndToEndTests(unittest.TestCase):
         self.assertNotIn("review", run["qc_report"])                      # no model verdict anywhere
         degraded = self.results["effect_broken"]["qc_report"]["human_review"]
         self.assertTrue(any(row.startswith("memes -> effect_dropped") for row in degraded["degradations"]))
+    def test_story_integrity_passes_a_complete_story_and_repairs_a_cut_sentence_once(self) -> None:
+        self.assertEqual(self.results["run"]["story_integrity"]["status"], "pass")
+        self.assertTrue(self.results["run"]["pacing_inputs"][0].endswith("_clips.json"))
+        self.assertNotIn("story_integrity", Path(self.results["run"]["pacing_inputs"][0]).parts)
+        repaired = self.results["story_repair"]
+        self.assertEqual(repaired["story_integrity"]["status"], "repaired", repaired["story_integrity"])
+        self.assertEqual(repaired["story_integrity"]["final"], [0.5, 30.0])     # sentence start; end never shrinks
+        self.assertIn("story_integrity", Path(repaired["pacing_inputs"][0]).parts)
+        self.assertIn(repaired["status"], ("published", "published_degraded"))
+        self.assertIn("## Story (causal integrity)", Path(repaired["human_review"]).read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

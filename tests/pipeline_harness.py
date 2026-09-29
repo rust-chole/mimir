@@ -18,6 +18,8 @@ Modes (there is ONE production path; modes only inject faults):
     memes          a selected local SFX goes through the real meme renderer + QC effect checks
     effect_broken  the effect render damages the short (drops its tail) -> QC fails -> the
                    bounded repair drops the effect and publishes the re-checked base, DEGRADED
+    story_repair   the selected clip starts inside a running sentence -> story integrity completes
+                   it once and pacing/timeline receive the adjusted copy
 """
 from __future__ import annotations
 
@@ -44,6 +46,7 @@ def write(path: Path, data: dict) -> Path:
 
 
 WORDS = [(f"word{i}", 0.5 + i * 0.45, 0.5 + i * 0.45 + 0.32) for i in range(58)]
+PACING_INPUTS: list[str] = []
 
 
 def install_fakes(video: Path) -> None:
@@ -58,11 +61,14 @@ def install_fakes(video: Path) -> None:
             "version": 2, "source": {"video_path": str(video), "video_stem": stem},
             "words": [{"word": w, "start": s, "end": e} for w, s, e in WORDS], "segments": []})
 
+    clip_start = 3.1 if os.environ.get("HARNESS_STORY_CUT") == "1" else 0.0
+
     def create_clip_analysis(transcript_path, video_report_path=None, **kwargs):
         return write(Path(clip_analyzer.ANALYSIS_DIR) / f"{Path(transcript_path).stem}_clips.json", {
             "version": clip_analyzer.ANALYZER_VERSION,
             "clips": [{
-                "title": "harness clip", "start": 0.0, "end": 30.0, "duration": 30.0, "score": 8.5,
+                "title": "harness clip", "start": clip_start, "end": 30.0, "duration": 30.0 - clip_start,
+                "score": 8.5,
                 "terra_selected": True, "payoff_start": 14.0, "payoff_end": 17.0,
                 "hook_text": "wait for it", "hook_type": "curiosity",
                 "must_keep_ranges": [{"start": 13.8, "end": 18.5, "reason": "money"}],
@@ -74,6 +80,7 @@ def install_fakes(video: Path) -> None:
             }]})
 
     def create_pacing_analysis(analysis_path, transcript_path, **kwargs):
+        PACING_INPUTS.append(str(analysis_path))
         base = Path(analysis_path).stem.replace("_clips", "")
         return write(Path(pacing.PACING_OUTPUT_DIR) / f"{base}_pacing.json", {"version": 1, "clips": []})
 
@@ -182,7 +189,8 @@ def main() -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
-                                                          "stage_crash", "planner_down", "memes", "effect_broken"])
+                                                          "stage_crash", "planner_down", "memes", "effect_broken",
+                                                          "story_repair"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -196,6 +204,8 @@ def main() -> int:
         os.environ["HARNESS_NO_HEADLINE"] = "1"
     if args.mode in ("memes", "effect_broken"):
         os.environ["HARNESS_MEMES"] = "1"
+    if args.mode == "story_repair":
+        os.environ["HARNESS_STORY_CUT"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
     from ai import shorts_pipeline
@@ -263,6 +273,8 @@ def main() -> int:
         "status": result.get("status"),
         "final_output": str(final),
         "human_review": result.get("human_review"),
+        "story_integrity": state.get("story_integrity"),
+        "pacing_inputs": list(PACING_INPUTS),
         "qc_report": json.loads(final.with_suffix(".qc.json").read_text(encoding="utf-8")),
         "final_md5": md5(final),
         "warnings": result.get("warnings", []),

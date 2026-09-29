@@ -53,7 +53,8 @@ def _word_rows(truth: Mapping[str, Any]) -> dict[int, list[Any]]:
 def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: Sequence[Mapping[str, Any]],
                         timeline_doc: Mapping[str, Any], truth: Mapping[str, Any] | None, headline: str,
                         effect_windows: Sequence[tuple[float, float]] = (),
-                        degradations: Sequence[str] = (), repairs: Sequence[str] = ()) -> dict[str, Any]:
+                        degradations: Sequence[str] = (), repairs: Sequence[str] = (),
+                        story: Mapping[str, Any] | None = None) -> dict[str, Any]:
     truth = truth or {}
     words = _word_rows(truth)
     focus: list[dict[str, Any]] = []
@@ -126,6 +127,8 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
         "focus": focus,
         "degradations": list(degradations),
         "repairs": list(repairs),
+        "story": {k: (story or {}).get(k) for k in ("status", "reason", "original", "final",
+                                                      "originally_selected", "selected_clip_index")} if story else None,
     }
 
 
@@ -163,6 +166,15 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
         elif kind == "name_spelling_by_judge":
             lines.append(f"- [ ] {at} name spelling \"{item['from']}\" -> \"{item['to']}\" "
                          f"(confidence {item.get('confidence')})")
+    story = packet.get("story") or {}
+    if story:
+        lines += ["", "## Story (causal integrity)", f"- Status: {story.get('status')} — {story.get('reason')}"]
+        if story.get("original") != story.get("final"):
+            lines.append(f"- [ ] Boundaries changed {story.get('original')} -> {story.get('final')} (source seconds): "
+                         "check the added setup / reaction belongs to this story")
+        if story.get("originally_selected") != story.get("selected_clip_index"):
+            lines.append(f"- [ ] Candidate {story.get('originally_selected')} lacked its payoff; candidate "
+                         f"{story.get('selected_clip_index')} was used")
     cold = packet.get("cold_open") or {}
     window = cold.get("final_window_s") or [0.0, 0.0]
     lines += ["", "## Cold open",
