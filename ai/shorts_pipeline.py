@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterable
 
 from ai import model_config, vod_processor
 from ai.editor import (
+    caption_clock,
     caption_judge,
     caption_renderer,
     caption_truth,
@@ -1653,6 +1654,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         participant_name_lock,
         pacing_cutter,
         caption_renderer,
+        caption_clock,
         caption_judge,
         caption_truth,
         teaser_analyzer,
@@ -2923,7 +2925,7 @@ def run_pipeline(
         "captions",
         inputs=[edited_clip_path, transcript_path, timeline_path, speaker_scan_path],
         modules=[captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
-                 caption_judge],
+                 caption_judge, caption_clock],
         options={
             "clip_index": selected_clip_index,
             "caption_version": caption_version,
@@ -3039,7 +3041,7 @@ def run_pipeline(
             timeline_path,
             speaker_scan_path,
             *_module_paths([captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
-                            caption_judge]),
+                            caption_judge, caption_clock]),
         ],
         error_message="Caption ASS dosyası oluşmadı.",
     )

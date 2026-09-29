@@ -903,6 +903,11 @@ def run_caption_truth(
     if lexical_judge.get("status") in ("unavailable", "failed"):
         fallbacks.append({"subsystem": "caption_lexical_judge", "level": "strict_acoustic_vote",
                           "reason": str(lexical_judge.get("reason", lexical_judge.get("status")))})
+    clock_health = dict(quality["clock_health"]) if isinstance(quality.get("clock_health"), Mapping) else {}
+    if clock_health.get("status") == "degraded":
+        # Measured, but with soft structural symptoms after recovery: publish with a warning.
+        fallbacks.append({"subsystem": "caption_clock", "level": "soft_symptoms",
+                          "reason": str(clock_health.get("reason", "degraded measured clock"))})
     lexical_rows = lexical_decision_rows(profile, words)
 
     profile["words"] = words
@@ -939,6 +944,7 @@ def run_caption_truth(
         "entity_lock": {k: lock_audit.get(k) for k in ("status", "corrections", "rejected", "policy")},
         "escalations": escalations,
         "lexical_judge": lexical_judge,
+        "clock_health": clock_health,
         "lexical_decisions": lexical_rows,
         "entity_decisions": entity_decisions,
         "judgments": judgments,

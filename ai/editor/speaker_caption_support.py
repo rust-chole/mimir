@@ -1208,6 +1208,35 @@ def _apply_local_acoustic_clock_guard(
     }
 
 
+def _vod_reference_clock(transcript_path: str | Path | None, timeline_path: str | Path | None, clip_index: int,
+                         duration: float) -> Any:
+    """Lazy loader of the already-existing independent measured clock: the whole-VOD
+    whisper words mapped through this clip's cut map (never diarization timing)."""
+    if not transcript_path or not timeline_path:
+        return None
+
+    def load() -> list[dict[str, Any]]:
+        from ai.editor import captions
+
+        transcript = json.loads(Path(transcript_path).read_text(encoding="utf-8"))
+        timeline = json.loads(Path(timeline_path).read_text(encoding="utf-8"))
+        clip = captions.get_clip_timeline(timeline, clip_index)
+        cuts = captions.get_cut_ranges(clip)
+        rows: list[dict[str, Any]] = []
+        for word in captions.get_source_words(transcript, clip):
+            start, end = float(word["source_start"]), float(word["source_end"])
+            if captions.interval_is_removed(start, end, cuts):
+                continue
+            a = captions.map_source_to_edited_time(start, cuts)
+            b = captions.map_source_to_edited_time(end, cuts)
+            if 0.0 <= a <= duration:
+                rows.append({"word": word["word"], "start": a, "end": min(duration, b),
+                             "timing_source": "vod_whisper_clock"})
+        return rows
+
+    return load
+
+
 def _transcribe_edited_words(
     audio_path: Path,
     duration: float,
@@ -1215,6 +1244,7 @@ def _transcribe_edited_words(
     accurate_text: str | None = None,
     diarization_text: str = "",
     known_names: list[str] | None = None,
+    reference_clock: Any = None,
 ) -> tuple[list[dict[str, Any]], float, str, dict[str, Any]]:
     """Final-caption truth path with strictly separated authorities.
 
@@ -1287,6 +1317,20 @@ def _transcribe_edited_words(
     if not primary_text:
         raise RuntimeError("Final-caption gpt-transcribe metin üretemedi.")
 
+    # Clock health: the primary measured clock is used whenever it is structurally
+    # healthy; otherwise a bounded MEASURED recovery (overlapping chunks of this exact
+    # audio, then the independent whole-VOD clock) is spliced into damaged regions only.
+    from ai.editor import caption_clock
+
+    try:
+        timing_data, clock_report = caption_clock.recover_clock(
+            timing_data, audio_path=audio_path, duration=duration,
+            expected_words=len(_caption_tokens(primary_text)), reference=reference_clock)
+    except caption_clock.ClockUnavailable as error:
+        raise RuntimeError(
+            "Final caption için ölçülmüş word clock recovery sonrası da kullanılamaz: "
+            f"{error}. Sentetik/global timing fallback bilinçli olarak kapalı."
+        ) from error
     timing_words = vod_processor.extract_timing_words(timing_data or {})
     if not timing_words:
         raise RuntimeError(
@@ -1402,6 +1446,7 @@ def _transcribe_edited_words(
         "speaker_timing_authority": False,
         "post_clock_calibration": False,
         "local_acoustic_clock_guard": clock_guard_meta,
+        "clock_health": clock_report,
         "clock_corrections": int(clock_guard_meta.get("corrected_groups", 0) or 0),
         "global_clock_calibration": {"status": "removed"},
         "phrase_start_silence_guard": {"status": "removed"},
@@ -4277,6 +4322,7 @@ def create_speaker_profile(
             audio_path,
             duration,
             known_names=caption_known_names,
+            reference_clock=_vod_reference_clock(transcript_path, timeline_path, clip_index, duration),
         )
 
         segments = scan_segments

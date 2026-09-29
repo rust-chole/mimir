@@ -84,6 +84,16 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
                           "from": str(row.get("from", "")), "to": str(row.get("to", "")),
                           "decided_by": str(row.get("decided_by", "")), "confidence": row.get("confidence")})
 
+    clock = truth.get("clock_health") if isinstance(truth.get("clock_health"), Mapping) else {}
+    for attempt in clock.get("attempts", []) or []:
+        if not attempt.get("selected"):
+            continue
+        for region in attempt.get("replaced_regions", []) or []:
+            final = _to_final(timeline_doc, float((region.get("region") or [0.0])[0]))
+            if final is not None:
+                focus.append({"kind": "clock_recovered", "final_s": round(final, 3),
+                              "method": str(attempt.get("method", "")), "why": str(region.get("reason", ""))})
+
     for row in truth.get("entity_decisions", []) or []:
         index = row.get("word_id")
         if row.get("verdict") != "canonical" or index not in words:
@@ -144,6 +154,9 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
         elif kind == "caption_changed_by_judge":
             lines.append(f"- [ ] {at} caption changed from the primary transcript: \"{item['from']}\" -> "
                          f"\"{item['to']}\" ({item.get('decided_by', '')}, confidence {item.get('confidence')})")
+        elif kind == "clock_recovered":
+            lines.append(f"- [ ] {at} caption timing re-measured from here ({item['method']}; primary clock "
+                         f"{item['why']}): check that words land on the speech")
         elif kind == "judge_answer_set_aside":
             lines.append(f"- [ ] {at} caption \"{item['shown']}\": the caption judge's answer lacked acoustic "
                          f"support ({item['why']}); {item['decided_by']} was used instead")

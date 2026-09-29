@@ -285,6 +285,9 @@ class HumanAcceptanceTests(unittest.TestCase):
                                   {"changed": False, "paced_start": 5.4, "from": "said", "to": "said"},
                                   {"changed": False, "paced_start": 8.0, "from": "stop", "to": "stop",
                                    "decided_by": "strict_vote", "guard": "changed word(s) no ear heard: top"}],
+            "clock_health": {"status": "recovered", "attempts": [
+                {"method": "overlapping_chunks_exact_final_audio", "selected": True,
+                 "replaced_regions": [{"region": [11.0, 20.0], "reason": "collapsed"}]}]},
         }
         packet = human_review.build_review_packet(
             published=Path("x_short.mp4"), source=Path("x.mp4"), status="published",
@@ -292,12 +295,13 @@ class HumanAcceptanceTests(unittest.TestCase):
             degradations=["face_tracking -> stable_wide: no face"])
         focus = [(item["kind"], item["final_s"]) for item in packet["focus"]]
         self.assertEqual(focus, [("caption_uncertain", 6.0), ("caption_changed_by_judge", 9.0),
-                                 ("judge_answer_set_aside", 9.0)])
+                                 ("judge_answer_set_aside", 9.0), ("clock_recovered", 12.0)])
         self.assertEqual(packet["speakers"], {"Mira": 1, "S1": 3})
         text = human_review.render_markdown(packet)
         self.assertIn('0:06.0 caption "Marra"', text)
         self.assertIn('"top" -> "stop"', text)
         self.assertIn("lacked acoustic support", text)
+        self.assertIn("caption timing re-measured from here", text)
         self.assertIn("none (no grounded headline was approved)", text)
         self.assertIn("face_tracking -> stable_wide", text)
 
