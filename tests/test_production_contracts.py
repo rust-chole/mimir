@@ -237,6 +237,30 @@ class EditDirectorIntentTests(unittest.TestCase):
         self.assertTrue(names)
         self.assertEqual([n for n in names if self.GEOMETRY.search(n)], [])
 
+    def test_visual_targeting_keeps_semantics_and_whole_clip_coverage(self) -> None:
+        from types import SimpleNamespace
+        from ai.editor.pro_edit.director_vision import select_targets
+
+        role = lambda value: SimpleNamespace(value=value)
+        context = SimpleNamespace(
+            clip=SimpleNamespace(duration_s=32.0, visible_start_s=2.0),
+            intro=None,
+            spans=(
+                SimpleNamespace(start=4.0, end=9.0, role=role("setup")),
+                SimpleNamespace(start=12.0, end=17.0, role=role("escalation")),
+                SimpleNamespace(start=20.0, end=23.0, role=role("payoff")),
+                SimpleNamespace(start=23.0, end=25.0, role=role("reaction")),
+            ),
+            visual_events=(),
+            scene_changes=(10.0, 19.0),
+        )
+        targets = select_targets(context, 8)
+        reasons = [reason for _timestamp, reason in targets]
+        self.assertLessEqual(len(targets), 8)
+        self.assertIn("story:payoff", reasons)
+        self.assertTrue(any(reason.startswith("coverage:") for reason in reasons))
+        self.assertTrue(all(0.0 <= timestamp <= 32.0 for timestamp, _reason in targets))
+
     def test_visual_frames_are_low_detail_and_never_persist_base64(self) -> None:
         import dataclasses
         import pro_edit_fixtures as fx

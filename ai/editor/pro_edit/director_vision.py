@@ -84,19 +84,24 @@ def _dedupe(candidates: Iterable[tuple[int, float, str]], *, duration: float,
 
 
 def select_targets(context: Any, max_frames: int) -> list[tuple[float, str]]:
-    """Deterministic semantic + coverage targets in PACED_CLIP seconds."""
+    """Deterministic semantic + coverage targets in PACED_CLIP seconds.
+
+    Three slots are reserved for broad temporal coverage; the remaining slots go
+    to the strongest semantic beats. This prevents a visually loud payoff from
+    consuming the entire storyboard and pretending to represent the full short.
+    """
     duration = max(0.0, float(context.clip.duration_s))
     if duration <= 0 or max_frames <= 0:
         return []
     visible = _clip(float(context.clip.visible_start_s), duration)
-    candidates: list[tuple[int, float, str]] = []
+    semantic: list[tuple[int, float, str]] = []
 
     intro = getattr(context, "intro", None)
     if intro is not None:
-        candidates.append((98, (float(intro.teaser_start) + float(intro.teaser_end)) / 2.0, "intro_mid"))
+        semantic.append((98, (float(intro.teaser_start) + float(intro.teaser_end)) / 2.0, "intro_mid"))
         peak = getattr(intro, "peak_focus", None)
         if peak is not None:
-            candidates.append((99, float(peak), "intro_peak"))
+            semantic.append((99, float(peak), "intro_peak"))
 
     for span in getattr(context, "spans", ()) or ():
         role = str(getattr(getattr(span, "role", ""), "value", getattr(span, "role", "")))
@@ -104,32 +109,54 @@ def select_targets(context: Any, max_frames: int) -> list[tuple[float, str]]:
         if end <= visible:
             continue
         midpoint = (max(start, visible) + end) / 2.0
-        candidates.append((_ROLE_PRIORITY.get(role, 40), midpoint, f"story:{role}"))
+        semantic.append((_ROLE_PRIORITY.get(role, 40), midpoint, f"story:{role}"))
 
     for event in getattr(context, "visual_events", ()) or ():
         start, end = float(event.start), float(event.end)
         if end <= visible:
             continue
         confidence = max(0.0, min(1.0, float(getattr(event, "confidence", 0.0))))
-        candidates.append((76 + int(12 * confidence), (max(start, visible) + end) / 2.0,
-                           f"visual:{getattr(event, 'type', 'event')}"))
+        semantic.append((76 + int(12 * confidence), (max(start, visible) + end) / 2.0,
+                         f"visual:{getattr(event, 'type', 'event')}"))
 
     for cut in getattr(context, "scene_changes", ()) or ():
-        t = float(cut)
-        if t >= visible:
-            candidates.append((58, min(duration, t + 0.08), "after_shot_cut"))
+        cut_t = float(cut)
+        if cut_t >= visible:
+            semantic.append((58, min(duration, cut_t + 0.08), "after_shot_cut"))
 
-    # Reserve broad coverage so Astra actually sees the whole selected short,
-    # not only the loudest/payoff moments.
+    chosen: list[tuple[float, str]] = []
+
+    def add(raw_t: float, reason: str) -> bool:
+        timestamp = _clip(raw_t, duration)
+        if any(abs(timestamp - previous) < MIN_TARGET_GAP_S for previous, _ in chosen):
+            return False
+        chosen.append((timestamp, reason))
+        return True
+
+    coverage_count = min(3, max_frames)
+    semantic_quota = max(0, max_frames - coverage_count)
+    for _priority, timestamp, reason in sorted(semantic, key=lambda row: (-row[0], row[1], row[2])):
+        add(timestamp, reason)
+        if len(chosen) >= semantic_quota:
+            break
+
     main_length = max(0.0, duration - visible)
-    coverage = min(3, max_frames)
-    for index in range(coverage):
-        fraction = (index + 1) / (coverage + 1)
-        candidates.append((52 - index, visible + main_length * fraction, f"coverage:{index + 1}/{coverage}"))
-    candidates.append((54, min(duration, visible + 0.12), "main_start"))
-    candidates.append((50, max(visible, duration - 0.12), "main_end"))
+    for index in range(coverage_count):
+        fraction = (index + 1) / (coverage_count + 1)
+        add(visible + main_length * fraction, f"coverage:{index + 1}/{coverage_count}")
 
-    return _dedupe(candidates, duration=duration, limit=max_frames)
+    # Deduplication can free slots. Fill them with remaining semantic evidence,
+    # then start/end context, without exceeding the hard visual budget.
+    for _priority, timestamp, reason in sorted(semantic, key=lambda row: (-row[0], row[1], row[2])):
+        if len(chosen) >= max_frames:
+            break
+        add(timestamp, reason)
+    for timestamp, reason in ((visible + 0.12, "main_start"), (duration - 0.12, "main_end")):
+        if len(chosen) >= max_frames:
+            break
+        add(timestamp, reason)
+
+    return sorted(chosen[:max_frames], key=lambda row: row[0])
 
 
 def _encode_jpeg(image: Any) -> tuple[bytes, int, int]:
