@@ -159,7 +159,8 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
     if any(key in colours for key in ("A", "B", "C")):
         counts = ", ".join(f"{key}: {count} word(s)" for key, count in sorted(colours.items()))
         lines.append(f"- [ ] Each voice keeps one caption colour and colour changes follow the speakers ({counts})")
-        lines.append("- A colour names a voice, never a person; words with an uncertain voice are neutral.")
+        lines.append("- A colour names a voice, never a person; words with an uncertain voice are neutral "
+                     "(a lone one inside a voice's turn is shown in that voice's colour).")
     else:
         lines.append("- Speaker colours off (one voice, or speaker turns too uncertain): plain captions.")
     lines += ["", "## Disclosed degradations"]

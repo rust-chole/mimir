@@ -98,8 +98,10 @@ NEUTRAL_ACTIVE_TEXT_COLOR = "&H00FFFFFF"
 NEUTRAL_HIGHLIGHT_TEXT_COLOR = "&H00FFFFFF"
 
 # Speaker colour key -> palette. "" (no speaker colours: single voice,
-# unresolved or unreliable turns) is the plain caption look, identical to A.
+# unresolved or unreliable turns) is the plain pre-V25 caption look: the main
+# palette, and the secondary palette on the overlap lane.
 SPEAKER_COLOR_KEYS = ("", "A", "B", "C", "neutral")
+SPEAKER_VOICE_COLORS = ("A", "B", "C")
 
 OUTLINE_COLOR = "&H00000000"
 SHADOW_COLOR = "&HFF000000"
@@ -862,9 +864,12 @@ def _lane_style(role: str) -> str:
     return "ViralSecondary" if role == "secondary" else "ViralMain"
 
 
-def _color_palette(color: str) -> tuple[str, str, str]:
-    """(inactive, active, highlight) of a speaker colour key."""
-    if color == "B":
+def _color_palette(color: str, role: str = "main") -> tuple[str, str, str]:
+    """(inactive, active, highlight) of a speaker colour key.
+
+    With speaker colours the voice picks the colours whatever the lane. Without
+    them ("") the pre-V25 look is kept: the overlap lane keeps its own palette."""
+    if color == "B" or (not color and role == "secondary"):
         return SECONDARY_BASE_TEXT_COLOR, SECONDARY_ACTIVE_TEXT_COLOR, SECONDARY_HIGHLIGHT_TEXT_COLOR
     if color == "C":
         return TERTIARY_BASE_TEXT_COLOR, TERTIARY_ACTIVE_TEXT_COLOR, TERTIARY_HIGHLIGHT_TEXT_COLOR
@@ -882,7 +887,7 @@ def render_word(
     color: str = "",
 ) -> str:
     text = escape_ass_text(word["word"])
-    inactive_color, active_color, highlight_color = _color_palette(color)
+    inactive_color, active_color, highlight_color = _color_palette(color, role)
     style_name = _lane_style(role)
 
     if active and emphasized:
@@ -962,7 +967,7 @@ def build_caption_text(
 
     body = " ".join(rendered)
     if label:
-        _, active_color, _ = _color_palette(color)
+        _, active_color, _ = _color_palette(color, role)
         prefix = f"{{\\b1\\c{active_color}}}{escape_ass_text(label)}:{{\\r{style_name}}}"
         return f"{prefix} {body}"
     return body
@@ -1139,9 +1144,11 @@ def _trusted_human_display_map(
 ) -> dict[str, str]:
     """Return only user-confirmed/raw->display mappings safe for fail-safe render.
 
-    Naming already writes display_labels after the human voice checkpoint.
-    In a diarization hard-failure we do NOT trust raw boundaries for grouping,
-    but a name explicitly confirmed by the user remains valid display metadata.
+    Production speaker profiles carry no names (speaker colours name voices,
+    never people), so for them this map is empty and no name is printed. Only a
+    legacy profile's explicitly user-confirmed names are honoured. In a
+    diarization hard-failure we do NOT trust raw boundaries for grouping, but
+    such a confirmed name remains valid display metadata.
     """
     if not isinstance(speaker_profile, dict):
         return {}
@@ -1489,10 +1496,13 @@ def _prepare_adaptive_render_words(
 ) -> tuple[list[dict[str, Any]], list[tuple[float, float]]]:
     """Apply the final V25 render policy without touching text or timestamps.
 
-    - A name is printed only from a human-confirmed display map; no automatic
-      A/B/X placeholders (the production profile carries no names).
+    - No speaker name is printed from a production profile (it carries none); a
+      legacy user-confirmed display map is the only source of a label; never
+      automatic A/B/X placeholders.
     - A word's colour is its voice's ``speaker_color`` from the profile's acoustic
       turns; a diarization boundary hard failure shows no speaker colours.
+    - One isolated uncertain word inside one voice's turn is shown in that voice's
+      colour (``_bridge_isolated_neutral_words``), never as a one-word neutral flash.
     - Ordinary sequential dialogue uses one main visual lane, whatever its colours.
     - Secondary lane appears only inside real measured overlap windows.
     """
@@ -1519,7 +1529,7 @@ def _prepare_adaptive_render_words(
         raw = str(item.get("speaker_raw", "")).strip()
 
         # Never leak automatic placeholder identity into published captions.
-        # A label is printable only if it came from the human naming checkpoint.
+        # A label is printable only from a legacy user-confirmed name map.
         item["speaker_label"] = trusted_display_map.get(raw, "")
         item["speaker_color"] = speaker_color(item) if colors_allowed else ""
 
@@ -1533,7 +1543,35 @@ def _prepare_adaptive_render_words(
         item["speaker_role"] = role
         prepared.append(item)
 
+    _bridge_isolated_neutral_words(prepared)
     return prepared, collision_windows
+
+
+def _bridge_isolated_neutral_words(words: list[dict[str, Any]]) -> None:
+    """Show ONE uncertain word between two words of the same voice in that voice's colour.
+
+    A colour change is a hard caption break, so A A A A -> neutral -> A A A A
+    would flash a one-word neutral caption inside one voice's turn. The word is
+    bridged only when, in its own caption lane, the words right before and after
+    it carry the same voice colour and neither gap is a caption-breaking pause
+    (``GROUP_BREAK_GAP``). Two or more uncertain words, a voice change, a real
+    pause or a clip edge stay neutral. Only the display colour changes: the
+    profile and the frozen caption truth keep ``neutral``, text, timing and the
+    speaker id are untouched, and ``speaker_color_bridged`` marks the word.
+    """
+    for role in ("main", "secondary"):
+        lane = _lane_words(words, role)
+        colors = [speaker_color(word) for word in lane]
+        for index in range(1, len(lane) - 1):
+            voice = colors[index - 1]
+            if colors[index] != "neutral" or voice not in SPEAKER_VOICE_COLORS or colors[index + 1] != voice:
+                continue
+            word = lane[index]
+            gap_before = float(word["edited_start"]) - float(lane[index - 1]["edited_end"])
+            gap_after = float(lane[index + 1]["edited_start"]) - float(word["edited_end"])
+            if gap_before < GROUP_BREAK_GAP and gap_after < GROUP_BREAK_GAP:
+                word["speaker_color"] = voice
+                word["speaker_color_bridged"] = True
 
 
 def _has_two_render_lanes(words: list[dict[str, Any]]) -> bool:
@@ -1645,7 +1683,7 @@ def create_ass_for_clip(
         )
 
     # V24 final render policy:
-    # identity metadata may help detect real overlap, but it may NEVER fragment
+    # raw speaker-turn metadata may help detect real overlap, but it may NEVER fragment
     # ordinary blank-named dialogue into permanent A/B lanes.
     trusted_display_map = _trusted_human_display_map(speaker_profile)
     edited_words, collision_windows = _prepare_adaptive_render_words(

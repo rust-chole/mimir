@@ -386,6 +386,45 @@ class RunStatusTests(unittest.TestCase):
         published.close_run(OSError("review sheet write failed"))
         self.assertEqual(self.state()["run_status"], "failed_after_publish")
 
+    def test_ctrl_c_after_publication_keeps_the_publication(self) -> None:
+        for status in ("published", "published_degraded"):
+            with self.subTest(status=status):
+                book = self.book(run_status="running", publish_status=status)
+                book.close_run(KeyboardInterrupt())
+                self.assertEqual(book.state["run_status"], "failed_after_publish")
+                self.assertTrue(book.state["run_error"].startswith("KeyboardInterrupt"))
+                self.assertEqual(self.state()["run_status"], "failed_after_publish")
+
+    def test_ctrl_c_after_publication_is_reported_as_published(self) -> None:
+        published = Path(self._tmp.name) / "final" / "vod_short.mp4"
+        interruption = KeyboardInterrupt()
+
+        def body(video_path, *, book_out, **options):
+            book = self.book(run_status="running", publish_status="published", final_output=str(published))
+            book_out.append(book)
+            raise interruption                                          # Ctrl+C while writing the review sheet
+
+        with mock.patch.object(self.sp, "_run_pipeline", body), self.assertRaises(KeyboardInterrupt) as raised:
+            self.sp.run_pipeline(self.video)
+        self.assertIs(raised.exception, interruption)
+        self.assertEqual(raised.exception.published_output, str(published))
+        state = self.state()
+        self.assertEqual((state["run_status"], state["final_output"]), ("failed_after_publish", str(published)))
+        import contextlib
+        import io
+
+        for error, expected in ((raised.exception, ["YAYINLANDI", str(published)]), (KeyboardInterrupt(), [])):
+            printed = io.StringIO()
+            with mock.patch.object(self.sp, "run_pipeline", side_effect=error), \
+                    mock.patch.object(sys, "argv", ["main.py", str(self.video)]), \
+                    contextlib.redirect_stdout(printed), self.assertRaises(KeyboardInterrupt):
+                self.sp.main()
+            for text in expected:
+                self.assertIn(text, printed.getvalue())
+            self.assertNotIn("hiçbir şey yayınlanmadı", printed.getvalue())
+            if not expected:
+                self.assertNotIn("YAYINLANDI", printed.getvalue())
+
     def test_closing_never_masks_the_original_error(self) -> None:
         book = self.book(run_status="running")
         with mock.patch.object(self.sp, "_write_json_atomic", side_effect=KeyboardInterrupt):

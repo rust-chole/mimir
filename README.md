@@ -50,8 +50,9 @@ cache), `--no-memes`, `--verbose`.
      times.
    - **Who** — diarization turns give each *voice* a caption colour (first voice A,
      next B, then C; a returning voice keeps its colour). Nobody is asked who is
-     speaking and no name is printed; an uncertain word is neutral, and with fewer
-     than two reliable voices the captions stay plain. Colours never move a caption
+     speaking and no name is printed; an uncertain word is neutral (a lone uncertain
+     word inside one voice's turn is shown in that voice's colour instead of flashing
+     neutral), and with fewer than two reliable voices the captions stay plain. Colours never move a caption
      to another lane (a second lane appears only during real overlapping speech) and
      never change a word or a time.
    Verified-name spelling the name lock cannot decide is a closed choice for the judge

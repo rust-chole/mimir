@@ -127,7 +127,8 @@ def transcribe_final_short(
             "lexical": f"{text_provider.provider}:{text_provider.model} ears -> deterministic agreement / "
                        "caption judge -> frozen transcript",
             "timing": f"{outcome.provider} over the frozen words (one authority per run)",
-            "speaker": "diarization + human identity; never changes words or times",
+            "speaker": "acoustic diarization turns -> a caption colour per voice (no person identity); "
+                       "never changes words or times",
             "display": "deterministic caption presentation",
         },
         "settings": settings.public(),

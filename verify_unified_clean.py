@@ -165,6 +165,20 @@ else:
             errors.append("sequential voice turns left the main caption lane or printed a speaker name")
         if [row["speaker_color"] for row in prepared] != [row["speaker_color"] for row in colored]:
             errors.append("the caption renderer does not show the voice colours")
+        # A A A A -> one uncertain word -> A A A A: the truth keeps the word neutral,
+        # the display never flashes it as a one-word neutral caption.
+        blip = turn("S0", 4, 0.0) + [dict(turn("S0", 1, 1.2)[0], speaker_raw="")] + turn("S0", 4, 1.5) \
+            + turn("S1", 5, 3.2)
+        blip_colored, _blip_meta = speaker_caption_support._assign_speaker_colors(
+            blip, mode="dual", participants=["S0", "S1"], hard_failure=False)
+        blip_shown, _windows = captions._prepare_adaptive_render_words(
+            captions._profile_edited_words({"status": "ok", "timing_basis": "exact_final_short_audio",
+                                            "words": blip_colored}, 10.0),
+            speaker_profile={"status": "ok", "primary_speaker": "S0", "secondary_speaker": "S1"},
+            trusted_display_map={})
+        if blip_colored[4]["speaker_color"] != "neutral" \
+                or [row["speaker_color"] for row in blip_shown] != ["A"] * 9 + ["B"] * 5:
+            errors.append("one uncertain word inside one voice's turn still flashes a neutral caption")
     except Exception as error:
         errors.append(f"speaker colour regression failed: {error}")
 
@@ -507,7 +521,8 @@ print(" - caption display readability without clock mutation: OK")
 print(" - speaker boundary QA / retry gate: OK")
 print(" - Gold V7 speaker word/time preservation: OK")
 print(" - V5 diarization-gap speaker fail-closed: OK")
-print(" - speaker colours per voice (A -> B -> A, uncertain neutral, single voice plain, one lane): OK")
+print(" - speaker colours per voice (A -> B -> A, uncertain neutral, no one-word neutral flash, single voice "
+      "plain, one lane): OK")
 print(" - human speaker naming / identity engines: absent")
 print(" - V7 verified direct-address participant-name orthography: OK")
 print(" - intro exact-path + evidence-derived cold-open bounds: OK")

@@ -1,13 +1,14 @@
-"""Verified entity name lock (caption truth, after identity resolution).
+"""Verified entity name lock (caption truth: the SPELLING of verified names).
 
-Caption truth owns WHO is in a clip and how a VERIFIED person/entity name is
-spelled. Acoustic ASR cannot separate homophonic spellings of a name (a
-non-rhotic "-er" and "-a" ending, a doubled consonant, an alternative vowel),
-so a confirmed participant can be written with a common variant spelling even
-when every ASR ear agrees. This module is the general, evidence-gated
-canonicalizer that runs on the identity-resolved final profile words:
+Caption truth owns how a VERIFIED person/entity name is spelled; it never
+decides which voice speaks (speaker turns come from acoustic diarization and
+name voices, never people). Acoustic ASR cannot separate homophonic spellings
+of a name (a non-rhotic "-er" and "-a" ending, a doubled consonant, an
+alternative vowel), so a verified name can be written with a common variant
+spelling even when every ASR ear agrees. This module is the general,
+evidence-gated canonicalizer that runs on the final profile words:
 
-    verified roster entity (human-confirmed participant / user-verified creator)
+    verified roster entity (user-verified creator / entity)
   + the ASR token is a close phonetic/lexical confusion of that name
   + evidence that THIS token refers to that entity (direct address,
     self-introduction, name syntax spoken by a co-participant, an alias already
@@ -21,8 +22,9 @@ canonicalizer that runs on the identity-resolved final profile words:
   -> only the word TEXT becomes the canonical spelling.
 
 Nothing here is specific to a person, creator, clip or language fixture: the
-roster comes only from the profile (human identity checkpoint) and from
-explicitly verified extra entities (for example the ``--creator`` name).
+roster comes only from explicitly user-verified entities (for example the
+``--creator`` name) and, for legacy profiles only, their confirmed speaker names.
+Production speaker profiles carry no names.
 
 Word id (list index), edited_start/edited_end, speaker metadata and word
 order are never touched; provenance is recorded in ``word["name_lock"]`` and in
@@ -245,7 +247,7 @@ Entity = Participant
 
 @dataclass(frozen=True)
 class ExtraEntity:
-    """A verified name that is not a human-confirmed speaker label (e.g. ``--creator``)."""
+    """A user-verified name/entity (e.g. ``--creator``, ``MIMIR_CAPTION_ENTITIES``)."""
 
     name: str
     kind: str = "creator"
@@ -268,13 +270,16 @@ def _name_tokens(name: str) -> list[str]:
 
 def confirmed_participants(profile: Mapping[str, Any],
                            extra_entities: Sequence[ExtraEntity] = ()) -> tuple[Participant, ...]:
-    """Verified roster: human-confirmed speaker names + explicitly verified extra entities.
+    """Verified roster: explicitly verified extra entities, plus the confirmed
+    speaker names a LEGACY profile carries.
 
-    Same trust rule as the caption renderer (captions V24): the validated
-    identity map written after the human voice checkpoint, or display labels
-    whose naming source is manual / human / voice-calibrated. Automatic A/B
-    placeholders are never entities. Extra entities come only from explicit
-    user input (never from ASR-derived story text).
+    Production speaker profiles carry no names (a caption colour names a voice,
+    never a person), so their roster is the verified extra entities alone. A
+    legacy profile's names count only under the caption renderer's trust rule:
+    a ``validated_identity_map``, or display labels whose naming source is
+    manual / human / voice-calibrated. Automatic A/B placeholders are never
+    entities. Extra entities come only from explicit user input (never from
+    ASR-derived story text).
     """
     confirmed: dict[str, tuple[str, str]] = {}
     validated = profile.get("validated_identity_map")

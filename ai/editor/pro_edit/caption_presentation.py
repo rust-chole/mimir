@@ -42,6 +42,7 @@ pages in one lane never overlap. The raw ``speaker_raw`` id stays truth.
 Speaker colours (captions V25): a page's COLOURS come from its voice's
 ``speaker_color`` (the profile's acoustic turns), its LANE only from measured
 overlap. A colour change is a hard break, so a page never mixes two voices.
+Without speaker colours a page keeps its lane's pre-V25 palette.
 
 Geometry law: a page's geometry is fixed when it appears. Each line is one
 explicitly positioned ASS event (``\\an2\\pos``); future words are transparent
@@ -224,7 +225,7 @@ def presentation_tokens(profile: Mapping[str, Any] | None, duration: float) -> t
             speaker_label=str(raw.get("speaker_label", "")),
             normalized=caption_truth.normalize_word(text),
             uncertain=_is_uncertainty_mask(raw, text),
-            speaker_color=_speaker_color(raw),
+            speaker_color=caption_truth.speaker_color(raw),
         ))
     rows.sort(key=lambda t: (t.start, t.end))
     display = display_metadata(profile, duration)
@@ -235,11 +236,6 @@ def presentation_tokens(profile: Mapping[str, Any] | None, duration: float) -> t
         rows = [dataclasses.replace(row, speaker_role=role, speaker_label=label, speaker_color=color)
                 for row, (role, label, color) in zip(rows, display)]
     return tuple(rows)
-
-
-def _speaker_color(raw: Mapping[str, Any]) -> str:
-    reader = getattr(caption_truth, "speaker_color", None)
-    return reader(dict(raw)) if callable(reader) else ""
 
 
 def verify_token_parity(tokens: Sequence[CaptionTokenRef], profile: Mapping[str, Any] | None,
@@ -487,11 +483,14 @@ def resolve_caption_style(style: CaptionStyle, lane: str, geometry: LayoutGeomet
                           fit_scale: float = 1.0, palettes: Mapping[str, LanePalette] | None = None,
                           outline_boost: float = 1.0, colour: str = "",
                           speakers: Mapping[str, LanePalette] | None = None) -> ResolvedCaptionStyle:
-    """``lane`` picks the ASS style (position), ``colour`` the voice's colours."""
+    """``lane`` picks the ASS style (position), ``colour`` the voice's colours.
+
+    Without speaker colours (``colour`` "") the lane's own palette is used, the
+    pre-V25 look: an overlap page on lane 2 keeps the secondary colours."""
     definition = STYLE_DEFINITIONS[style]
     lane_palette = (palettes or PALETTES)[lane]
     voices = speakers or SPEAKER_PALETTES
-    palette = voices.get(colour) or voices[""]
+    palette = (voices.get(colour) if colour else None) or lane_palette
     outline = round(geometry.outline_px * definition.outline_scale * fit_scale * outline_boost, 1)
     return ResolvedCaptionStyle(
         name=style, lane=lane, ass_style=lane_palette.style_name,

@@ -641,16 +641,17 @@ class StageBook:
         """Record how this started run ended when it ended in an exception.
 
         Acts only on this run's own in-memory state: an outcome the run already
-        recorded (``rejected``) is kept, and a failure after the short was
-        published says so. Never masks the original error."""
+        recorded (``rejected``) is kept, and any failure after the short was
+        published, a Ctrl+C included, says so (``run_error`` names the cause).
+        Never masks the original error."""
         if self.state.get("run_status") != "running":
             return
-        if isinstance(error, NoStrongClipError):
+        if self.state.get("publish_status") in {"published", "published_degraded"}:
+            status = "failed_after_publish"
+        elif isinstance(error, NoStrongClipError):
             status = "no_strong_clip"
         elif isinstance(error, KeyboardInterrupt):
             status = "interrupted"
-        elif self.state.get("publish_status") in {"published", "published_degraded"}:
-            status = "failed_after_publish"
         else:
             status = "failed"
         self.state["run_status"] = status
@@ -2006,7 +2007,8 @@ def _run_caption_truth_v6(
 
 
 def _verified_names(profile_path: Path | None, creator_name: str | None, entities: Iterable[str]) -> list[str]:
-    """Names a human confirmed: creator, human-confirmed speakers, user-verified entities."""
+    """User-verified names: the creator, configured entities and a legacy profile's
+    confirmed speaker names (production profiles carry none)."""
     names: list[str] = []
     if creator_name:
         names.append(creator_name)
@@ -2215,7 +2217,7 @@ def run_pipeline(
 
 
 def _run_pipeline(
-    video_path: str | Path,
+    video_path: Path,
     *,
     creator_name: str | None,
     force: bool,
@@ -2227,11 +2229,11 @@ def _run_pipeline(
     force_v6: bool,
     book_out: list[StageBook],
 ) -> dict[str, Any]:
-    """``run_pipeline``'s body. ``book_out`` receives this run's StageBook after its first save."""
+    """``run_pipeline``'s body on its resolved ``video_path``. ``book_out`` receives
+    this run's StageBook after its first save."""
     rerender = bool(rerender or force_v6)
     run_started = time.perf_counter()
     runtime_profiler = RuntimeProfiler()
-    video_path = resolve_video_path(video_path)
     creator_name = str(creator_name).strip() if creator_name else None
 
     config_vb, video_brain_model = _video_brain_config()
@@ -4759,6 +4761,13 @@ def main() -> None:
         print(f"   {error}")
         print("   Daha fazla detay için aynı komutu --verbose ile çalıştır.")
         raise SystemExit(1)
+    except KeyboardInterrupt as error:
+        published = getattr(error, "published_output", "")
+        if published:
+            print()
+            print("⚠️ Short YAYINLANDI, ancak çalışma sonradan durduruldu (Ctrl+C):")
+            print(f"   📂 {published}")
+        raise
 
     _print_friendly_result(result)
     if result.get("status") == "published_degraded":

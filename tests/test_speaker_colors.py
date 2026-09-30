@@ -17,6 +17,7 @@ from unittest import mock
 import test_pro_edit_captions as base
 from ai.editor import caption_truth, captions, speaker_caption_support as scs, v6_runtime
 from ai.editor.pro_edit import caption_brand, caption_guard, caption_presentation as cp
+from ai.editor.pro_edit.schema import CaptionStyle
 
 A_ACTIVE = cp.PALETTES["main"].active
 B_ACTIVE = cp.PALETTES["secondary"].active
@@ -61,6 +62,29 @@ def overlap_profile() -> dict:
     segments = [{"speaker": "S0", "start": 0.0, "end": 1.8}, {"speaker": "S1", "start": 0.9, "end": 2.7},
                 {"speaker": "S1", "start": 3.4, "end": 4.5}, {"speaker": "S0", "start": 5.0, "end": 6.2}]
     return coloured_profile(rows, primary_speaker="S0", secondary_speaker="S1", segments=segments)
+
+
+def a_blip_a() -> list[dict]:
+    """A A A A ? A A A A, then voice B: one unresolved word inside a stable turn of voice A."""
+    hole = dict(turn("S0", 1, 1.2)[0], word="uh", speaker_raw="", speaker_confidence=0.0)
+    return turn("S0", 4, 0.0) + [hole] + turn("S0", 4, 1.5) + turn("S1", 5, 3.2)
+
+
+def display(rows: list[dict]) -> list[tuple[str, bool]]:
+    """(display colour, bridged) of every word under the renderers' shared display policy."""
+    profile = coloured_profile(rows)
+    words = captions._profile_edited_words(profile, 30.0)
+    prepared, _windows = captions._prepare_adaptive_render_words(words, speaker_profile=profile,
+                                                                 trusted_display_map={})
+    return [(w["speaker_color"], bool(w.get("speaker_color_bridged"))) for w in prepared]
+
+
+def plain_overlap_profile() -> dict:
+    """overlap_profile() as a colours-off (pre-V25 shaped) profile: no speaker_color anywhere."""
+    profile = overlap_profile()
+    profile.pop("speaker_colors")
+    profile["words"] = [{k: v for k, v in w.items() if k != "speaker_color"} for w in profile["words"]]
+    return profile
 
 
 def active_word_colours(lines: list[str]) -> list[tuple[str, str, str]]:
@@ -372,6 +396,149 @@ class PresentationTests(unittest.TestCase):
         self.assertTrue(any(p.lane == "main" and p.speaker_color == "B" for p in built.pages))
 
 
+class OneWordFlickerTests(unittest.TestCase):
+    """A A A A -> one unresolved word -> A A A A never flashes a one-word neutral caption."""
+
+    def test_the_profile_keeps_the_word_uncertain(self) -> None:
+        rows, record = colour(a_blip_a())
+        self.assertEqual(colours(rows), ["A"] * 4 + ["neutral"] + ["A"] * 4 + ["B"] * 5)
+        self.assertTrue(record["engaged"])                                # truth still says: voice unknown
+
+    def test_the_display_bridges_only_that_word(self) -> None:
+        shown = display(a_blip_a())
+        self.assertEqual([c for c, _ in shown], ["A"] * 9 + ["B"] * 5)
+        self.assertEqual([i for i, (_, bridged) in enumerate(shown) if bridged], [4])
+
+    def test_real_uncertainty_and_transitions_stay_neutral(self) -> None:
+        hole = lambda start: dict(turn("S0", 1, start)[0], speaker_raw="", speaker_confidence=0.0)
+        cases = {
+            "two uncertain words": turn("S0", 4, 0.0) + [hole(1.2), hole(1.5)] + turn("S0", 4, 1.8)
+            + turn("S1", 5, 3.5),
+            "a voice change": turn("S1", 4, 0.0) + [hole(1.3)] + turn("S0", 5, 1.7) + turn("S1", 4, 3.4),
+            "a long pause": turn("S0", 4, 0.0) + [hole(2.0)] + turn("S0", 4, 2.3) + turn("S1", 5, 4.0),
+            "clip edge": [hole(0.0)] + turn("S0", 4, 0.3) + turn("S1", 5, 1.8),
+        }
+        for name, rows in cases.items():
+            with self.subTest(name):
+                shown = display(rows)
+                self.assertIn(("neutral", False), shown)
+                self.assertFalse(any(bridged for _, bridged in shown))
+
+    def test_colours_off_is_never_bridged(self) -> None:
+        profile = base.profile(a_blip_a())                               # no speaker colours at all
+        words = captions._profile_edited_words(profile, 30.0)
+        prepared, _ = captions._prepare_adaptive_render_words(words, speaker_profile=profile,
+                                                              trusted_display_map={})
+        self.assertEqual({(w["speaker_color"], bool(w.get("speaker_color_bridged"))) for w in prepared},
+                         {("", False)})
+
+    def test_the_baseline_renderer_shows_no_one_word_neutral_caption(self) -> None:
+        profile = coloured_profile(a_blip_a())
+        with tempfile.TemporaryDirectory() as tmp:
+            text = captions.create_ass_for_clip({}, base.timeline(), Path(tmp) / "c.ass", profile)\
+                .read_text(encoding="utf-8-sig")
+        lines = dialogues(text)
+        for colour_value in (captions.NEUTRAL_BASE_TEXT_COLOR, captions.NEUTRAL_ACTIVE_TEXT_COLOR):
+            self.assertNotIn(f"\\c{colour_value}}}", text)
+        uh = [line for line in lines if "}uh{" in line]
+        self.assertTrue(uh)
+        for line in uh:                                                   # shares its caption with voice A
+            self.assertTrue(re.search(r"s0t\d+w\d", line), line)
+        events = {word: active for _style, word, active in active_word_colours(lines)}
+        self.assertEqual(events["uh"], captions.ACTIVE_TEXT_COLOR)
+
+    def test_the_presentation_shows_no_one_word_neutral_page(self) -> None:
+        profile = coloured_profile(a_blip_a())
+        tokens = cp.presentation_tokens(profile, 10.0)
+        cp.verify_token_parity(tokens, profile, 10.0)
+        built = cp.build_presentation(profile=profile, clip_timeline=base.timeline(), plan=None, width=1080,
+                                      height=1920, metrics=base.BUILTIN)
+        self.assertEqual({p.speaker_color for p in built.pages}, {"A", "B"})
+        page = next(p for p in built.pages if any(t.text == "uh" for t in p.tokens))
+        self.assertGreater(len(page.tokens), 1)
+        self.assertEqual(page.speaker_color, "A")
+        self.assertNotIn(NEUTRAL_ACTIVE, built.ass_text)
+
+
+class ColoursOffOverlapTests(unittest.TestCase):
+    """Speaker colours off: a genuine-overlap caption on lane 2 keeps the legacy secondary palette."""
+
+    LEGACY = {"ViralMain": {captions.INACTIVE_TEXT_COLOR, captions.ACTIVE_TEXT_COLOR, captions.HIGHLIGHT_TEXT_COLOR},
+              "ViralSecondary": {captions.SECONDARY_BASE_TEXT_COLOR, captions.SECONDARY_ACTIVE_TEXT_COLOR,
+                                 captions.SECONDARY_HIGHLIGHT_TEXT_COLOR}}
+
+    def test_the_baseline_renderer_uses_the_legacy_lane_palettes(self) -> None:
+        profile = plain_overlap_profile()
+        with tempfile.TemporaryDirectory() as tmp:
+            text = captions.create_ass_for_clip({}, base.timeline(), Path(tmp) / "c.ass", profile)\
+                .read_text(encoding="utf-8-sig")
+        lines = dialogues(text)
+        styles = {line.split(",")[3] for line in lines}
+        self.assertEqual(styles, {"ViralMain", "ViralSecondary"})        # the overlap really uses lane 2
+        for line in lines:
+            used = set(re.findall(r"\\c(&H[0-9A-F]{8})", line))
+            self.assertTrue(used, line)
+            self.assertLessEqual(used, self.LEGACY[line.split(",")[3]], line)
+        for style, word, active in active_word_colours(lines):
+            want = captions.SECONDARY_ACTIVE_TEXT_COLOR if style == "ViralSecondary" else captions.ACTIVE_TEXT_COLOR
+            self.assertEqual(active, want, (style, word))
+        # The same profile shape with an explicit "" colour renders identically.
+        blank = plain_overlap_profile()
+        blank["words"] = [dict(w, speaker_color="") for w in blank["words"]]
+        with tempfile.TemporaryDirectory() as tmp:
+            again = captions.create_ass_for_clip({}, base.timeline(), Path(tmp) / "c.ass", blank)\
+                .read_text(encoding="utf-8-sig")
+        self.assertEqual(again, text)
+
+    def test_the_presentation_uses_the_legacy_lane_palettes(self) -> None:
+        built = cp.build_presentation(profile=plain_overlap_profile(), clip_timeline=base.timeline(), plan=None,
+                                      width=1080, height=1920, metrics=base.BUILTIN)
+        self.assertEqual({p.lane for p in built.pages}, {"main", "secondary"})
+        self.assertEqual({p.speaker_color for p in built.pages}, {""})
+        for page in built.pages:
+            style = cp.page_style(page, built.geometry, built.settings.palettes, built.settings.speakers)
+            lane = cp.PALETTES[page.lane]
+            definition = cp.STYLE_DEFINITIONS[page.style]
+            self.assertEqual((style.inactive_colour, style.active_colour, style.emphasis_colour, style.label_colour),
+                             (lane.inactive, lane.role(definition.active_color),
+                              lane.role(definition.emphasis_color), lane.active), page.page_id)
+        self.assertIn(cp.PALETTES["secondary"].active, built.ass_text)
+
+    def test_colours_on_the_voice_still_wins_over_the_lane(self) -> None:
+        geometry = cp.LayoutGeometry.for_output(1080, 1920)
+        on_lane_two = cp.resolve_caption_style(CaptionStyle.DEFAULT, "secondary", geometry, colour="A")
+        self.assertEqual((on_lane_two.ass_style, on_lane_two.active_colour), ("MimirSecondary", A_ACTIVE))
+        plain = cp.resolve_caption_style(CaptionStyle.DEFAULT, "secondary", geometry)
+        self.assertEqual((plain.ass_style, plain.active_colour), ("MimirSecondary", B_ACTIVE))
+
+
+class BrandVoiceColourTests(unittest.TestCase):
+    """A partial custom colour for voice C keeps voice C's own defaults for the roles it does not set."""
+
+    def test_a_partial_tertiary_override_never_borrows_voice_a(self) -> None:
+        brand_mod = caption_brand
+        default_c = brand_mod.speaker_colours(brand_mod.MIMIR_DEFAULT)["C"]
+        voice_a = brand_mod.speaker_colours(brand_mod.MIMIR_DEFAULT)["A"]
+        text_only = brand_mod.parse_brand({"profile_id": "t", "version": 1, "speaker_tertiary_color": "#123456"})
+        c = brand_mod.speaker_colours(text_only)["C"]
+        self.assertEqual((c.text, c.style_primary), ("&H563412&", "&H00563412"))
+        self.assertEqual((c.active, c.emphasis), (default_c.active, default_c.emphasis))
+        self.assertNotEqual(c.active, voice_a.active)
+        self.assertNotEqual(c.emphasis, voice_a.emphasis)
+        active_only = brand_mod.parse_brand({"profile_id": "u", "version": 1,
+                                             "speaker_tertiary_active_color": "#445566"})
+        c = brand_mod.speaker_colours(active_only)["C"]
+        self.assertEqual((c.text, c.style_primary, c.active, c.emphasis),
+                         (default_c.text, default_c.style_primary, "&H665544&", default_c.emphasis))
+        # A custom main colour never leaks into voice C either.
+        main_and_c = brand_mod.parse_brand({"profile_id": "v", "version": 1, "active_text_color": "#ABCDEF",
+                                            "speaker_tertiary_emphasis_color": "#010203"})
+        c = brand_mod.speaker_colours(main_and_c)["C"]
+        self.assertEqual((c.text, c.active, c.emphasis), (default_c.text, default_c.active, "&H030201&"))
+        # The tertiary LANE keeps its baseline main-palette parity (style lines unchanged).
+        self.assertEqual(text_only.lanes["tertiary"].active, text_only.lanes["main"].active)
+
+
 def dataclasses_replace(token, **changes):
     import dataclasses
 
@@ -464,6 +631,7 @@ class ProductionPathTests(unittest.TestCase):
 
         packet, text = sheet(["A", "A", "B", "neutral", "A"])
         self.assertEqual(packet["speaker_colors"], {"A": 3, "B": 1, "neutral": 1})
+        self.assertNotIn("speakers", packet)                             # production labels are blank
         self.assertIn("- [ ] Each voice keeps one caption colour", text)
         self.assertNotIn("human verified the voice", text)
         _packet, text = sheet(["", ""])

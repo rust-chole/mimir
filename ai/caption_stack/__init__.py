@@ -13,7 +13,8 @@
                         final-short analysis audio; validated, locally re-aligned when a
                         small region fails, otherwise the configured fallback provider
                         re-times the whole transcript (never a mix of two clocks)
-    WHO spoke it     -> diarization + human identity (ai.editor.speaker_caption_support)
+    WHICH VOICE      -> acoustic diarization turns, a caption colour per voice, never a
+                        person (ai.editor.speaker_caption_support)
     HOW it is shown  -> the deterministic presentation (captions.py / pro_edit)
 
 Modules (nothing heavy is imported by this package itself):

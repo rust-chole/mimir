@@ -6,7 +6,8 @@ Authorities, never merged:
                                decides only the spans the evidence did not settle
     TIMING   WHEN           -> the word-alignment provider over the FROZEN words; the judge
                                never emits or edits a time
-    SPEAKER  WHO            -> diarization + the human identity checkpoint
+    SPEAKER  WHICH VOICE    -> acoustic diarization turns (a caption colour per voice,
+                               never a person's identity)
     DISPLAY  HOW            -> the deterministic caption renderer
 
 Two bounded decisions:

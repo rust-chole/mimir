@@ -206,10 +206,11 @@ def timing_issues(profile: Mapping[str, Any]) -> list[str]:
 
 
 def speaker_issues(profile: Mapping[str, Any]) -> list[str]:
-    """Speaker ownership: raw ids from the profile's speaker set; printed labels only
-    from the human-confirmed display map and consistent with the raw id; speaker
-    colours exactly as the acoustic colour record assigned them (one colour per
-    voice, ``neutral`` only for uncertain words, none when colours are off)."""
+    """Speaker ownership: raw ids from the profile's speaker set; speaker colours
+    exactly as the acoustic colour record assigned them (one colour per voice,
+    ``neutral`` only for uncertain words, none when colours are off). Production
+    profiles print no speaker names; a printed label (legacy profiles only) must be
+    the user-confirmed name of its raw id."""
     from ai.editor import captions
 
     trusted = captions._trusted_human_display_map(dict(profile))
@@ -786,8 +787,10 @@ def run_caption_truth(
             "lexical": "caption stack frozen transcript: Qwen ears, deterministic agreement or the caption judge "
                        "(grounding-guarded); unresolved -> primary words marked uncertain",
             "timing": "one word-alignment provider over the frozen words; never moved by spelling",
-            "speaker": "diarization + human identity checkpoint; never changed by text",
-            "identity": "verified roster (human-confirmed speakers + user-verified entities); evidence-gated spelling",
+            "speaker": "acoustic diarization speaker turns -> one caption colour per voice, never a person's "
+                       "identity; never changed by text",
+            "identity": "spelling of user-verified names/entities (creator, configured entities); evidence-gated; "
+                        "never decides who speaks",
         },
         "roster": lock_audit.get("roster", []),
         "vocabulary": vocabulary,

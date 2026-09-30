@@ -658,8 +658,9 @@ class StyleSystemTests(unittest.TestCase):
         self.assertAlmostEqual(impact.font_px, round(74 * 1.08, 1))
         self.assertGreater(impact.emphasis_outline_px, impact.outline_px)
         self.assertEqual(impact.ass_style, "MimirSecondary")
-        # Captions V25: the lane is only WHERE a page sits; its colours are its voice's.
-        self.assertEqual(impact.active_colour, cp.PALETTES["main"].active)       # plain voice on lane 2
+        # Captions V25: with speaker colours the lane is only WHERE a page sits and its
+        # colours are its voice's; with colours off lane 2 keeps its legacy palette.
+        self.assertEqual(impact.active_colour, cp.PALETTES["secondary"].active)  # colours off, lane 2
         voice_b = cp.resolve_caption_style(CaptionStyle.DEFAULT, "main", geometry, colour="B")
         self.assertEqual((voice_b.ass_style, voice_b.active_colour), ("MimirMain", cp.PALETTES["secondary"].active))
         voice_c = cp.resolve_caption_style(CaptionStyle.DEFAULT, "tertiary", geometry, colour="C")
