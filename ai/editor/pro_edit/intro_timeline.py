@@ -5,13 +5,14 @@ Traced from ai/editor/intro_renderer.py (V10):
 * intro source  = CLEAN paced clip [teaser_start, teaser_end]  (PACED_CLIP)
 * intro-local   = [0, teaser_duration]                          (INTRO)
 * main source   = captioned preview [main_restart, main_end]    (PACED_CLIP)
-* final         = intro-local, xfade of ``transition`` seconds, then main
+* final         = intro-local, then a HARD CUT into main (``transition`` = 0)
   final_t = teaser_duration - transition + (paced_t - main_restart)
-* captions: none on the teaser (only the hook ASS); main keeps its burned
-  captions, trimmed together with video+audio at ``main_restart``.
+* captions: none on the teaser (only the optional hook ASS); main keeps its
+  burned captions, trimmed together with video+audio at ``main_restart``.
 
-Every value is computed with the intro renderer's own functions so Pro Edit
-and the renderer can never disagree. Pro Edit never selects the intro: the
+Every value comes from ``intro_renderer.compute_intro_clock`` (frame-snapped
+cut points, protected-range-aware restart) so Pro Edit and the renderer can
+never disagree. Pro Edit never selects the intro: the
 teaser record is read-only input and its signature is checked afterwards.
 """
 from __future__ import annotations
@@ -102,7 +103,7 @@ class IntroTimeline:
             "expected_final_duration": round(self.expected_final_duration, 4),
             "peak_focus_paced": self.peak_focus,
             "teaser_record_signature": self.teaser_record_signature,
-            "order": "intro -> xfade -> main (intentional repeated peak; not deduplicated)",
+            "order": "intro -> hard cut -> main (intentional repeated peak; not deduplicated)",
         }
 
 
@@ -113,14 +114,18 @@ def build_intro_timeline(
     clean_duration: float,
     main_duration: float,
     clip_map: ClipTimelineMap | None = None,
+    clip_timeline: Mapping[str, Any] | None = None,
+    fps: float = 0.0,
 ) -> IntroTimeline:
     from ai.editor import intro_renderer
 
-    start, end = intro_renderer.get_teaser_bounds(teaser=dict(teaser_record), edited_duration=float(clean_duration))
-    restart, first_caption = intro_renderer.calculate_main_restart_seconds(
-        caption_path=caption_path, main_duration=float(main_duration))
-    transition = intro_renderer.calculate_transition_duration(
-        teaser_duration=end - start, main_duration=max(0.0, float(main_duration) - restart))
+    clock = intro_renderer.compute_intro_clock(
+        dict(teaser_record), clip_timeline=dict(clip_timeline) if clip_timeline is not None else None,
+        caption_path=caption_path, clean_duration=float(clean_duration), main_duration=float(main_duration),
+        fps=float(fps))
+    start, end = float(clock["teaser_start"]), float(clock["teaser_end"])
+    restart, first_caption = float(clock["main_restart"]), clock["first_caption"]
+    transition = float(clock["transition"])
     vod_start = vod_end = None
     if clip_map is not None:
         vod_start = clip_map.convert(Timestamp(start, TimelineDomain.PACED_CLIP), TimelineDomain.VOD).seconds
@@ -159,7 +164,7 @@ def verify_final_duration(timeline: IntroTimeline, final_duration: float, *, fra
     if delta > HANDOFF_FRAME_TOLERANCE * frame_duration + 0.05:
         raise IntroIntegrityError(
             f"final duration {final_duration:.3f}s != intro {timeline.teaser_duration:.3f} + main "
-            f"{timeline.main_effective_duration:.3f} - xfade {timeline.transition:.3f} "
+            f"{timeline.main_effective_duration:.3f} - transition {timeline.transition:.3f} "
             f"(= {timeline.expected_final_duration:.3f}s)")
     return delta
 

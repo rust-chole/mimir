@@ -9,12 +9,24 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import pro_edit_fixtures as fx  # noqa: F401  (repo root on sys.path)
-from ai.editor import caption_truth
+from ai.editor import caption_judge, caption_truth
 from ai.editor import participant_name_lock as lock
 from ai.editor import v6_runtime
+
+
+_NO_JUDGE = mock.patch.object(caption_judge, "default_judge", return_value=None)
+
+
+def setUpModule() -> None:
+    _NO_JUDGE.start()      # hermetic: a machine with an API key must never call the real judge here
+
+
+def tearDownModule() -> None:
+    _NO_JUDGE.stop()
 
 
 def profile(sentence: str, speakers: str | list[str], names: dict[str, str], *, flags: list[str] = (),
@@ -57,11 +69,12 @@ class EntityCanonicalizationTests(unittest.TestCase):
         data = profile("My only option is, um, Tyler. Would you like to go on a date with me?", "A",
                        {"A": "KAI", "B": "TYLA"}, flags=[("Tyler.", "tyla")])
         index = 5
-        start = data["words"][index]["edited_start"]
-        data["caption_quality"]["micro_accuracy"] = {"details": [{
-            "span": [index, index + 1], "audio_window": [0.0, start + 3.0], "selected_phrase": "Tyler.",
-            "candidate_votes": [{"phrase": "Tyler.", "votes": 3, "sources": ["asr_1", "asr_2", "asr_3"]}],
-            "resolved": True}]}
+        # What each caption ear heard at that word, as the caption stack records it ON the word.
+        data["words"][index]["lexical_alternatives"] = [
+            {"token": "Tyler.", "source": "qwen_primary", "prompted": False},
+            {"token": "Tyler.", "source": "fallback_local", "prompted": False},
+            {"token": "Tyler.", "source": "qwen_precision", "prompted": True}]
+        self.assertEqual(len(lock.alternatives_from_caption_quality(data)[index]), 3)
         result = lock.lock_participant_names(data)
         self.assertEqual(result.words[index]["word"], "Tyla.")
         self.assertEqual(len(result.audit["corrections"]), 1)
@@ -185,6 +198,71 @@ class CaptionTruthStageTests(unittest.TestCase):
         self.assertTrue(any(u["reason"] == "entity_spelling_unverified" for u in
                             json.loads(result.truth_path.read_text(encoding="utf-8"))["uncertain"]))
 
+    def judge_names(self, verdict: str, confidence: float = 0.9):
+        calls = []
+
+        def judge(*, name, instructions, payload, schema):
+            calls.append(payload)
+            return {"decisions": [{"word_id": c["word_id"], "verdict": verdict, "confidence": confidence,
+                                   "reason": "test"} for c in payload["candidates"]]}
+        judge.model = f"fake-{verdict}-{confidence}"   # judgments are cached per judge identity + evidence
+        return judge, calls
+
+    def run_unsettled_name(self, judge):
+        sentence = "Yesterday I finally talked to Tyler about the whole stream thing."
+        data = profile(sentence, "A", {"A": "KAI", "B": "TYLA"})
+        path = self.write(data)
+
+        result = caption_truth.run_caption_truth(path, edited_clip_path=None, ear=self.tyler_ear,
+                                                 audio_source=lambda: self.dir / "audio.wav", judge=judge)
+        return data, path, result, sentence.split().index("Tyler")
+
+    @staticmethod
+    def tyler_ear(audio, start, end, *, prompted, vocabulary, context_before="", context_after=""):
+        return caption_truth.EarResult("finally talked to Tyler about the", "fake", prompted)
+
+    def test_judge_decides_what_the_lock_could_not_spelling_only(self) -> None:
+        judge, calls = self.judge_names("canonical")
+        data, path, result, index = self.run_unsettled_name(judge)
+        candidate = calls[0]["candidates"][0]
+        self.assertEqual((candidate["word_id"], candidate["verified_name"]), (index, "Tyla"))
+        self.assertTrue(candidate["local_ears"])                               # escalation ears are evidence
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        word = saved["words"][index]
+        self.assertEqual(word["word"], "Tyla")
+        self.assertEqual(word["name_lock"]["decided_by"], "caption_judge")       # reversible provenance
+        self.assertNotIn(caption_truth.UNCERTAIN_FLAG, word)
+        for key in ("edited_start", "edited_end", "speaker_raw"):                # never time or speaker
+            self.assertEqual(word[key], data["words"][index][key])
+        truth = json.loads(result.truth_path.read_text(encoding="utf-8"))
+        self.assertEqual(truth["entity_decisions"][0]["verdict"], "canonical")
+        self.assertEqual(result.audit["judge_named_words"], 1)
+        # A re-run with the same evidence reuses the recorded judgment (no new call).
+        calls.clear()
+        again = caption_truth.run_caption_truth(path, edited_clip_path=None, ear=self.tyler_ear,
+                                                audio_source=lambda: self.dir / "audio.wav", judge=judge)
+        self.assertEqual(calls, [])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["words"][index]["word"], "Tyla")
+        self.assertTrue(caption_truth.verify_frozen_truth(path, again.truth_path)[0])
+
+    def test_judge_keep_and_uncertain(self) -> None:
+        judge, _ = self.judge_names("keep")
+        _data, path, _result, index = self.run_unsettled_name(judge)
+        word = json.loads(path.read_text(encoding="utf-8"))["words"][index]
+        self.assertEqual(word["word"], "Tyler")
+        self.assertNotIn(caption_truth.UNCERTAIN_FLAG, word)
+        judge, _ = self.judge_names("canonical", confidence=0.3)                 # unsure -> uncertain, not forced
+        _data, path, _result, index = self.run_unsettled_name(judge)
+        word = json.loads(path.read_text(encoding="utf-8"))["words"][index]
+        self.assertEqual(word["word"], "Tyler")
+        self.assertTrue(word[caption_truth.UNCERTAIN_FLAG])
+
+    def test_missing_judge_is_a_disclosed_degradation(self) -> None:
+        _data, _path, result, _index = self.run_unsettled_name(None)
+        self.assertIn(("caption_entity_judge", "uncertain_marked"),
+                      [(r["subsystem"], r["level"]) for r in result.fallbacks])
+        self.assertNotIn("caption_entity_judge", v6_runtime.BLOCKING_FALLBACKS)
+
     def test_missing_ear_is_an_explicit_fallback(self) -> None:
         data = profile("Yesterday I finally talked to Tyler about the whole stream thing.", "A",
                        {"A": "KAI", "B": "TYLA"})
@@ -228,73 +306,92 @@ class CaptionTruthStageTests(unittest.TestCase):
         self.assertNotIn("caption_truth", cleared)
 
 
-def unresolved(data: dict, votes: list[tuple[str, list[str]]], window: tuple[float, float] | None = None) -> dict:
-    """Attach one caption-stage micro span the ears could not resolve (phrase -> sources)."""
-    words = data["words"]
-    w0, w1 = window if window is not None else (0.0, words[-1]["edited_end"] + 0.2)
-    data.setdefault("caption_quality", {})["micro_accuracy"] = {"details": [{
-        "span": [0, 1], "audio_window": [w0, w1], "resolved": False,
-        "candidate_votes": [{"phrase": phrase, "votes": len(sources), "sources": sources} for phrase, sources in votes],
-    }]}
+def frozen_profile(sentence: str, *, uncertain: dict[int, str] = (), spans: list[dict] = ()) -> dict:
+    """A caption-stack profile: words carry their frozen token ids + lexical status."""
+    from ai.caption_stack.lexical import lexical_signature
+
+    data = profile(sentence, "A", {})
+    tokens = sentence.split()
+    chunks = [(0.0, float(data["clip_duration"]))]
+    for index, word in enumerate(data["words"]):
+        word["token_ids"] = [index, index + 1]
+        word["lexical_status"] = "uncertain" if index in dict(uncertain) else "agreed"
+        if index in dict(uncertain):
+            word["lexical_span"] = dict(uncertain)[index]
+    data["caption_quality"] = {"lexical": {"frozen_tokens": tokens, "chunks": [list(c) for c in chunks],
+                                           "signature": lexical_signature(tokens, chunks), "spans": list(spans)}}
     return data
 
 
-def flagged(data: dict) -> list[str]:
-    return [texts([data["words"][i]]) for ids, _reason in caption_truth.unresolved_span_word_ids(data, data["words"])
-            for i in ids]
+def flagged(data: dict) -> list[list[str]]:
+    return [[data["words"][i]["word"] for i in ids]
+            for ids, _reason in caption_truth.unresolved_span_word_ids(data, data["words"])]
 
 
-class UncertaintyGranularityTests(unittest.TestCase):
-    """Unresolved micro spans: only words the independent ear majority did not hear are uncertain."""
+class FrozenLexicalRecordTests(unittest.TestCase):
+    """Uncertainty and decisions come from the caption stack's explicit record, never from guesswork."""
 
-    def test_majority_confirmed_words_stay_certain_including_numbers(self) -> None:
-        sentence = "He got 12 wins in arena then he said please stop it now"
-        data = unresolved(profile(sentence, "A", {}), [
-            (sentence, ["asr_1", "asr_5"]),
-            ("He got 12 wins in arena then he said please stop", ["asr_2"]),
-            ("He got wins in arena", ["asr_4"]),
-            ("", ["asr_3"])])
-        self.assertEqual(flagged(data), ["it", "now"])
+    def test_uncertain_words_are_exactly_the_frozen_uncertain_spans(self) -> None:
+        data = frozen_profile("He got 12 wins in arena then he said please stop it now",
+                              uncertain={2: "c0_d0", 11: "c0_d1", 12: "c0_d1"})
+        self.assertEqual(flagged(data), [["12"], ["it", "now"]])
+        data["words"][2]["lexical_status"] = "resolved"
+        self.assertEqual(flagged(data), [["it", "now"]])
 
     def test_disputed_number_is_uncertain_and_never_rewritten(self) -> None:
         sentence = "He got 12 wins in arena"
-        data = unresolved(profile(sentence, "A", {}), [
-            ("He got 20 wins in arena", ["asr_1", "asr_2", "asr_4", "asr_5"]), (sentence, ["asr_3"])])
-        self.assertEqual(flagged(data), ["12"])
+        data = frozen_profile(sentence, uncertain={2: "c0_d0"})
         with tempfile.TemporaryDirectory(prefix="mimir v6 unc ş ") as tmp:
-            path = Path(tmp) / "clip_01_speakers_v25.json"
+            path = Path(tmp) / "clip_01_speakers_v26.json"
             path.write_text(json.dumps(data), encoding="utf-8")
-            caption_truth.run_caption_truth(path, edited_clip_path=None)
+            result = caption_truth.run_caption_truth(path, edited_clip_path=None)
             saved = json.loads(path.read_text(encoding="utf-8"))
+            truth = json.loads(result.truth_path.read_text(encoding="utf-8"))
         self.assertEqual(texts(saved["words"]), sentence)                       # fail closed: text kept
         self.assertEqual([w["word"] for w in saved["words"] if w.get(caption_truth.UNCERTAIN_FLAG)], ["12"])
+        self.assertEqual(truth["uncertain"][0]["reason"], "lexical_evidence_unresolved")
 
-    def test_an_ear_mapped_elsewhere_does_not_widen_the_dispute(self) -> None:
-        sentence = "wait I flip the phone come on now all right do you want your phone back"
-        data = unresolved(profile(sentence, "A", {}), [
-            ("flip", ["asr_1", "asr_5"]), ("flipped", ["asr_2", "asr_3"]),
-            ("all right do you want your", ["asr_4"])])
-        self.assertEqual(flagged(data), ["flip"])
+    def test_a_rewritten_frozen_word_is_refused_before_the_freeze(self) -> None:
+        data = frozen_profile("I literally told you not to do that")
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
+        data["words"][4]["word"] = "now"                                        # a negation silently flipped
+        issues = caption_truth.lexical_freeze_issues(data)
+        self.assertIn("'now' is not the frozen 'not'", issues[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip_01_speakers_v26.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                caption_truth.run_caption_truth(path, edited_clip_path=None)
+        reordered = frozen_profile("I literally told you not to do that")
+        reordered["words"][1], reordered["words"][2] = reordered["words"][2], reordered["words"][1]
+        self.assertTrue(caption_truth.lexical_freeze_issues(reordered))
+        tampered = frozen_profile("I literally told you not to do that")
+        tampered["caption_quality"]["lexical"]["frozen_tokens"][4] = "now"
+        self.assertIn("signature", caption_truth.lexical_freeze_issues(tampered)[0])
 
-    def test_a_word_holding_several_spoken_tokens_is_judged_by_its_tokens(self) -> None:
-        data = profile("not allowed back to the mall ever okay per management", "A", {})
-        words = data["words"]
-        merged = dict(words[5], word="mall ever", edited_end=words[6]["edited_end"])
-        data["words"] = words[:5] + [merged] + words[7:]
-        unresolved(data, [("not allowed back to the mall ever okay for management", ["asr_1", "asr_2", "asr_5"]),
-                          ("yes sir ok", ["asr_4"]), ("", ["asr_3"])])
-        self.assertEqual(flagged(data), ["per"])
+    def test_recorded_verified_name_spelling_is_the_only_allowed_difference(self) -> None:
+        data = frozen_profile("hey Tyler come here")
+        data["words"][1]["word"] = "Tyla"
+        data["words"][1]["name_lock"] = {"from": "Tyler", "to": "Tyla"}
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
+        data["words"][1]["name_lock"] = {"from": "Taylor", "to": "Tyla"}
+        self.assertTrue(caption_truth.lexical_freeze_issues(data))
 
-    def test_a_prompted_only_majority_is_not_confirmation(self) -> None:
-        sentence = "that was the big 5 moment"
-        data = unresolved(profile(sentence, "A", {}), [
-            (sentence, ["asr_3", "asr_4", "asr_5"]), ("that was the big file moment", ["asr_1", "asr_2"])])
-        self.assertEqual(flagged(data), ["5"])
+    def test_ambient_word_omission_by_speaker_assignment_is_not_a_rewrite(self) -> None:
+        data = frozen_profile("crowd noise then I said hello")
+        data["words"] = data["words"][2:]                                        # a proven ambient turn dropped
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
 
-    def test_few_recorded_ears_keep_whole_region_flagging(self) -> None:
-        sentence = "honestly that was crazy man"
-        data = unresolved(profile(sentence, "A", {}), [("that was crazy", ["asr_1"]), ("that is lazy", ["asr_2"])])
-        self.assertEqual(flagged(data), ["that", "was", "crazy"])
+    def test_lexical_decisions_map_to_words_by_span_id(self) -> None:
+        span = {"span_id": "c0_d0", "from": "top", "to": "stop", "changed": True, "resolved": True,
+                "decided_by": "caption_judge", "confidence": 0.9, "supporting_ears": ["fallback_local"],
+                "audio_window": [0.0, 3.0]}
+        data = frozen_profile("please stop it now", spans=[span])
+        data["words"][1]["lexical_span"] = "c0_d0"
+        rows = caption_truth.lexical_decision_rows(data, data["words"])
+        self.assertEqual((rows[0]["word_ids"], rows[0]["from"], rows[0]["to"], rows[0]["decided_by"]),
+                         ([1], "top", "stop", "caption_judge"))
+        self.assertAlmostEqual(rows[0]["paced_start"], data["words"][1]["edited_start"])
 
 
 class PresentationAndGateTests(unittest.TestCase):
@@ -333,8 +430,11 @@ class PresentationAndGateTests(unittest.TestCase):
                 self.assertLessEqual(len(page.lines), 2)
 
     def test_gate_never_passes_a_run_with_a_fallback(self) -> None:
+        # Truth / verified-render fallbacks BLOCK; presentation-quality fallbacks are
+        # never silent and never a clean pass (at best "passed_with_warnings").
         run = v6_runtime.V6Run(enabled=True)
         run.fallback("face_tracking", "opencv not installed", "center_safe_framing")
+        run.fallback("caption_truth", "profile missing", "unfrozen_asr_captions")
         with tempfile.TemporaryDirectory() as tmp:
             gate = v6_runtime.final_quality_gate(
                 run=run, final_output=Path(tmp) / "missing.mp4", profile_path=None, truth_path=None,
@@ -342,12 +442,51 @@ class PresentationAndGateTests(unittest.TestCase):
                 story_intact=(False, "not prepared"), intro_handoff=None, render_status="baseline")
         self.assertEqual(gate["status"], v6_runtime.GATE_FAILED)
         checks = {c["check"]: c for c in gate["checks"]}
-        self.assertEqual(checks["no_silent_fallback"]["status"], "fail")
-        self.assertIn("face_tracking->center_safe_framing", checks["no_silent_fallback"]["detail"])
+        self.assertEqual(checks["no_blocking_fallback"]["status"], "fail")
+        self.assertIn("caption_truth->unfrozen_asr_captions", checks["no_blocking_fallback"]["detail"])
+        self.assertEqual(checks["presentation_degradations"]["status"], "warn")
+        self.assertIn("face_tracking->center_safe_framing", checks["presentation_degradations"]["detail"])
         for name in ("output_file", "caption_truth_frozen", "camera_pixels_main", "v6_render_path"):
             self.assertEqual(checks[name]["status"], "fail", name)
         run.gate = gate
         self.assertTrue(any(line.startswith("[MIMIR_V6_FALLBACK] face_tracking") for line in run.console_lines()))
+        for subsystem in v6_runtime.BLOCKING_FALLBACKS:
+            with self.subTest(subsystem=subsystem):
+                blocking = v6_runtime.V6Run(enabled=True)
+                blocking.fallback(subsystem, "x", "y")
+                gate = v6_runtime.final_quality_gate(
+                    run=blocking, final_output=Path("missing.mp4"), profile_path=None, truth_path=None,
+                    burned_ass=None, prep=None, main_proof=None, final_proof=None, intro_proof=None,
+                    story_intact=(True, ""), intro_handoff=None, render_status="pro_edit")
+                self.assertIn("no_blocking_fallback", gate["failed"])
+
+    def test_a_degraded_run_is_never_reported_as_a_clean_pass(self) -> None:
+        run = v6_runtime.V6Run(enabled=True)
+        run.fallback("face_tracking", "no faces", "center_safe_framing")
+        passing = mock.patch.multiple(
+            v6_runtime,
+            check_output=lambda *a, **k: v6_runtime._check("output_file", "pass"),
+            check_caption_truth=lambda *a, **k: [v6_runtime._check("caption_truth_frozen", "pass")],
+            check_burned_names=lambda *a, **k: v6_runtime._check("verified_names", "pass"),
+            check_presentation=lambda *a, **k: v6_runtime._check("caption_presentation", "pass"),
+            check_camera=lambda *a, **k: [v6_runtime._check("camera_plan", "pass")],
+            check_geometry=lambda *a, **k: v6_runtime._check("story_regions_visible", "pass"),
+        )
+        prep = mock.Mock(presentation_ass=Path("p.ass"))
+        with passing:
+            gate = v6_runtime.final_quality_gate(
+                run=run, final_output=Path("f.mp4"), profile_path=None, truth_path=None, burned_ass=None, prep=prep,
+                main_proof={"status": "passed"}, final_proof={"status": "passed"}, intro_proof=None,
+                story_intact=(True, "ok"), intro_handoff={"status": "verified"}, render_status="pro_edit",
+                qc_rows=[{"check": "caption_words_timing", "status": "pass"}])
+            self.assertEqual(gate["status"], "passed_with_warnings")
+            self.assertEqual(gate["warnings"], ["presentation_degradations"])
+            failing_qc = v6_runtime.final_quality_gate(
+                run=run, final_output=Path("f.mp4"), profile_path=None, truth_path=None, burned_ass=None, prep=prep,
+                main_proof={"status": "passed"}, final_proof={"status": "passed"}, intro_proof=None,
+                story_intact=(True, "ok"), intro_handoff={"status": "verified"}, render_status="pro_edit",
+                qc_rows=[{"check": "no_captions_in_intro", "status": "fail"}])
+            self.assertEqual(failing_qc["status"], v6_runtime.GATE_FAILED)
 
     def test_final_proof_is_never_a_pass_when_the_main_render_verified_nothing(self) -> None:
         self.assertIsNone(v6_runtime.untraceable_final_proof({"status": "passed"}))

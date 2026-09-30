@@ -124,10 +124,10 @@ CATEGORY_HINTS: dict[str, tuple[str, ...]] = {
         "awkward", "cricket", "silence", "dead air", "stare",
     ),
     "hype": (
-        "lets go", "let's go", "hype", "scream", "celebration", "kai reaction",
+        "lets go", "let's go", "hype", "scream", "celebration", "hype reaction",
     ),
     "fear_shock": (
-        "jumpscare", "jump scare", "shock", "scream", "scared", "caseoh",
+        "jumpscare", "jump scare", "shock", "scream", "scared",
     ),
     "wholesome_ironic": (
         "aww so cute", "so cute", "cute", "wholesome", "aww",
@@ -271,8 +271,11 @@ def _scan_library() -> list[dict[str, Any]]:
 
 
 def _validate_slot_package(package: dict[str, Any]) -> None:
-    if package.get("version") != 3:
-        raise RuntimeError("Local SFX Discovery V4, Meme Analyzer V3 çıktısı bekliyor.")
+    from ai.editor import meme_analyzer
+
+    if package.get("version") != meme_analyzer.MEME_ANALYZER_VERSION:
+        raise RuntimeError(
+            f"Local SFX Discovery, Meme Analyzer V{meme_analyzer.MEME_ANALYZER_VERSION} çıktısı bekliyor.")
     if not isinstance(package.get("clips"), list):
         raise RuntimeError("Meme slot JSON içinde 'clips' listesi yok.")
 

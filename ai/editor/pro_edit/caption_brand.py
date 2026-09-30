@@ -37,10 +37,15 @@ _FLAT_COLOURS = {
     "speaker_tertiary_color": ("tertiary", "text"), "speaker_tertiary_active_color": ("tertiary", "active"),
     "speaker_tertiary_emphasis_color": ("tertiary", "emphasis"),
 }
+# Colour of a word whose voice is uncertain inside a multi-voice clip.
+_NEUTRAL_COLOURS = {
+    "speaker_neutral_color": "text", "speaker_neutral_active_color": "active",
+    "speaker_neutral_emphasis_color": "emphasis",
+}
 _KEYS = frozenset({
     "profile_id", "version", "font_family", "optional_font_path", "outline_color", "outline_scale", "shadow_scale",
     "caption_anchor_policy", "safe_width_ratio", "default_style", "allowed_primitives", "backplate_color",
-    "backplate_opacity", "primitive_budget", "legibility", *_FLAT_COLOURS,
+    "backplate_opacity", "primitive_budget", "legibility", *_FLAT_COLOURS, *_NEUTRAL_COLOURS,
 })
 ANCHOR_POLICIES = ("auto", "bottom")
 # auto: legibility analysis may boost outline / add shadow / add a (budgeted) plate;
@@ -85,7 +90,7 @@ class BrandProfile:
     version: int
     font_family: str
     optional_font_path: str | None
-    lanes: Mapping[str, LaneColours]
+    lanes: Mapping[str, LaneColours]          # lane STYLE lines (where a page sits)
     outline_color: str                        # style form &HAABBGGRR
     outline_scale: float = 1.0
     shadow_scale: float = 1.0
@@ -97,6 +102,8 @@ class BrandProfile:
     backplate_alpha: int = 0x8C               # ASS alpha (0 = opaque, 255 = invisible)
     budget: PrimitiveBudget = field(default_factory=PrimitiveBudget)
     legibility: str = "auto"
+    # Explicit speaker colours ("C", "neutral"); missing ones follow speaker_colours().
+    speakers: Mapping[str, LaneColours] = field(default_factory=dict)
 
     @property
     def is_default(self) -> bool:
@@ -113,6 +120,9 @@ class BrandProfile:
             "safe_width_ratio": self.safe_width_ratio, "default_style": self.default_style.value,
             "allowed_primitives": sorted(p.value for p in self.allowed_primitives),
             "budget": self.budget.to_dict(), "legibility": self.legibility,
+            "speakers": {key or "plain": {"text": _hex_from_ass(c.text), "active": _hex_from_ass(c.active),
+                                          "emphasis": _hex_from_ass(c.emphasis)}
+                         for key, c in speaker_colours(self).items()},
         }
 
 
@@ -123,6 +133,32 @@ def _v31_colour(value: str) -> str:
 
 _MAIN = LaneColours(caption_truth.BASE_TEXT_COLOR, _v31_colour(caption_truth.INACTIVE_TEXT_COLOR),
                     _v31_colour(caption_truth.ACTIVE_TEXT_COLOR), _v31_colour(caption_truth.HIGHLIGHT_TEXT_COLOR))
+_THIRD_VOICE = LaneColours(caption_truth.TERTIARY_BASE_TEXT_COLOR, _v31_colour(caption_truth.TERTIARY_BASE_TEXT_COLOR),
+                           _v31_colour(caption_truth.TERTIARY_ACTIVE_TEXT_COLOR),
+                           _v31_colour(caption_truth.TERTIARY_HIGHLIGHT_TEXT_COLOR))
+_NEUTRAL_VOICE = LaneColours(caption_truth.NEUTRAL_BASE_TEXT_COLOR, _v31_colour(caption_truth.NEUTRAL_BASE_TEXT_COLOR),
+                             _v31_colour(caption_truth.NEUTRAL_ACTIVE_TEXT_COLOR),
+                             _v31_colour(caption_truth.NEUTRAL_HIGHLIGHT_TEXT_COLOR))
+
+
+def _with_roles(colours: LaneColours, roles: Mapping[str, str]) -> LaneColours:
+    """``colours`` with the given roles (text / active / emphasis / style_primary) replaced."""
+    values = {"style_primary": colours.style_primary, "text": colours.text, "active": colours.active,
+              "emphasis": colours.emphasis, **roles}
+    return LaneColours(values["style_primary"], values["text"], values["active"], values["emphasis"])
+
+
+def speaker_colours(brand: "BrandProfile") -> dict[str, LaneColours]:
+    """Speaker colour key -> colours. A colour names a VOICE (captions V25), never
+    a lane: "" (plain look) and "A" are the main colours, "B" the secondary
+    colours, "C" a third palette, "neutral" an uncertain voice (no hue)."""
+    return {
+        "": brand.lanes["main"],
+        "A": brand.lanes["main"],
+        "B": brand.lanes["secondary"],
+        "C": brand.speakers.get("C", _THIRD_VOICE),
+        "neutral": brand.speakers.get("neutral", _NEUTRAL_VOICE),
+    }
 MIMIR_DEFAULT = BrandProfile(
     profile_id="mimir_default", version=1, font_family=caption_truth.FONT_NAME, optional_font_path=None,
     lanes={
@@ -205,6 +241,24 @@ def parse_brand(data: Any, *, base: BrandProfile = MIMIR_DEFAULT) -> BrandProfil
                 lanes["tertiary"][role] = lanes["main"][role]
         if ("tertiary", "text") not in explicit:
             lanes["tertiary"]["style_primary"] = lanes["main"]["style_primary"]
+    # Voice C takes only the tertiary roles the profile sets; every other role
+    # keeps the third-voice palette. The tertiary LANE's main-palette parity
+    # must never make voice C look like A.
+    speakers = dict(base.speakers)
+    third = {role: lanes["tertiary"][role] for lane, role in explicit if lane == "tertiary"}
+    if third:
+        if "text" in third:
+            third["style_primary"] = lanes["tertiary"]["style_primary"]
+        speakers["C"] = _with_roles(speakers.get("C", _THIRD_VOICE), third)
+    neutral: dict[str, str] = {}
+    for key, role in _NEUTRAL_COLOURS.items():
+        value = _colour(data, key)
+        if value is not None:
+            neutral[role] = ass_colour(value)
+            if role == "text":
+                neutral["style_primary"] = ass_style_colour(value)
+    if neutral:
+        speakers["neutral"] = _with_roles(speakers.get("neutral", _NEUTRAL_VOICE), neutral)
     outline = _colour(data, "outline_color")
     anchor = str(data.get("caption_anchor_policy", base.caption_anchor_policy))
     if anchor not in ANCHOR_POLICIES:
@@ -242,6 +296,7 @@ def parse_brand(data: Any, *, base: BrandProfile = MIMIR_DEFAULT) -> BrandProfil
         default_style=CaptionStyle(default_style), allowed_primitives=allowed,
         backplate_color=ass_colour(backplate) if backplate else base.backplate_color,
         backplate_alpha=int(round((1.0 - opacity) * 255)), budget=budget, legibility=str(legibility),
+        speakers=speakers,
     )
 
 

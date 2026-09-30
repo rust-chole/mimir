@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -36,13 +36,13 @@ INTRO_DIR = (
 # ============================================================
 
 INTRO_ANALYZER_VERSION = 1
-INTRO_ANALYZER_REVISION = 6
+INTRO_ANALYZER_REVISION = 7
 
 # No intro is better than a bad intro.
 MIN_RECOMMENDED_SCORE = 8.0
 
-# Terra tek Ã§aÄŸrÄ±da birkaÃ§ farklÄ± hook Ã¼retir, sonra ayrÄ± bir final-judge
-# Ã§aÄŸrÄ±sÄ±yla aralarÄ±ndan seÃ§im yapar.
+# Terra tek çağrıda birkaç farklı hook üretir, sonra ayrı bir final-judge
+# çağrısıyla aralarından seçim yapar.
 CANDIDATE_COUNT = 4
 MAX_AI_ATTEMPTS = 2
 MAX_FINAL_REPAIR_ROUNDS = 1
@@ -53,8 +53,8 @@ MAX_INTRO_WORDS = 8
 
 MAX_INTRO_CHARACTERS = 46
 
-# Hook artÄ±k ayrÄ± bir kart deÄŸil; seÃ§ilmiÅŸ moving teaser'Ä±n Ã¼stÃ¼nde duruyor.
-# SÃ¼re yalnÄ±zca text hold hint'idir, videoya ekstra intro sÃ¼resi eklemez.
+# Hook artık ayrı bir kart değil; seçilmiş moving teaser'ın üstünde duruyor.
+# Süre yalnızca text hold hint'idir, videoya ekstra intro süresi eklemez.
 MIN_INTRO_DURATION = 1.15
 MAX_INTRO_DURATION = 2.10
 
@@ -244,14 +244,21 @@ You are NOT selecting a new clip and you are NOT rewriting the teaser.
 
 The real render structure is:
 
-    [MOVING CLEAN TEASER + YOUR HOOK TEXT]
-                    â†“
-        [SHORT SMOOTH RESTART TRANSITION]
-                    â†“
+    [MOVING CLEAN PEAK FOOTAGE + REAL AUDIO + YOUR HOOK TEXT]
+                    ↓
+                HARD RESTART
+                    ↓
         [MAIN CLIP FROM TRUE BEGINNING]
 
-There is NO separate frozen intro card.
-Your line appears directly on the moving teaser scene.
+There is NO separate frozen intro card and there are no speech captions during
+the cold open: your line is the only text on the moving peak.
+
+TRUTH RULES (checked by software; violating candidates are discarded):
+- every fact must be supported by the transcript or the visual evidence;
+- never state a number that is not in the evidence;
+- never name a person, channel or brand unless it is a VERIFIED name given to
+  you; describe people by role ("HE", "HIS FRIEND", "THE STREAMER") instead;
+- no generic clickbait ("YOU WON'T BELIEVE", "WAIT FOR IT", "WATCH WHAT HAPPENS").
 
 Your job is to find the ONE strongest ATTENTION TARGET inside the evidence
 and write one short hook line that points the viewer toward that target
@@ -282,7 +289,7 @@ actual peak event that will be shown in the intro.
 
 
 ============================================================
-STEP 1 â€” FIND THE ATTENTION TARGET
+STEP 1 — FIND THE ATTENTION TARGET
 ============================================================
 
 Before writing the line, decide what the viewer should become curious about.
@@ -342,7 +349,15 @@ Your job is to protect the final Short.
 
 Core rule:
 
-    NO INTRO IS BETTER THAN A BAD INTRO.
+    NO HEADLINE IS BETTER THAN A BAD HEADLINE.
+
+Rejecting every candidate does NOT remove the cold open: the moving peak
+footage still plays with its real audio, just without text. So never accept a
+candidate merely to have a headline.
+
+Reject any candidate that states something the transcript/visual evidence does
+not show, contradicts what the peak footage shows, invents or guesses a name,
+invents a number, or spoils the payoff.
 
 Score every candidate from 0 to 10.
 
@@ -399,7 +414,7 @@ def load_json(
     if not path.exists():
 
         raise FileNotFoundError(
-            f"JSON bulunamadÄ±:\n{path}"
+            f"JSON bulunamadı:\n{path}"
         )
 
     with path.open(
@@ -417,7 +432,7 @@ def load_json(
     ):
 
         raise RuntimeError(
-            f"JSON root object deÄŸil:\n{path}"
+            f"JSON root object değil:\n{path}"
         )
 
     return data
@@ -495,7 +510,7 @@ def validate_teaser_package(
     ) != 1:
 
         raise RuntimeError(
-            "Intro Analyzer, Teaser Analyzer V1 Ã§Ä±ktÄ±sÄ± bekliyor."
+            "Intro Analyzer, Teaser Analyzer V1 çıktısı bekliyor."
         )
 
     teasers = package.get(
@@ -511,7 +526,7 @@ def validate_teaser_package(
     ):
 
         raise RuntimeError(
-            "Teaser JSON iÃ§inde 'teasers' listesi bulunamadÄ±."
+            "Teaser JSON içinde 'teasers' listesi bulunamadı."
         )
 
     inputs = package.get(
@@ -524,7 +539,7 @@ def validate_teaser_package(
     ):
 
         raise RuntimeError(
-            "Teaser JSON iÃ§inde 'inputs' bulunamadÄ±."
+            "Teaser JSON içinde 'inputs' bulunamadı."
         )
 
     for key in (
@@ -558,7 +573,7 @@ def validate_timeline(
     ) != 3:
 
         raise RuntimeError(
-            "Intro Analyzer yalnÄ±zca Timeline V3 ile Ã§alÄ±ÅŸÄ±r."
+            "Intro Analyzer yalnızca Timeline V3 ile çalışır."
         )
 
     timelines = timeline.get(
@@ -574,7 +589,7 @@ def validate_timeline(
     ):
 
         raise RuntimeError(
-            "Timeline V3 iÃ§inde 'timelines' listesi bulunamadÄ±."
+            "Timeline V3 içinde 'timelines' listesi bulunamadı."
         )
 
 
@@ -595,7 +610,7 @@ def validate_transcript(
     ):
 
         raise RuntimeError(
-            "Transcript segment iÃ§ermiyor."
+            "Transcript segment içermiyor."
         )
 
 
@@ -629,14 +644,14 @@ def get_referenced_paths(
     if not timeline_path.exists():
 
         raise FileNotFoundError(
-            "Teaser JSON'un referans verdiÄŸi Timeline bulunamadÄ±:\n"
+            "Teaser JSON'un referans verdiği Timeline bulunamadı:\n"
             f"{timeline_path}"
         )
 
     if not transcript_path.exists():
 
         raise FileNotFoundError(
-            "Teaser JSON'un referans verdiÄŸi Transcript bulunamadÄ±:\n"
+            "Teaser JSON'un referans verdiği Transcript bulunamadı:\n"
             f"{transcript_path}"
         )
 
@@ -695,8 +710,8 @@ def get_teaser(
             return teaser
 
     raise IndexError(
-        f"Teaser JSON iÃ§inde "
-        f"clip_index={clip_index} bulunamadÄ±."
+        f"Teaser JSON içinde "
+        f"clip_index={clip_index} bulunamadı."
     )
 
 
@@ -749,8 +764,8 @@ def get_timeline_clip(
             return clip
 
     raise IndexError(
-        f"Timeline iÃ§inde "
-        f"clip_index={clip_index} bulunamadÄ±."
+        f"Timeline içinde "
+        f"clip_index={clip_index} bulunamadı."
     )
 
 
@@ -765,8 +780,8 @@ def resolve_verified_creator_name(
     manual_creator_name: str | None = None,
 ) -> str | None:
 
-    # CLI'dan kullanÄ±cÄ± aÃ§Ä±kÃ§a isim girdiyse
-    # en gÃ¼venilir kaynak bu.
+    # CLI'dan kullanıcı açıkça isim girdiyse
+    # en güvenilir kaynak bu.
     if manual_creator_name:
 
         value = normalize_spaces(
@@ -952,7 +967,7 @@ def build_clip_transcript(
     if not lines:
 
         raise RuntimeError(
-            "Clip iÃ§in transcript context oluÅŸturulamadÄ±."
+            "Clip için transcript context oluşturulamadı."
         )
 
     return "\n".join(
@@ -1624,7 +1639,7 @@ def _parse_structured_response(
 
     if not output_text:
         raise RuntimeError(
-            f"AI boÅŸ {label} Ã§Ä±ktÄ±sÄ± dÃ¶ndÃ¼rdÃ¼."
+            f"AI boş {label} çıktısı döndürdü."
         )
 
     try:
@@ -1633,7 +1648,7 @@ def _parse_structured_response(
         )
     except json.JSONDecodeError as error:
         raise RuntimeError(
-            f"AI geÃ§ersiz {label} JSON dÃ¶ndÃ¼rdÃ¼:\n\n"
+            f"AI geçersiz {label} JSON döndürdü:\n\n"
             + output_text
         ) from error
 
@@ -1642,7 +1657,7 @@ def _parse_structured_response(
         dict,
     ):
         raise RuntimeError(
-            f"AI {label} Ã§Ä±ktÄ±sÄ± object deÄŸil."
+            f"AI {label} çıktısı object değil."
         )
 
     return data
@@ -1707,7 +1722,7 @@ def request_intro_candidates(
         list,
     ):
         raise RuntimeError(
-            "AI candidates listesi dÃ¶ndÃ¼rmedi."
+            "AI candidates listesi döndürmedi."
         )
 
     return [
@@ -1794,10 +1809,105 @@ def request_final_judgement(
 # COPY VALIDATION
 # ============================================================
 
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100, "thousand": 1000,
+    "million": 1000000, "billion": 1000000000, "first": 1, "second": 2, "third": 3,
+}
+_SENTENCE_START = re.compile(r"(?:^|[.!?]\s+|\]\s*)$")
+
+
+def _numbers_in(text: str) -> set[str]:
+    """Numeric claims of a text as canonical strings ("1,000"/"1000"/"thousand" -> "1000")."""
+    values: set[str] = set()
+    for token in re.findall(r"[\d][\d,.]*[kKmM]?", str(text)):
+        raw = token.rstrip(".,")
+        multiplier = 1
+        if raw[-1:] in "kK":
+            multiplier, raw = 1000, raw[:-1]
+        elif raw[-1:] in "mM":
+            multiplier, raw = 1000000, raw[:-1]
+        try:
+            number = float(raw.replace(",", "")) * multiplier
+        except ValueError:
+            continue
+        values.add(str(int(number)) if number == int(number) else str(number))
+    for word in re.findall(r"[A-Za-z]+", str(text)):
+        value = _NUMBER_WORDS.get(word.casefold())
+        if value is not None:
+            values.add(str(value))
+    return values
+
+
+# Capitalized for grammar/devotion/address, not identity (generic English).
+_CAPITALIZED_COMMON = frozenset({"god", "jesus", "christ", "lord", "chat", "bro", "sir", "mom", "dad", "okay"})
+
+
+def evidence_proper_nouns(evidence_text: str) -> set[str]:
+    """Words the evidence writes capitalized mid-sentence (names, brands, places).
+
+    Sentence-initial words, the pronoun "I", capitalized interjections/address
+    words and words the evidence also writes in lowercase are ignored: their
+    capital is grammar, not identity."""
+    nouns: set[str] = set()
+    text = str(evidence_text)
+    lowercase = {word for word in re.findall(r"\b[a-z][a-z'\-]+", text)}
+    for match in re.finditer(r"[A-Za-z][A-Za-z'\-]+", text):
+        word = match.group(0)
+        if not word[0].isupper() or word.isupper() and len(word) <= 2:
+            continue
+        before = text[max(0, match.start() - 3):match.start()]
+        if _SENTENCE_START.search(text[:match.start()]) or before.endswith(("\n", ": ", "] ")):
+            continue
+        key = word.casefold().strip("'-")
+        if key in _CAPITALIZED_COMMON or key in lowercase:
+            continue
+        nouns.add(key)
+    return nouns
+
+
+def headline_grounding_problems(
+    text: str,
+    *,
+    evidence_text: str,
+    verified_names: list[str] | tuple[str, ...] = (),
+) -> list[str]:
+    """Deterministic truth checks for hook copy (the judge still scores quality).
+
+    * every number the headline states must appear in the evidence;
+    * a word the evidence uses as a proper noun (a person, channel, brand...)
+      may appear only when it is a verified name - an ASR-heard name can be a
+      mishearing, and a headline must never guess who someone is.
+    """
+    problems: list[str] = []
+    if not str(evidence_text).strip():
+        return problems
+    missing_numbers = sorted(_numbers_in(text) - _numbers_in(evidence_text))
+    if missing_numbers:
+        problems.append("headline states number(s) not in the evidence: " + ", ".join(missing_numbers[:4]))
+    verified = {
+        part.casefold()
+        for name in verified_names
+        for part in re.findall(r"[A-Za-z][A-Za-z'\-]+", str(name))
+    }
+    nouns = evidence_proper_nouns(evidence_text)
+    for word in re.findall(r"[A-Za-z][A-Za-z'\-]+", str(text)):
+        key = word.casefold().strip("'-")
+        if len(key) >= 3 and key in nouns and key not in verified:
+            problems.append(f"headline uses unverified name/proper noun: {word}")
+            break
+    return problems
+
+
 def validate_intro_choice(
     ai_result: dict[str, Any],
     teaser_text: str,
     creator_name: str | None,
+    *,
+    evidence_text: str = "",
+    verified_names: list[str] | tuple[str, ...] = (),
 ) -> tuple[
     bool,
     list[str],
@@ -1818,7 +1928,7 @@ def validate_intro_choice(
     if not text:
 
         problems.append(
-            "intro_text boÅŸ"
+            "intro_text boş"
         )
 
         return (
@@ -1838,7 +1948,7 @@ def validate_intro_choice(
 
         problems.append(
             (
-                f"intro Ã§ok kÄ±sa: "
+                f"intro çok kısa: "
                 f"{len(words)} kelime"
             )
         )
@@ -1852,7 +1962,7 @@ def validate_intro_choice(
 
         problems.append(
             (
-                f"intro Ã§ok uzun: "
+                f"intro çok uzun: "
                 f"{len(words)} kelime"
             )
         )
@@ -1879,7 +1989,7 @@ def validate_intro_choice(
         teaser_text
     )
 
-    # AynÄ± cÃ¼mle olamaz.
+    # Aynı cümle olamaz.
     if (
         intro_compare
         and intro_compare
@@ -1887,10 +1997,10 @@ def validate_intro_choice(
     ):
 
         problems.append(
-            "intro teaser cÃ¼mlesini aynen tekrar ediyor"
+            "intro teaser cümlesini aynen tekrar ediyor"
         )
 
-    # BÃ¼yÃ¼k oranda teaser cÃ¼mlesini yeniden yazÄ±yorsa da reddet.
+    # Büyük oranda teaser cümlesini yeniden yazıyorsa da reddet.
     if teaser_compare:
 
         intro_tokens = set(
@@ -1939,7 +2049,7 @@ def validate_intro_choice(
 
     if len(curiosity_target.split()) < 3:
         problems.append(
-            "curiosity_target yeterince spesifik deÄŸil"
+            "curiosity_target yeterince spesifik değil"
         )
 
     generic_targets = (
@@ -1953,7 +2063,7 @@ def validate_intro_choice(
 
     if curiosity_target.casefold() in generic_targets:
         problems.append(
-            "curiosity_target generic kalmÄ±ÅŸ"
+            "curiosity_target generic kalmış"
         )
 
     upper_text = (
@@ -1980,14 +2090,14 @@ def validate_intro_choice(
     if (
         '"'
         in text
-        or "â€œ"
+        or "“"
         in text
-        or "â€"
+        or "”"
         in text
     ):
 
         problems.append(
-            "tÄ±rnak iÅŸareti kullanÄ±lmamalÄ±"
+            "tırnak işareti kullanılmamalı"
         )
 
     if (
@@ -1996,7 +2106,7 @@ def validate_intro_choice(
     ):
 
         problems.append(
-            "hashtag kullanÄ±lmamalÄ±"
+            "hashtag kullanılmamalı"
         )
 
     # --------------------------------------------------------
@@ -2024,7 +2134,7 @@ def validate_intro_choice(
         if not creator_name:
 
             problems.append(
-                "doÄŸrulanmÄ±ÅŸ creator adÄ± yokken Ã¶zel isim kullanÄ±lmÄ±ÅŸ"
+                "doğrulanmış creator adı yokken özel isim kullanılmış"
             )
 
         elif (
@@ -2033,7 +2143,7 @@ def validate_intro_choice(
         ):
 
             problems.append(
-                "specific_name doÄŸrulanmÄ±ÅŸ creator adÄ±yla eÅŸleÅŸmiyor"
+                "specific_name doğrulanmış creator adıyla eşleşmiyor"
             )
 
         elif (
@@ -2042,7 +2152,7 @@ def validate_intro_choice(
         ):
 
             problems.append(
-                "uses_specific_name=true ama isim intro_text iÃ§inde yok"
+                "uses_specific_name=true ama isim intro_text içinde yok"
             )
 
     else:
@@ -2050,8 +2160,16 @@ def validate_intro_choice(
         if specific_name:
 
             problems.append(
-                "uses_specific_name=false iken specific_name boÅŸ olmalÄ±"
+                "uses_specific_name=false iken specific_name boş olmalı"
             )
+
+    problems.extend(
+        headline_grounding_problems(
+            text,
+            evidence_text=evidence_text,
+            verified_names=[name for name in (creator_name, *verified_names) if name],
+        )
+    )
 
     return (
         len(
@@ -2085,8 +2203,8 @@ def calculate_intro_duration(
         text
     )
 
-    # Bu sÃ¼re videoya ekstra bir kart eklemiyor.
-    # Renderer hook'u moving teaser Ã¼stÃ¼nde bu kadar tutmaya Ã§alÄ±ÅŸÄ±yor.
+    # Bu süre videoya ekstra bir kart eklemiyor.
+    # Renderer hook'u moving teaser üstünde bu kadar tutmaya çalışıyor.
     if word_count <= 3:
         duration = 1.20
     elif word_count == 4:
@@ -2173,10 +2291,10 @@ def calculate_freeze_frame_time(
             )
         )
 
-    # Åimdilik teaser konuÅŸmasÄ±nÄ±n yaklaÅŸÄ±k %42 noktasÄ±ndan
-    # deterministic bir freeze frame alÄ±yoruz.
+    # Şimdilik teaser konuşmasının yaklaşık %42 noktasından
+    # deterministic bir freeze frame alıyoruz.
     #
-    # GÃ¶rsel analiz olmadÄ±ÄŸÄ± iÃ§in "en iyi yÃ¼z ifadesi" gibi
+    # Görsel analiz olmadığı için "en iyi yüz ifadesi" gibi
     # sahte bir iddiada bulunmuyoruz.
 
     frame_time = (
@@ -2212,6 +2330,10 @@ def _build_no_intro_result(
     candidate_scores: list[dict[str, Any]],
     repair_rounds_used: int,
 ) -> dict[str, Any]:
+    """The cold open still runs (moving peak + real audio); it just carries no headline.
+
+    A strong peak with no headline is preferable to a generic, ungrounded or
+    low-scoring headline."""
 
     return {
         "clip_index": clip_index,
@@ -2221,8 +2343,9 @@ def _build_no_intro_result(
                 "",
             )
         ),
-        "recommended": False,
+        "recommended": True,
         "ai_recommended": False,
+        "headline_status": "none",
         "score": round(
             score,
             1,
@@ -2238,7 +2361,8 @@ def _build_no_intro_result(
         "curiosity_target": "",
         "quality_gate": {
             "threshold": MIN_RECOMMENDED_SCORE,
-            "accepted": False,
+            "accepted": True,
+            "no_headline": True,
             "candidate_count": len(
                 candidates
             ),
@@ -2275,11 +2399,14 @@ def _build_no_intro_result(
             "style": "moving_teaser",
         },
         "sequence": [
-            "main_clip",
+            "moving_peak_without_headline",
+            "hard_main_clip_restart",
         ],
         "render_plan": {
-            "restart_main_clip_after_teaser": False,
-            "transition": "none",
+            "intro_background": "moving_teaser",
+            "then_play": "main_clip_restart",
+            "restart_main_clip_after_teaser": True,
+            "transition": "hard_cut",
         },
     }
 
@@ -2291,6 +2418,8 @@ def _collect_valid_candidates(
     creator_name: str | None,
     existing: list[dict[str, Any]],
     seen_texts: set[str],
+    evidence_text: str = "",
+    verified_names: list[str] | tuple[str, ...] = (),
 ) -> tuple[
     list[dict[str, Any]],
     list[str],
@@ -2311,6 +2440,8 @@ def _collect_valid_candidates(
                 ai_result=candidate,
                 teaser_text=teaser_text,
                 creator_name=creator_name,
+                evidence_text=evidence_text,
+                verified_names=verified_names,
             )
         )
 
@@ -2357,74 +2488,6 @@ def _collect_valid_candidates(
         added,
         rejection_notes,
     )
-
-
-def _locked_intro_fallback_candidate(clip: dict[str, Any]) -> dict[str, Any]:
-    """Build a no-API fallback hook from existing clip metadata.
-
-    V26 LOCKED INTRO rule: a usable cold-open must never disappear solely
-    because copy judgement missed the old 8/10 gate. This helper is used only
-    when the normal Luna candidate list is empty.
-    """
-    raw = normalize_spaces(str(clip.get("hook_text", "")))
-    if not raw:
-        raw = normalize_spaces(str(clip.get("title", "")))
-    if not raw:
-        raw = "WATCH WHAT HAPPENS"
-
-    words = raw.split()[:MAX_INTRO_WORDS]
-    text = " ".join(words).strip()
-    while len(text) > MAX_INTRO_CHARACTERS and len(words) > MIN_INTRO_WORDS:
-        words.pop()
-        text = " ".join(words).strip()
-    if len(text.split()) < MIN_INTRO_WORDS:
-        text = "WATCH WHAT HAPPENS"
-    if len(text) > MAX_INTRO_CHARACTERS:
-        text = text[:MAX_INTRO_CHARACTERS].rsplit(" ", 1)[0].strip()
-    if len(text.split()) < MIN_INTRO_WORDS:
-        text = "WATCH WHAT HAPPENS"
-
-    return {
-        "intro_text": text.upper(),
-        "tone": "curiosity",
-        "copy_strategy": "curiosity_gap",
-        "uses_specific_name": False,
-        "specific_name": "",
-        "reason": "V26 locked-intro deterministic fallback from existing clip metadata.",
-        "curiosity_target": "the unresolved event",
-    }
-
-
-def _locked_intro_best_index(
-    judgement: dict[str, Any],
-    candidates: list[dict[str, Any]],
-) -> int:
-    """Return a valid best-candidate index without changing the real score."""
-    if not candidates:
-        return 0
-    try:
-        selected = int(judgement.get("selected_candidate_index", 0))
-    except (TypeError, ValueError):
-        selected = 0
-    if 1 <= selected <= len(candidates):
-        return selected
-
-    best_index = 1
-    best_score = float("-inf")
-    rows = judgement.get("candidate_scores", [])
-    if isinstance(rows, list):
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            try:
-                idx = int(row.get("candidate_index", 0))
-                score = float(row.get("overall_score", float("-inf")))
-            except (TypeError, ValueError):
-                continue
-            if 1 <= idx <= len(candidates) and score > best_score:
-                best_index = idx
-                best_score = score
-    return best_index
 
 
 def _judgement_state(
@@ -2484,6 +2547,8 @@ def analyze_intro_for_clip(
     clip_index: int,
     manual_creator_name: str | None = None,
     video_support_report: dict[str, Any] | None = None,
+    verified_names: list[str] | tuple[str, ...] = (),
+    caption_text: str = "",
 ) -> dict[str, Any]:
 
     teaser = get_teaser(
@@ -2519,17 +2584,27 @@ def analyze_intro_for_clip(
         dict,
     )
 
+    # Everything a headline may claim must be visible in this evidence.
+    evidence_text = "\n".join(
+        part for part in (
+            clip_transcript,
+            caption_text,
+            str(teaser.get("teaser_text", "")),
+            gemini_context,
+        ) if part
+    )
+
     print()
     print("=" * 72)
     print(
-        f"ğŸ§² INTRO ANALYZER V4 â€” CLIP {clip_index}"
+        f"🧲 INTRO ANALYZER V4 — CLIP {clip_index}"
     )
     print(
-        f"ğŸ¤– Intro draft: {INTRO_DRAFT_MODEL} [{INTRO_DRAFT_REASONING_EFFORT}] | "
+        f"🤖 Intro draft: {INTRO_DRAFT_MODEL} [{INTRO_DRAFT_REASONING_EFFORT}] | "
         f"final judge: {INTRO_JUDGE_MODEL} [{INTRO_JUDGE_REASONING_EFFORT}]"
     )
     print(
-        "ğŸ‘ï¸ Gemini factual support: "
+        "👁️ Gemini factual support: "
         + (
             "VAR"
             if gemini_support_available
@@ -2538,10 +2613,10 @@ def analyze_intro_for_clip(
     )
     print("=" * 72)
     print(
-        f"ğŸ¬ {clip.get('title', '')}"
+        f"🎬 {clip.get('title', '')}"
     )
     print(
-        f"ğŸ”¥ Teaser: {teaser.get('teaser_text', '')}"
+        f"🔥 Teaser: {teaser.get('teaser_text', '')}"
     )
 
     valid_candidates: list[
@@ -2561,7 +2636,7 @@ def analyze_intro_for_clip(
 
         print()
         print(
-            "ğŸ§  Luna hook adaylarÄ± Ã¼retiyor "
+            "🧠 Luna hook adayları üretiyor "
             f"({attempt}/{MAX_AI_ATTEMPTS})..."
         )
 
@@ -2588,6 +2663,8 @@ def analyze_intro_for_clip(
             creator_name=creator_name,
             existing=valid_candidates,
             seen_texts=seen_texts,
+            evidence_text=evidence_text,
+            verified_names=verified_names,
         )
 
         if len(
@@ -2609,12 +2686,19 @@ def analyze_intro_for_clip(
             )
 
     if not valid_candidates:
-        fallback_candidate = _locked_intro_fallback_candidate(clip)
-        valid_candidates.append(fallback_candidate)
-        seen_texts.add(normalize_for_compare(fallback_candidate["intro_text"]))
         print(
-            "   ğŸ”’ V26 locked intro: normal hook listesi boÅŸtu; "
-            "mevcut clip metadata'sÄ±ndan deterministic fallback kullanÄ±lÄ±yor."
+            "   ⏭️ No valid, grounded hook candidate: the cold open runs without a headline."
+        )
+        return _build_no_intro_result(
+            clip=clip,
+            clip_index=clip_index,
+            creator_name=creator_name,
+            score=0.0,
+            reason="no candidate passed validation/grounding",
+            gemini_support_used=False,
+            candidates=[],
+            candidate_scores=[],
+            repair_rounds_used=0,
         )
 
     candidates = valid_candidates[
@@ -2625,8 +2709,8 @@ def analyze_intro_for_clip(
 
     print()
     print(
-        f"âš–ï¸ Terra final judge: "
-        f"{len(candidates)} aday karÅŸÄ±laÅŸtÄ±rÄ±lÄ±yor..."
+        f"⚖️ Terra final judge: "
+        f"{len(candidates)} aday karşılaştırılıyor..."
     )
 
     judgement = request_final_judgement(
@@ -2740,8 +2824,8 @@ def analyze_intro_for_clip(
 
         print()
         print(
-            "ğŸ› ï¸ Intro 8/10 repair pass: "
-            "Luna, Terra judge feedback'iyle yeni aday Ã¼retiyor..."
+            "🛠️ Intro 8/10 repair pass: "
+            "Luna, Terra judge feedback'iyle yeni aday üretiyor..."
         )
 
         repaired_raw = request_intro_candidates(
@@ -2775,6 +2859,8 @@ def analyze_intro_for_clip(
             creator_name=creator_name,
             existing=repaired_valid,
             seen_texts=repaired_seen,
+            evidence_text=evidence_text,
+            verified_names=verified_names,
         )
 
         if repaired_valid:
@@ -2827,8 +2913,8 @@ def analyze_intro_for_clip(
 
             print()
             print(
-                f"âš–ï¸ Terra repair judge: "
-                f"{len(candidates)} aday tekrar karÅŸÄ±laÅŸtÄ±rÄ±lÄ±yor..."
+                f"⚖️ Terra repair judge: "
+                f"{len(candidates)} aday tekrar karşılaştırılıyor..."
             )
 
             judgement = request_final_judgement(
@@ -2868,19 +2954,6 @@ def analyze_intro_for_clip(
         and gemini_support_available
     )
 
-    locked_intro_override = False
-    if not accepted and candidates:
-        selected_index = _locked_intro_best_index(judgement, candidates)
-        if selected_index <= 0:
-            selected_index = 1
-        accepted = True
-        locked_intro_override = True
-        print()
-        print(
-            "ğŸ”’ V26 LOCKED INTRO: hook kalite skoru "
-            f"{score:.1f}/10; gerÃ§ek skor korunuyor ama cold-open kaldÄ±rÄ±lmÄ±yor."
-        )
-
     if not accepted:
 
         rejection_reason = normalize_spaces(
@@ -2910,10 +2983,10 @@ def analyze_intro_for_clip(
 
         print()
         print(
-            "ğŸ Terra final decision:"
+            "🏁 Terra final decision:"
         )
         print(
-            f"â­ï¸ REJECTED {score:.1f}/10 â†’ intro kullanÄ±lmayacak."
+            f"⏭️ Headline REJECTED {score:.1f}/10 → cold open runs without a headline."
         )
 
         return _build_no_intro_result(
@@ -2964,11 +3037,6 @@ def analyze_intro_for_clip(
         )
     )
 
-    if locked_intro_override:
-        reason = normalize_spaces(
-            (reason + " V26 locked-intro override: cold-open preserved despite copy score.").strip()
-        )
-
     tone = str(
         selected_candidate.get(
             "tone",
@@ -3008,7 +3076,8 @@ def analyze_intro_for_clip(
             )
         ),
         "recommended": True,
-        "ai_recommended": not locked_intro_override,
+        "ai_recommended": True,
+        "headline_status": "approved",
         "score": round(
             score,
             1,
@@ -3025,7 +3094,7 @@ def analyze_intro_for_clip(
         "quality_gate": {
             "threshold": MIN_RECOMMENDED_SCORE,
             "accepted": True,
-            "locked_intro_override": locked_intro_override,
+            "no_headline": False,
             "candidate_count": len(
                 candidates
             ),
@@ -3071,7 +3140,7 @@ def analyze_intro_for_clip(
         },
         "sequence": [
             "moving_teaser_with_hook",
-            "smooth_main_clip_restart",
+            "hard_main_clip_restart",
         ],
         "render_plan": {
             "intro_background": "moving_teaser",
@@ -3079,25 +3148,25 @@ def analyze_intro_for_clip(
             "freeze_frame_time": freeze_frame_time,
             "then_play": "main_clip_restart",
             "restart_main_clip_after_teaser": True,
-            "transition": "short_smooth_crossfade",
+            "transition": "hard_cut",
         },
     }
 
     print()
     print(
-        "ğŸ Terra final decision:"
+        "🏁 Terra final decision:"
     )
     print(
-        f"âœ… ACCEPTED {score:.1f}/10 â†’ {final_text}"
+        f"✅ ACCEPTED {score:.1f}/10 → {final_text}"
     )
     print(
-        f"ğŸ¯ Hard threshold: "
+        f"🎯 Hard threshold: "
         f"{MIN_RECOMMENDED_SCORE:.1f}/10"
     )
 
     if repair_rounds_used:
         print(
-            "ğŸ› ï¸ 8/10 repair pass kullanÄ±ldÄ±."
+            "🛠️ 8/10 repair pass kullanıldı."
         )
 
     return result
@@ -3239,6 +3308,8 @@ def analyze_intros(
     clip_index: int | None = None,
     manual_creator_name: str | None = None,
     video_report_path: str | Path | None = None,
+    verified_names: list[str] | tuple[str, ...] = (),
+    caption_text: str = "",
 ) -> dict[str, Any]:
 
     teaser_json_path = Path(
@@ -3301,6 +3372,8 @@ def analyze_intros(
                 clip_index=clip_index,
                 manual_creator_name=manual_creator_name,
                 video_support_report=video_support_report,
+                verified_names=verified_names,
+                caption_text=caption_text,
             )
         )
 
@@ -3366,11 +3439,11 @@ def analyze_intros(
     )
 
     print(
-        "âœ… INTRO ANALYZER â€” MOVING TEASER HOOK TAMAMLANDI"
+        "✅ INTRO ANALYZER — MOVING TEASER HOOK TAMAMLANDI"
     )
 
     print(
-        f"ğŸ“‚ {output_path}"
+        f"📂 {output_path}"
     )
 
     print(
@@ -3396,7 +3469,7 @@ if __name__ == "__main__":
 
     print()
     print(
-        "MIMIR Intro Analyzer â€” Terra Final Judge"
+        "MIMIR Intro Analyzer — Terra Final Judge"
     )
 
     print(
@@ -3411,12 +3484,12 @@ if __name__ == "__main__":
 
     clip_input = input(
         "Clip index "
-        "(boÅŸ = tÃ¼m klipler): "
+        "(boş = tüm klipler): "
     ).strip()
 
     creator_input = input(
-        "DoÄŸrulanmÄ±ÅŸ creator/streamer adÄ± "
-        "(yoksa boÅŸ bÄ±rak): "
+        "Doğrulanmış creator/streamer adı "
+        "(yoksa boş bırak): "
     ).strip()
 
     try:
@@ -3447,7 +3520,7 @@ if __name__ == "__main__":
 
         print()
         print(
-            "âŒ INTRO ANALYZER HATASI:"
+            "❌ INTRO ANALYZER HATASI:"
         )
 
         print(

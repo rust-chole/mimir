@@ -1,4 +1,4 @@
-"""MIMIR V6 end-to-end through the REAL run_pipeline orchestration (offline).
+"""MIMIR production path end-to-end through the REAL run_pipeline orchestration (offline).
 
 Real FFmpeg stages (pacing cut, caption ASS + burn-in, Pro Edit camera render,
 intro render, publish) on a synthetic source; only paid/interactive model
@@ -6,10 +6,11 @@ stages are replaced by deterministic fakes (tests/pipeline_harness.py).
 Runs against a disposable repository copy under a path with spaces, an
 apostrophe and non-ASCII characters. Proves:
 
-* V6 runs caption truth -> evidence director -> render -> pixel proof ->
-  final gate, with no silent fallback;
-* ``--force-v6`` recomputes only the V6 / downstream stages while every
-  upstream cache (transcription ... intro analysis) is reused.
+* the production path runs caption truth -> evidence director -> render ->
+  pixel proof -> rendered-MP4 QC -> final gate, with no fallback;
+* ``--rerender`` (alias ``--force-v6``) recomputes only the presentation /
+  downstream stages while every upstream cache (transcription ... intro
+  analysis) is reused.
 """
 from __future__ import annotations
 
@@ -105,6 +106,146 @@ class PacedClipIdentityTests(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
 @fx.needs_opencv
+class RunStatusEndToEndTests(unittest.TestCase):
+    """The REAL pipeline fails right after the short reached final/, then reruns cleanly."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir run status e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        cls.video = make_video(base / "media ✓" / "status vod.mp4", 30)
+        cls.results = {}
+        for mode in ("fail_after_publish", "rerender"):
+            out = base / f"{mode}.json"
+            proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(cls.video),
+                                   "--mode", mode, "--out", str(out)], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=900,
+                                  env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+            if proc.returncode != 0:
+                raise AssertionError(f"harness mode {mode} failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+            cls.results[mode] = json.loads(out.read_text(encoding="utf-8"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_a_failure_after_publication_names_the_published_short(self) -> None:
+        result = self.results["fail_after_publish"]
+        self.assertEqual(result["error_type"], "OSError")
+        self.assertEqual(result["run_status"], "failed_after_publish")
+        self.assertIn("review sheet write failure", result["run_error"])
+        self.assertTrue(result["published_exists"])
+        self.assertEqual(result["published_output"], result["final_output_state"])
+        self.assertTrue(result["published_output"].endswith("status vod_short.mp4"))
+
+    def test_a_successful_rerun_clears_the_stale_failure(self) -> None:
+        result = self.results["rerender"]
+        self.assertIn(result["status"], ("published", "published_degraded"))
+        self.assertEqual(result["run_status"], "success")
+        self.assertIsNone(result["run_error"])
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+class PublishFailureEndToEndTests(unittest.TestCase):
+    """A rerun whose publish copy comes out incomplete leaves the earlier short in
+    final/ byte for byte, and its state says it failed without publishing."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir publish e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        cls.video = make_video(base / "media ✓" / "publish vod.mp4", 30)
+        cls.results = {}
+        for mode in ("run", "publish_copy_broken"):
+            out = base / f"{mode}.json"
+            proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(cls.video),
+                                   "--mode", mode, "--out", str(out)], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=900,
+                                  env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+            if proc.returncode != 0:
+                raise AssertionError(f"harness mode {mode} failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+            cls.results[mode] = json.loads(out.read_text(encoding="utf-8"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_the_earlier_short_survives_and_the_run_reports_no_publication(self) -> None:
+        good, broken = self.results["run"], self.results["publish_copy_broken"]
+        self.assertEqual(good["status"], "published")
+        self.assertEqual(broken["error_type"], "ShortsPipelineError")
+        self.assertIn("Publish kopyası eksik", broken["error"])
+        self.assertEqual((broken["run_status"], broken["publish_status"]), ("failed", None))
+        self.assertIsNone(broken["published_output"])              # the CLI says nothing was published
+        self.assertTrue(broken["published_exists"])
+        self.assertEqual(broken["published_md5"], good["final_md5"])  # the earlier short, byte for byte
+        self.assertEqual(broken["staged_leftovers"], [])
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+class SpeakerColorEndToEndTests(unittest.TestCase):
+    """The REAL pipeline with two voices taking turns (A B A B ...): no naming prompt,
+    the burned captions colour each voice on the one main lane, and the frozen truth,
+    QC and the final gate accept the colours."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir colours e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        video = make_video(base / "media ✓" / "colour vod.mp4", 30)
+        out = base / "run.json"
+        proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(video),
+                               "--mode", "run", "--out", str(out)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=900, stdin=subprocess.DEVNULL,
+                              env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                                   "HARNESS_SPEAKERS": "dual"})
+        if proc.returncode != 0:
+            raise AssertionError(f"harness failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+        cls.result = json.loads(out.read_text(encoding="utf-8"))
+        output = cls.copy / "vod_output"
+        cls.presentation = [p for p in output.rglob("*.ass")
+                            if "MIMIR Pro Edit Caption Presentation" in p.read_text(encoding="utf-8-sig")]
+        cls.truths = sorted(output.rglob("*_caption_truth_v*.json"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_the_short_is_published_with_the_speaker_colours_accepted(self) -> None:
+        self.assertEqual(self.result["status"], "published", self.result.get("v6_state"))
+        self.assertEqual(self.result["run_status"], "success")
+        gate = (self.result.get("v6_state") or {}).get("gate") or {}
+        self.assertNotIn("speaker_ownership", " ".join(map(str, gate.get("failed") or [])))
+
+    def test_the_burned_captions_colour_each_voice_on_the_main_lane(self) -> None:
+        from ai.editor.pro_edit import caption_presentation as cp
+
+        self.assertTrue(self.presentation)
+        text = self.presentation[-1].read_text(encoding="utf-8-sig")
+        events = [line for line in text.splitlines() if line.startswith("Dialogue:")]
+        self.assertTrue(events)
+        self.assertEqual({line.split(",")[3] for line in events}, {"MimirMain"})       # sequential turns: one lane
+        self.assertIn(cp.PALETTES["main"].active, text)                              # voice A
+        self.assertIn(cp.PALETTES["secondary"].active, text)                         # voice B
+
+    def test_the_frozen_truth_carries_the_colours(self) -> None:
+        self.assertTrue(self.truths)
+        truth = json.loads(self.truths[-1].read_text(encoding="utf-8"))
+        self.assertEqual(truth.get("speaker_issues"), [])
+        self.assertEqual({row[6] for row in truth["words"]}, {"A", "B"})             # frozen with the words
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+@fx.needs_opencv
 class V6PipelineEndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -117,9 +258,9 @@ class V6PipelineEndToEndTests(unittest.TestCase):
         cls.video.parent.mkdir()
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
                         "testsrc2=size=640x360:rate=30000/1001:duration=30", "-f", "lavfi", "-i",
-                        "sine=frequency=300:sample_rate=48000:duration=30", "-shortest", "-c:v", "libx264",
-                        "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-                        "-ac", "2", str(cls.video)], check=True, capture_output=True)
+                        "anoisesrc=color=pink:sample_rate=48000:duration=30:amplitude=0.1", "-shortest", "-c:v",
+                        "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-b:a", "128k", "-ac", "2", str(cls.video)], check=True, capture_output=True)
         cls.results = {}
 
         def run(mode: str, key: str) -> None:
@@ -133,14 +274,14 @@ class V6PipelineEndToEndTests(unittest.TestCase):
             cls.results[key] = json.loads(out.read_text(encoding="utf-8"))
             cls.results[key]["stdout"] = proc.stdout
 
-        for mode in ("v6", "v6_force"):
-            run(mode, mode)
+        for mode, key in (("run", "v6"), ("rerender", "v6_force")):
+            run(mode, key)
         # The incident: the temp cleanup removed this clip's paced video while another
         # source's newer clip_01 video is on disk. The rerun must re-render THIS clip.
         edited_root = cls.copy / "vod_output" / "edited_clips"
         next(edited_root.glob("*/clip_01_*_edited.mp4")).unlink()
         make_video(edited_root / "zz other source" / "clip_01_Other Story_edited.mp4", 12)
-        run("v6_force", "v6_rerun_after_cleanup")
+        run("rerender", "v6_rerun_after_cleanup")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -152,6 +293,7 @@ class V6PipelineEndToEndTests(unittest.TestCase):
     def test_v6_runs_the_real_path_and_passes_the_final_gate(self) -> None:
         result = self.results["v6"]
         self.assertEqual(result["v6"]["status"], "passed", result["v6"])
+        self.assertEqual(result["status"], "published")
         self.assertEqual(result["v6"]["fallbacks"], 0)
         self.assertEqual(result["stages"]["caption_truth_v6"], "done")
         self.assertEqual(result["pro_edit"]["render"]["status"], "pro_edit")
@@ -160,7 +302,7 @@ class V6PipelineEndToEndTests(unittest.TestCase):
         for name in ("output_file", "caption_truth_frozen", "word_timing", "speaker_ownership", "verified_names",
                      "caption_presentation", "story_preserved", "camera_plan", "hold_reasons",
                      "story_regions_visible", "camera_pixels_main", "camera_pixels_final", "v6_render_path",
-                     "no_silent_fallback"):
+                     "no_blocking_fallback", "no_captions_in_intro", "caption_words_timing", "main_av_sync"):
             self.assertEqual(checks.get(name), "pass", (name, checks))
         for key in ("caption_truth", "camera_plan", "render_proof", "manifest"):
             self.assertTrue(Path(manifest["artifacts"][key]).is_file(), key)

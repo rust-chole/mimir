@@ -4,5 +4,12 @@ python-dotenv>=1.2.3,<2.0.0
 # 4.10-4.13 load under Windows 11 Smart App Control; 4.14.0.94's unsigned cv2.pyd is refused
 # ("DLL load failed ... Application Control policy"); 4.9 does not import with numpy 2.
 opencv-python-headless>=4.10,<4.14
+# Final-caption word timing: the official Qwen3-ForcedAligner implementation (qwen_asr).
+# Loaded lazily, only when the selected short is timed; the model weights go to the
+# Hugging Face cache, never into this repository. qwen-asr pins its own transformers /
+# accelerate. It does not declare torch: the plain PyPI wheel runs on CPU; for an NVIDIA
+# GPU install the matching CUDA build from https://pytorch.org before this file.
+qwen-asr>=0.0.6,<0.1
+torch>=2.4
 # Optional caption shaping backend (MIMIR_CAPTION_SHAPER=auto); not required:
 # uharfbuzz>=0.39

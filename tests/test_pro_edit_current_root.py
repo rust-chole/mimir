@@ -188,37 +188,37 @@ class RendererAndPipelineTests(unittest.TestCase):
 
     def test_current_root_intro_behaviour_is_preserved(self) -> None:
         source = (ROOT / "ai" / "editor" / "intro_renderer.py").read_text(encoding="utf-8-sig")
-        self.assertIn("LOCKED PEAK VALIDATION", source)                     # Sep 17 current-root guard
+        self.assertIn("LOCKED PEAK VALIDATION", source)                     # locked peak must stay inside the intro
+        self.assertIn("Intro composition clock mismatch", source)           # renderer proves intro + main duration
         pipeline = (ROOT / "ai" / "shorts_pipeline.py").read_text(encoding="utf-8")
-        guard = pipeline[pipeline.index("# Structural contract: final base must be longer than the EFFECTIVE main"):]
-        guard = guard[:guard.index("_stage_done(final_preview_path)")]
-        self.assertIn("calculate_main_restart_seconds", guard)            # effective-main guard kept
         self.assertIn("main-only fallback YASAK", pipeline)
+        guard = pipeline[pipeline.index("final_timeline_doc = intro_renderer.load_final_timeline(final_preview_path)"):]
+        guard = guard[:guard.index("_stage_done(final_preview_path)")]
+        self.assertIn("Mandatory intro structural guard", guard)            # no cold open -> no publish
         self.assertLess(guard.index("raise ShortsPipelineError"), guard.index("_verify_pro_edit_intro"))
 
-    def test_feature_off_pipeline_is_the_pre_pro_edit_pipeline(self) -> None:
+    def test_single_production_path_always_runs_the_verified_presentation(self) -> None:
         code = (
             "import os, sys, json\n"
-            "os.environ.pop('MIMIR_PRO_EDIT', None)\n"
+            "for key in ('MIMIR_PRO_EDIT', 'MIMIR_V6'): os.environ[key] = '0'\n"
             f"sys.path.insert(0, {str(ROOT)!r})\n"
             "import ai.shorts_pipeline as sp\n"
+            "pkg, cfg = sp._load_pro_edit()\n"
             "src = {'path': 'x.mp4', 'size': 1, 'mtime_ns': 2}\n"
-            "kw = dict(creator_name='KAI', clip_index=1, enable_memes=True, enable_video_brain=False,"
+            "kw = dict(creator_name='C', clip_index=1, enable_memes=True, enable_video_brain=False,"
             " video_brain_model='m')\n"
-            "old = {'pipeline_version': sp.PIPELINE_VERSION, 'source': src, 'creator_name': 'KAI', 'clip_index': 1,"
-            " 'enable_memes': True, 'enable_video_brain': False, 'video_brain_model': '',"
-            " 'code_signature': sp._code_signature(False, 'm')}\n"
-            "print(json.dumps({'same': sp._request_signature(src, **kw) == sp._hash(old),"
-            " 'loaded': sp._load_pro_edit(None) == (None, None, None),"
-            " 'imported': 'ai.editor.pro_edit' in sys.modules}))\n")
+            "print(json.dumps({'enabled': cfg.enabled, 'v6': cfg.v6,"
+            " 'presentation_in_signature': sp._request_signature(src, presentation_signature='a', **kw)"
+            " != sp._request_signature(src, presentation_signature='b', **kw),"
+            " 'flags_removed': not hasattr(sp, '_pro_edit_requested') and not hasattr(sp, '_v6_requested')}))\n")
         result = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-        self.assertEqual(result.stdout.strip().splitlines()[-1],
-                         '{"same": true, "loaded": true, "imported": false}')
+        self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]),
+                         {"enabled": True, "v6": True, "presentation_in_signature": True, "flags_removed": True})
 
     def test_baseline_captions_are_untouched_by_the_port(self) -> None:
-        self.assertEqual(captions.CAPTION_VERSION, 24)
+        self.assertEqual(captions.CAPTION_VERSION, 25)
         with tempfile.TemporaryDirectory() as tmp:
             data = base.human_profile(overlapping_dialogue(), {"A": "KAI"}, primary_speaker="A",
                                       secondary_speaker="B")

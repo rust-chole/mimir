@@ -6,11 +6,20 @@ synthetic source video. Only paid/interactive model stages are replaced by
 deterministic fakes that write MIMIR-shaped artifacts.
 
 Usage (always against a disposable COPY of the repo):
-    python pipeline_harness.py --root <repo copy> --video <mp4> --mode off|on|on_broken|on_planner_down|on_stage_crash|v6|v6_force --out result.json
+    python pipeline_harness.py --root <repo copy> --video <mp4> --mode <mode> --out result.json
 
-``v6`` runs MIMIR V6 (caption truth + evidence director + pixel proof + final
-gate); ``v6_force`` then re-runs the same source WITHOUT --force but with
---force-v6, so the summary shows which stages were recomputed.
+Modes (there is ONE production path; modes only inject faults):
+    run            full run (rules planner, memes off)
+    rerender       second run of the same source with --rerender (upstream caches kept)
+    no_headline    the headline judge found no grounded line -> moving peak only
+    broken_render  Pro Edit main render fails -> baseline render -> QC gate must REJECT
+    stage_crash    Pro Edit preparation crashes -> baseline render -> QC gate must REJECT
+    planner_down   planner unavailable (static camera) -> published as DEGRADED at worst
+    memes          a selected local SFX goes through the real meme renderer + QC effect checks
+    effect_broken  the effect render damages the short (drops its tail) -> QC fails -> the
+                   bounded repair drops the effect and publishes the re-checked base, DEGRADED
+    fail_after_publish  the short reaches final/, then writing its review sheet fails ->
+                   the state must say failed_after_publish and name the published file
 """
 from __future__ import annotations
 
@@ -41,8 +50,7 @@ WORDS = [(f"word{i}", 0.5 + i * 0.45, 0.5 + i * 0.45 + 0.32) for i in range(58)]
 
 def install_fakes(video: Path) -> None:
     from ai import vod_processor
-    from ai.editor import (clip_analyzer, intro_analyzer, pacing, speaker_caption_support, speaker_naming,
-                           teaser_analyzer, timeline)
+    from ai.editor import clip_analyzer, intro_analyzer, pacing, speaker_caption_support, teaser_analyzer, timeline
 
     stem = video.stem
 
@@ -93,50 +101,95 @@ def install_fakes(video: Path) -> None:
         return write(Path(path), {"version": speaker_caption_support.SPEAKER_PROFILE_VERSION, "status": "ok",
                                   "mode": "single", "segments": [], "role_judge": {}})
 
-    def resolve_interactive_speaker_names(speaker_profile_path, edited_clip_path, clip_index, creator_name=None):
-        return {"profile_path": str(speaker_profile_path), "preview_path": None}
-
     def create_speaker_profile(edited_clip_path, clip_index, transcript_path=None, timeline_path=None,
-                               speaker_scan_path=None):
+                               speaker_scan_path=None, verified_terms=None):
         path = speaker_caption_support._output_path(edited_clip_path, clip_index)
         words = [(w, s, e) for w, s, e in WORDS if e < 27.9]
+        # HARNESS_SPEAKERS=dual: two voices taking turns of six words (A B A B ...),
+        # coloured by the REAL speaker-colour assignment.
+        dual = os.environ.get("HARNESS_SPEAKERS") == "dual"
+        rows = [{"word": w, "edited_start": s, "edited_end": e,
+                 "speaker_raw": ("A", "B")[(i // 6) % 2] if dual else "A", "speaker_role": "main",
+                 "speaker_label": "", "speaker_confidence": 0.9} for i, (w, s, e) in enumerate(words)]
+        mode, participants = ("dual", ["A", "B"]) if dual else ("single", ["A"])
+        rows, colors = speaker_caption_support._assign_speaker_colors(rows, mode=mode, participants=participants,
+                                                                      hard_failure=False)
         return write(Path(path), {
             "version": speaker_caption_support.SPEAKER_PROFILE_VERSION, "status": "ok", "phase": "final_profile",
-            "timing_basis": "exact_final_48k_audio", "clip_duration": 28.0, "mode": "single",
-            "diarization_status": "ok", "display_labels": {}, "caption_quality": {},
-            "words": [{"word": w, "edited_start": s, "edited_end": e, "speaker_raw": "A", "speaker_role": "main",
-                       "speaker_label": ""} for w, s, e in words]})
+            "timing_basis": "exact_final_48k_audio", "clip_duration": 28.0, "mode": mode,
+            "primary_speaker": "A", "secondary_speaker": "B" if dual else None, "participant_speakers": participants,
+            "diarization_status": "ok", "display_labels": {}, "caption_quality": {}, "speaker_colors": colors,
+            "words": rows})
 
-    def analyze_teasers(timeline_path, transcript_path, clip_index, edited_video_path=None, video_report_path=None):
+    def analyze_teasers(timeline_path, transcript_path, clip_index, edited_video_path=None, video_report_path=None,
+                        caption_profile_path=None):
         return write(Path(teaser_analyzer.get_output_path(timeline_path)), {
             "version": 1, "inputs": {"timeline": str(timeline_path)},
             "teasers": [{"clip_index": clip_index, "recommended": True,
                          "edited": {"teaser_start": 13.2, "teaser_end": 14.8, "duration": 1.6}}]})
 
-    def analyze_intros(teaser_json_path, clip_index, manual_creator_name=None, video_report_path=None):
+    def analyze_intros(teaser_json_path, clip_index, manual_creator_name=None, video_report_path=None,
+                       verified_names=(), caption_text=""):
         teaser = json.loads(Path(teaser_json_path).read_text(encoding="utf-8"))
+        headline = "" if os.environ.get("HARNESS_NO_HEADLINE") == "1" else "HE SAID WORD TWELVE"
+        gate = {"accepted": True, "no_headline": not headline}
         return write(Path(intro_analyzer.get_output_path(teaser_json_path)), {
             "version": 1, "inputs": {"timeline": teaser["inputs"]["timeline"], "teaser": str(teaser_json_path)},
-            "intros": [{"clip_index": clip_index, "recommended": True, "score": 9.0, "title": "harness clip",
-                        "intro_text": "WAIT FOR IT", "quality_gate": {"accepted": True}}]})
+            "intros": [{"clip_index": clip_index, "recommended": True, "score": 9.0 if headline else 0.0,
+                        "title": "harness clip", "intro_text": headline, "quality_gate": gate}]})
+
+    def analyze_memes(intro_json_path, clip_index, base_video_path=None):
+        from ai.editor import meme_analyzer
+
+        intro = json.loads(Path(intro_json_path).read_text(encoding="utf-8"))
+        timeline_path = intro["inputs"]["timeline"]
+        return write(Path(meme_analyzer.get_output_path(intro_json_path)), {
+            "version": meme_analyzer.MEME_ANALYZER_VERSION, "inputs": {"timeline": timeline_path,
+                                                                       "intro": str(intro_json_path)},
+            "clips": [{"clip_index": clip_index, "recommended": True, "slots": [{
+                "slot_index": 1, "intent": "impact", "sound_function": "impact", "strength": "subtle",
+                "timing": {"main_edited_start": 20.5, "final_start": 0.0, "max_duration": 0.6}}]}]})
+
+    def discover_memes(slot_json_path, clip_index):
+        from ai.editor import meme_discovery
+
+        slots = json.loads(Path(slot_json_path).read_text(encoding="utf-8"))
+        sfx = Path(slot_json_path).with_name("harness_boom.wav")
+        import subprocess
+
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=90:sample_rate=48000:duration=0.6", "-af", "afade=t=out:st=0.3:d=0.3",
+                        str(sfx)], check=True)
+        slot = slots["clips"][0]["slots"][0]
+        return write(Path(meme_discovery.get_output_path(slot_json_path)), {
+            "version": meme_discovery.DISCOVERY_VERSION, "inputs": {"meme_slots": str(slot_json_path)},
+            "clips": [{"clip_index": clip_index, "selected_asset_count": 1, "discoveries": [{
+                "slot_index": 1, "selected": True, "fit_score": 8.6, "confidence": 0.9, "slot": slot,
+                "candidate": {"name": "harness boom", "provider": "local_sfx", "media_type": "audio"},
+                "asset": {"absolute_path": str(sfx), "media_type": "audio"}}]}]})
 
     vod_processor.process_vod = process_vod
     clip_analyzer.create_clip_analysis = create_clip_analysis
     pacing.create_pacing_analysis = create_pacing_analysis
     timeline.create_edit_timeline = create_edit_timeline
     speaker_caption_support.create_speaker_scan_from_audio = create_speaker_scan_from_audio
-    speaker_naming.resolve_interactive_speaker_names = resolve_interactive_speaker_names
     speaker_caption_support.create_speaker_profile = create_speaker_profile
     teaser_analyzer.analyze_teasers = analyze_teasers
     intro_analyzer.analyze_intros = analyze_intros
+    if os.environ.get("HARNESS_MEMES") == "1":
+        from ai.editor import meme_analyzer, meme_discovery
+
+        meme_analyzer.analyze_memes = analyze_memes
+        meme_discovery.discover_memes = discover_memes
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
-    parser.add_argument("--mode", required=True, choices=["baseline", "off", "on", "on_broken", "on_planner_down", "on_stage_crash",
-                                                                "on_captions_off", "on_caption_crash", "v6", "v6_force"])
+    parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
+                                                          "stage_crash", "planner_down", "memes", "effect_broken",
+                                                          "fail_after_publish", "publish_copy_broken"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -145,35 +198,25 @@ def main() -> int:
     for key in list(os.environ):
         if key.startswith("MIMIR_PRO_EDIT") or key in ("OPENAI_API_KEY", "MIMIR_V6", "MIMIR_CAPTION_ENTITIES"):
             os.environ.pop(key)
-    if args.mode in ("on", "v6", "v6_force"):
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
-    if args.mode == "on_captions_off":
-        # planner unavailable (no key) + caption presentation disabled
-        os.environ["MIMIR_PRO_EDIT_CAPTIONS"] = "0"
+    os.environ["MIMIR_PRO_EDIT_PLANNER"] = "static" if args.mode == "planner_down" else "rules"
+    if args.mode == "no_headline":
+        os.environ["HARNESS_NO_HEADLINE"] = "1"
+    if args.mode in ("memes", "effect_broken"):
+        os.environ["HARNESS_MEMES"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
     from ai import shorts_pipeline
 
-    if args.mode == "on_broken":
+    if args.mode == "broken_render":
         from ai.editor.pro_edit import stage
         from ai.editor.pro_edit.errors import EditRenderError
 
         def broken(**kwargs):
             raise EditRenderError("harness-injected render failure")
 
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
         stage.render_camera_captions = broken
 
-    if args.mode == "on_caption_crash":
-        from ai.editor.pro_edit import stage
-
-        def caption_crash(**kwargs):
-            raise RuntimeError("harness-injected caption presentation failure")
-
-        os.environ["MIMIR_PRO_EDIT_PLANNER"] = "rules"
-        stage.build_presentation = caption_crash
-
-    if args.mode == "on_stage_crash":
+    if args.mode == "stage_crash":
         from ai.editor.pro_edit import stage
 
         def crash(request):
@@ -181,31 +224,110 @@ def main() -> int:
 
         stage.prepare_pro_edit = crash
 
-    kwargs = dict(force=True, enable_memes=False, enable_video_brain=False, keep_temp=True)
-    if args.mode in ("v6", "v6_force"):
-        kwargs["enable_v6"] = True
-        if args.mode == "v6_force":
-            kwargs.update(force=False, force_v6=True)
-    elif args.mode != "baseline":
-        kwargs["enable_pro_edit"] = args.mode != "off"
-    result = shorts_pipeline.run_pipeline(video, **kwargs)
+    if args.mode == "effect_broken":
+        import subprocess
+
+        from ai.editor import meme_renderer
+
+        real_render = meme_renderer.render_memes
+
+        def damaging_render(*a, **k):
+            outputs = real_render(*a, **k)
+            for output in outputs:     # the historical -shortest defect: the tail is lost
+                output = Path(output)
+                cut = output.with_name("cut_" + output.name)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(output), "-t", "28.9", "-c",
+                                "copy", str(cut)], check=True)
+                os.replace(cut, output)
+            return outputs
+
+        meme_renderer.render_memes = damaging_render
+
+    if args.mode == "publish_copy_broken":
+        import shutil
+
+        real_link, real_copy = shorts_pipeline.os.link, shutil.copy2
+
+        def staged(dst) -> bool:
+            return str(dst).endswith("_short.mp4.tmp")
+
+        def no_link(src, dst, *a, **k):
+            if staged(dst):
+                raise OSError("harness: no hard links on this volume")
+            return real_link(src, dst, *a, **k)
+
+        def truncating_copy(src, dst, *a, **k):
+            if staged(dst):                                  # the publish copy comes out incomplete
+                Path(dst).write_bytes(Path(src).read_bytes()[:4096])
+                return dst
+            return real_copy(src, dst, *a, **k)
+
+        shorts_pipeline.os.link = no_link
+        shutil.copy2 = truncating_copy
+
+    if args.mode == "fail_after_publish":
+        from ai.editor import human_review
+
+        def failing_sheet(*a, **k):
+            raise OSError("harness-injected review sheet write failure")
+
+        human_review.write_review_packet = failing_sheet
+
+    kwargs = dict(force=True, enable_memes=args.mode in ("memes", "effect_broken"), enable_video_brain=False,
+                  keep_temp=True)
+    if args.mode == "rerender":
+        kwargs.update(force=False, rerender=True)
+    summary: dict = {"mode": args.mode}
+    try:
+        result = shorts_pipeline.run_pipeline(video, **kwargs)
+    except Exception as error:
+        if args.mode not in ("fail_after_publish", "publish_copy_broken") \
+                and not isinstance(error, shorts_pipeline.ShortsPipelineError):
+            raise
+        state_file = shorts_pipeline._state_path(video)
+        state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
+        summary.update({
+            "error": str(error), "error_type": type(error).__name__,
+            "published_output": getattr(error, "published_output", None),
+            "run_status": state.get("run_status"), "run_error": state.get("run_error"),
+            "final_output_state": state.get("final_output"),
+            "publish_status": state.get("publish_status"),
+            "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
+            "v6_state": state.get("v6"), "final_qc": state.get("final_qc"),
+            "published_exists": (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists(),
+            "published_md5": md5(shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4")
+            if (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists() else None,
+            "staged_leftovers": sorted(p.name for p in shorts_pipeline.PUBLISHED_DIR.glob("*.tmp"))
+            if shorts_pipeline.PUBLISHED_DIR.exists() else [],
+            "rejected": sorted(p.name for p in shorts_pipeline.REJECTED_DIR.glob(f"{video.stem}_*"))
+            if shorts_pipeline.REJECTED_DIR.exists() else [],
+        })
+        Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+        return 0
     final = Path(result["final_output"])
     state = json.loads(Path(result["state_file"]).read_text(encoding="utf-8"))
-    summary = {
-        "mode": args.mode,
+    summary.update({
+        "status": result.get("status"),
+        "run_status": state.get("run_status"),
+        "run_error": state.get("run_error"),
         "final_output": str(final),
+        "human_review": result.get("human_review"),
+        "qc_report": json.loads(final.with_suffix(".qc.json").read_text(encoding="utf-8")),
         "final_md5": md5(final),
         "warnings": result.get("warnings", []),
         "pro_edit": result.get("pro_edit"),
         "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
         "pro_edit_artifacts": sorted(p.name for p in (root / "vod_output" / "pro_edit").rglob("*") if p.is_file())
         if (root / "vod_output" / "pro_edit").exists() else [],
-        "pro_edit_imported": "ai.editor.pro_edit" in sys.modules,
         "v6": result.get("v6"),
         "v6_state": state.get("v6"),
-        "v6_imported": "ai.editor.v6_runtime" in sys.modules or "ai.editor.caption_truth" in sys.modules,
-    }
-    Path(args.out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        "final_qc": state.get("final_qc"),
+        "final_timeline": json.loads(Path(state["stages"]["intro_final_base"]["path"]).with_name(
+            Path(state["stages"]["intro_final_base"]["path"]).stem + ".timeline.json").read_text(encoding="utf-8")),
+        "meme_stages": {k: state["stages"].get(k, {}).get("status") for k in ("meme_analysis", "meme_discovery",
+                                                                               "meme_render")},
+    })
+    Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return 0
 
 

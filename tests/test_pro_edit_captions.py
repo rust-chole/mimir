@@ -658,9 +658,15 @@ class StyleSystemTests(unittest.TestCase):
         self.assertAlmostEqual(impact.font_px, round(74 * 1.08, 1))
         self.assertGreater(impact.emphasis_outline_px, impact.outline_px)
         self.assertEqual(impact.ass_style, "MimirSecondary")
-        self.assertEqual(impact.active_colour, cp.PALETTES["secondary"].active)
-        tertiary = cp.resolve_caption_style(CaptionStyle.DEFAULT, "tertiary", geometry)
-        self.assertEqual(tertiary.active_colour, cp.PALETTES["main"].active)     # baseline palette parity
+        # Captions V25: with speaker colours the lane is only WHERE a page sits and its
+        # colours are its voice's; with colours off lane 2 keeps its legacy palette.
+        self.assertEqual(impact.active_colour, cp.PALETTES["secondary"].active)  # colours off, lane 2
+        voice_b = cp.resolve_caption_style(CaptionStyle.DEFAULT, "main", geometry, colour="B")
+        self.assertEqual((voice_b.ass_style, voice_b.active_colour), ("MimirMain", cp.PALETTES["secondary"].active))
+        voice_c = cp.resolve_caption_style(CaptionStyle.DEFAULT, "tertiary", geometry, colour="C")
+        neutral = cp.resolve_caption_style(CaptionStyle.DEFAULT, "main", geometry, colour="neutral")
+        actives = {default.active_colour, voice_b.active_colour, voice_c.active_colour, neutral.active_colour}
+        self.assertEqual(len(actives), 4)                                         # every voice is distinguishable
 
     def test_accent_is_outline_and_colour_only_and_bounded_by_the_word_interval(self) -> None:
         rows = words("this is the payoff moment right here", gap=0.05)
@@ -888,7 +894,22 @@ class LibassStabilityTests(unittest.TestCase):
         # geometry colour-independently: identical strong-ink columns, identical extent, and
         # the best rigid horizontal alignment of the two masks is a zero shift.
         ink = lambda f, level: np.where((f.max(axis=2) > level)[top_band].any(axis=0))[0]
-        self.assertEqual(ink(f1, 160).tolist(), ink(f2, 160).tolist())
+
+        # Strong ink per column, normalized by the frame's own fill brightness (the highlight
+        # and inactive fills differ: 255 vs 242), with hysteresis: a column clearly inked in
+        # one frame must be at least edge-inked in the other. A reflow of >= 1 px moves a
+        # glyph stem fully off a column (1.0 -> ~0) and trips this; an anti-aliased edge whose
+        # blend depends on the fill colour (measured on Linux / libass: 155 vs 165) does not.
+        def normalized(frame):
+            column = frame.max(axis=2)[top_band].max(axis=0).astype(float)
+            return column / max(1.0, float(column.max()))
+
+        def reflowed(a, b, high=0.70, low=0.55):
+            return [c for c in range(len(a)) if (a[c] >= high and b[c] < low) or (b[c] >= high and a[c] < low)]
+
+        n1, n2 = normalized(f1), normalized(f2)
+        self.assertEqual(reflowed(n1, n2), [])
+        self.assertTrue(reflowed(n1, np.roll(n2, 1)), "the ink check must detect a 1 px reflow")
         self.assertEqual((ink(f1, 60).min(), ink(f1, 60).max()), (ink(f2, 60).min(), ink(f2, 60).max()))
         m1 = (f1.max(axis=2) > 60)[top_band].astype(int)
         m2 = (f2.max(axis=2) > 60)[top_band].astype(int)

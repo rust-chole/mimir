@@ -339,6 +339,78 @@ def _track_boxes(track: Any, kind: str, start: float, end: float, width: int, he
     return rows
 
 
+def coarse_region(cx: float, cy: float) -> str:
+    """A region WORD for a normalized point (the director reasons with words, never coordinates)."""
+    col = "left" if cx < 1 / 3 else ("right" if cx > 2 / 3 else "center")
+    row = "upper" if cy < 1 / 3 else ("lower" if cy > 2 / 3 else "middle")
+    return "center" if (row, col) == ("middle", "center") else f"{row}-{col}"
+
+
+def coarse_size(area: float) -> str:
+    return "small" if area < 0.05 else ("medium" if area < 0.20 else "large")
+
+
+def _box_words(box: Any) -> dict[str, Any]:
+    x0, y0, x1, y1 = (float(v) for v in box)
+    return {"where": coarse_region((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+            "size": coarse_size(max(0.0, x1 - x0) * max(0.0, y1 - y0))}
+
+
+def director_evidence(request: ProEditRequest, prep: ProEditPreparation, context: EditContext,
+                      media: MediaInfo) -> dict[str, Any]:
+    """What the edit director should know about the picture BEFORE it plans intent.
+
+    Content layout (talking head / gameplay + facecam / screen share / panels),
+    persistent UI/HUD text regions, action regions inside payoff/reaction spans,
+    where each face track sits, and story-required regions: all as region words
+    and sizes. The same cached analyses feed caption placement later, so this
+    adds no decode. Optional evidence: a failed analysis is reported, never fatal."""
+    config = request.config
+    evidence: dict[str, Any] = {"note": "read-only evidence in region words; the engine owns all geometry"}
+    occupancy = None
+    background = None
+    assert prep.artifacts is not None
+    if config.caption_activity:
+        try:
+            occupancy, _status = load_or_analyze(prep.artifacts.caption_occupancy, media, context.clip_identity,
+                                                 force=request.force)
+        except Exception as error:
+            evidence["activity"] = f"unavailable: {type(error).__name__}"
+    if config.caption_ui or config.caption_layout:
+        try:
+            background, _status = background_mod.load_or_analyze(prep.artifacts.caption_background, media,
+                                                                 context.clip_identity, force=request.force)
+        except Exception as error:
+            evidence["ui"] = f"unavailable: {type(error).__name__}"
+    try:
+        layout = classify_layout(context.subject_tracks, context.clip.duration_s, occupancy=occupancy,
+                                 background=background)
+        evidence["layout"] = {"class": layout.layout.value, "confidence": round(layout.confidence, 2),
+                              **({"facecam": _box_words(layout.facecam_box)} if layout.facecam_box else {})}
+    except Exception as error:
+        evidence["layout"] = {"class": UNKNOWN_LAYOUT.layout.value, "reason": f"{type(error).__name__}"}
+    if background is not None:
+        boxes = background_mod.ui_boxes(background, 0.0, context.clip.duration_s)
+        evidence["ui_regions"] = [{**_box_words(box), "persistence": round(float(value), 2)}
+                                  for box, value in sorted(boxes, key=lambda row: -row[1])[:8]]
+    actions = derive_action_regions(context.spans, occupancy)
+    evidence["action_regions"] = [{"story_span_id": a.story_span_id, "window": [round(a.start, 2), round(a.end, 2)],
+                                   **_box_words(a.bbox), "confidence": round(a.confidence, 2)} for a in actions[:16]]
+    evidence["faces"] = []
+    for track in context.subject_tracks:
+        if not track.samples:
+            continue
+        mid = track.samples[len(track.samples) // 2]
+        evidence["faces"].append({"subject_id": track.subject_id, "kind": track.kind,
+                                  "where": coarse_region(mid.cx, mid.cy), "size": coarse_size(mid.width * mid.height),
+                                  "speaker_id": track.speaker_id})
+    evidence["required_visual_content"] = [
+        {"story_span_id": span.span_id, "regions": [_box_words((r.x0, r.y0, r.x1, r.y1)) for r in span.required_regions],
+         "subjects": list(span.required_subject_ids), "min_visible_fraction": span.min_visible_fraction}
+        for span in context.spans if span.required_regions or span.required_subject_ids or span.min_visible_fraction]
+    return evidence
+
+
 def _placement_evidence(request: ProEditRequest, prep: ProEditPreparation, context: EditContext,
                         media: MediaInfo, platform: Any) -> tuple[PlacementEvidence, dict[str, Any], Any]:
     """Faces, story geometry, action regions, layout, UI/text occupancy, activity and
@@ -688,14 +760,16 @@ def prepare_pro_edit(request: ProEditRequest) -> ProEditPreparation:
         from ai.editor import intro_renderer
 
         restart, first_caption = intro_renderer.calculate_main_restart_seconds(
-            caption_path=request.caption_path, main_duration=media.duration_s)
+            caption_path=request.caption_path, main_duration=media.duration_s,
+            protected_ranges=intro_renderer.protected_edited_ranges(clip_timeline))
+        restart = intro_renderer.snap_to_frame(restart, media.fps.fps)
         output_size = base_window(media.width, media.height, config.output_profile)[2:]
         intro = None
         hook_band = None
         if request.teaser_record is not None:
             intro = build_intro_timeline(request.teaser_record, caption_path=request.caption_path,
                                          clean_duration=media.duration_s, main_duration=media.duration_s,
-                                         clip_map=clip_map)
+                                         clip_map=clip_map, clip_timeline=clip_timeline, fps=media.fps.fps)
             prep.intro_timeline = intro
             try:
                 hook_band = hook_text_band(request.intro_record, intro, width=output_size[0],
@@ -720,6 +794,7 @@ def prepare_pro_edit(request: ProEditRequest) -> ProEditPreparation:
             raise CaptionIntegrityError("context caption references differ from the authoritative profile")
 
         style = get_style_pack(config.style)
+        context = dataclasses.replace(context, director_evidence=director_evidence(request, prep, context, media))
         prep.planner_cache_key = planner_cache_key(context, config)
         outcome = _plan_outcome(request, context, prep)
         plan = outcome.plan

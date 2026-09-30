@@ -1,5 +1,6 @@
-﻿.env
+.env
 .env.*
+!.env.example
 .venv/
 venv/
 __pycache__/
@@ -21,6 +22,10 @@ vod_output/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Model caches / weights (e.g. HF_HOME pointed inside the project) are never committed.
+.cache/
+*.safetensors
 
 .vscode/
 .idea/

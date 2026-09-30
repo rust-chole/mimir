@@ -23,16 +23,26 @@ from ai.editor.pro_edit.schema import (
 )
 from ai.editor.pro_edit.style import StylePack
 
-PLANNER_REQUEST_VERSION = 1
+PLANNER_REQUEST_VERSION = 2
 SCHEMA_NAME = "mimir_pro_edit_plan_v2"
 MAX_WORDS = 360
 MAX_VISUAL_EVENTS = 24
 MAX_SPEAKER_SEGMENTS = 80
+MAX_SHOT_CUTS = 64
 
 SYSTEM_PROMPT = """
-You are MIMIR's editorial decision engine for an ALREADY-SELECTED short.
+You are MIMIR's edit director for an ALREADY-SELECTED short.
 MIMIR already decided WHAT story is shown and which intro (cold-open) is used.
-You only decide HOW it is presented.
+You only decide HOW it is presented: the editorial INTENT of each moment.
+
+Think like a professional short-form editor. Before choosing anything, reason over the evidence:
+story beats (story_spans: hook/setup/escalation/payoff/reaction and their protection), who speaks when
+(speaker_timeline; names only where verified), reactions and laughter, face tracks (faces: where each
+subject sits and which speaker it belongs to), shot cuts (shot_cuts_s), motion and sound events, the
+content layout (talking head, gameplay + facecam, screen share, panels), persistent game UI / HUD / chat
+regions (ui_regions), action regions inside payoff/reaction spans, and required visual content that must
+stay visible. Ask per moment: what must the viewer SEE right now to follow the story? Very often the
+answer is the whole frame: a stable wide shot is a professional choice, not a failure.
 
 You do not render. You do not write FFmpeg, code, or commands.
 You do not modify story boundaries, clip boundaries, intro selection, or pacing.
@@ -59,6 +69,11 @@ Rules:
   timing. impact belongs to payoff moments; emphasis is rare. Emphasize at most one or two words per sentence.
 - emphasis_reasons optionally explains an emphasized id (name, number, payoff, reaction, contrast, surprise,
   generic). Use [] when unsure; reasons never change text, timing or speakers.
+- Gameplay / screen content with UI or an action region: keep it readable and whole; never frame it away to
+  chase a face. A facecam reaction can be featured only when the action is not what matters in that moment.
+- Never cross a shot cut with a subject-locked move; a new shot restarts the framing decision.
+- Evidence boxes are given as region words (where/size). You never output positions, boxes or numbers
+  for the frame; the engine computes every crop from your intent and the evidence.
 - Prefer static_clean (or no event) when uncertain. UNCERTAIN => LESS EDITING, never invent an effect.
 - confidence is your editorial confidence (0..1); low confidence is muted by the engine.
 - Return only the JSON object required by the schema.
@@ -126,13 +141,16 @@ def build_payload(context: EditContext, style: StylePack) -> dict[str, Any]:
         "story_spans": [
             {"id": s.span_id, "role": s.role.value, "start": _r(s.start), "end": _r(s.end),
              "protection": s.to_dict()["protection"], "visual_importance": s.visual_importance,
-             "required_subject_ids": list(s.required_subject_ids), "must_keep": s.must_keep}
+             "required_subject_ids": list(s.required_subject_ids), "must_keep": s.must_keep,
+             "has_required_regions": bool(s.required_regions), "evidence": list(s.evidence)[:6]}
             for s in context.spans if s.end > visible
         ],
         "intro": intro,
         "caption_words": [[w.id, w.text, _r(w.start), _r(w.end), w.speaker_id] for w in words],
         "caption_words_note": "read-only references; only ids may be used (emphasis_word_ids)",
         "speaker_timeline": [[_r(a), _r(b), spk] for a, b, spk in context.speaker_segments][:MAX_SPEAKER_SEGMENTS],
+        "speaker_names": {spk: (context.speaker_identities.get(spk) or "unverified (anonymous)")
+                          for spk in sorted(context.speaker_ids())},
         "subjects": [
             {"id": t.subject_id, "kind": t.kind, "speaker_id": t.speaker_id,
              "speaker_link_confidence": round(t.speaker_confidence, 2),
@@ -147,7 +165,11 @@ def build_payload(context: EditContext, style: StylePack) -> dict[str, Any]:
             "speech_gaps": [[_r(r.start), _r(r.end)] for r in context.speech_gap_ranges],
             "laughter": [[_r(r.start), _r(r.end)] for r in context.laughter_events],
             "energy": [[_r(r.start), _r(r.end)] for r in context.energy_events],
+            "transients": [[_r(r.start), _r(r.end)] for r in context.transient_events][:MAX_VISUAL_EVENTS],
         },
+        "shot_cuts_s": [_r(t) for t in context.scene_changes if t >= visible][:MAX_SHOT_CUTS],
+        "motion_events": [[_r(r.start), _r(r.end)] for r in context.motion_events][:MAX_VISUAL_EVENTS],
+        "scene": dict(context.director_evidence),
         "caption_region": "burned captions occupy the band shown in constraints; faces are kept above it",
         "effect_budget": dict(budget),
         "style": style.describe_for_planner(),

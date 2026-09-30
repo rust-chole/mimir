@@ -7,10 +7,12 @@ import shutil
 import subprocess
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Sequence
+
+from ai.editor import intro_bounds
 
 
-PEAK_SUPPORT_VERSION = 1
+PEAK_SUPPORT_VERSION = 2
 
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_WINDOW_SECONDS = 0.32
@@ -20,10 +22,6 @@ MAX_VISUAL_PEAKS = 10
 MAX_COMBINED_PEAKS = 12
 MIN_PEAK_SEPARATION_SECONDS = 0.75
 MERGE_DISTANCE_SECONDS = 0.65
-
-MIN_TEASER_WINDOW = 2.20
-PREFERRED_TEASER_WINDOW = 3.20
-MAX_TEASER_WINDOW = 6.50
 
 VISUAL_EVENT_WEIGHTS: dict[str, float] = {
     "reaction": 1.00,
@@ -264,32 +262,22 @@ def _distance(a_start: float, a_end: float, b_start: float, b_end: float) -> flo
     return 0.0
 
 
-def _window_around(start: float, end: float, clip_duration: float) -> tuple[float, float]:
-    start = _clamp(start, 0.0, clip_duration)
-    end = _clamp(end, start, clip_duration)
-    center = (start + end) / 2.0
-    current = end - start
-
-    target = max(MIN_TEASER_WINDOW, min(PREFERRED_TEASER_WINDOW, max(current + 1.25, current)))
-    if current < target:
-        half = target / 2.0
-        start = center - half
-        end = center + half
-        if start < 0:
-            end -= start
-            start = 0.0
-        if end > clip_duration:
-            start -= end - clip_duration
-            end = clip_duration
-        start = max(0.0, start)
-
-    if end - start > MAX_TEASER_WINDOW:
-        half = MAX_TEASER_WINDOW / 2.0
-        start = max(0.0, center - half)
-        end = min(clip_duration, start + MAX_TEASER_WINDOW)
-        start = max(0.0, end - MAX_TEASER_WINDOW)
-
-    return round(start, 3), round(end, 3)
+def _window_around(
+    start: float,
+    end: float,
+    clip_duration: float,
+    *,
+    envelope: intro_bounds.Envelope | None = None,
+    words: Sequence[intro_bounds.Word] = (),
+) -> tuple[float, float]:
+    """The cold-open window the evidence supports for this candidate (no fixed length)."""
+    bounds = intro_bounds.compute_intro_bounds(
+        intro_bounds.EventEvidence(start, end),
+        clip_duration=clip_duration,
+        words=words,
+        envelope=envelope,
+    )
+    return round(bounds.start, 3), round(bounds.end, 3)
 
 
 def build_peak_support(
@@ -297,8 +285,12 @@ def build_peak_support(
     edited_video_path: str | Path | None,
     video_report_path: str | Path | None,
     clip_duration: float,
+    envelope: intro_bounds.Envelope | None = None,
+    words: Sequence[intro_bounds.Word] = (),
 ) -> dict[str, Any]:
     clip_duration = max(0.01, float(clip_duration))
+    if envelope is None:
+        envelope = intro_bounds.audio_envelope(edited_video_path)
     audio = analyze_audio_peaks(edited_video_path, clip_duration=clip_duration)
     visual = extract_visual_peaks(video_report_path, clip_duration=clip_duration)
 
@@ -332,7 +324,7 @@ def build_peak_support(
         audio_score = float(audio_peak["audio_score"])
         dual_bonus = 0.16 if visual_score > 0 else 0.0
         combined = _clamp(0.58 * audio_score + 0.42 * visual_score + dual_bonus, 0.0, 1.0)
-        teaser_start, teaser_end = _window_around(start, end, clip_duration)
+        teaser_start, teaser_end = _window_around(start, end, clip_duration, envelope=envelope, words=words)
         candidates.append({
             "start": round(start, 3),
             "end": round(end, 3),
@@ -351,7 +343,8 @@ def build_peak_support(
         if index in used_visual:
             continue
         visual_score = float(item["visual_score"])
-        teaser_start, teaser_end = _window_around(float(item["start"]), float(item["end"]), clip_duration)
+        teaser_start, teaser_end = _window_around(float(item["start"]), float(item["end"]), clip_duration,
+                                                  envelope=envelope, words=words)
         candidates.append({
             "start": float(item["start"]),
             "end": float(item["end"]),
@@ -433,7 +426,7 @@ def format_for_ai(support: dict[str, Any]) -> str:
         description = str(item.get("visual_description", "")).strip()
         lines.append(
             f"PEAK {item.get('peak_id')} | core {float(item.get('start',0)):.2f}-{float(item.get('end',0)):.2f}s | "
-            f"recommended_window {float(item.get('teaser_start',0)):.2f}-{float(item.get('teaser_end',0)):.2f}s | "
+            f"measured_window {float(item.get('teaser_start',0)):.2f}-{float(item.get('teaser_end',0)):.2f}s | "
             f"combined={float(item.get('combined_score',0)):.2f} audio={float(item.get('audio_score',0)):.2f} "
             f"visual={float(item.get('visual_score',0)):.2f} | multimodal={bool(item.get('multimodal'))} | signals={signals}"
         )

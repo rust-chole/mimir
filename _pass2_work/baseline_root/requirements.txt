@@ -1,6 +1,0 @@
-openai>=3.8.0,<4.0.0
-python-dotenv>=1.2.3,<2.0.0
-# Pro Edit local face tracking (optional at runtime: without it framing stays center-safe).
-opencv-python-headless>=4.9,<5
-# Optional caption shaping backend (MIMIR_CAPTION_SHAPER=auto); not required:
-# uharfbuzz>=0.39

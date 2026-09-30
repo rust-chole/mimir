@@ -1,14 +1,20 @@
-"""MIMIR V6 runtime: switch, explicit fallback registry, manifest and final quality gate.
+"""MIMIR production run record: explicit fallback registry, manifest and final gate.
 
-V6 = Caption Truth V6 (``ai/editor/caption_truth.py``) + Pro Edit with the V6
-evidence director and pixel proof (``ai/editor/pro_edit/direction.py`` and
-``render_proof.py``) + this deterministic final gate.
+The single production path = frozen caption truth (``caption_truth.py``) +
+Pro Edit presentation with the evidence director and pixel proof
+(``pro_edit/direction.py``, ``render_proof.py``) + rendered-MP4 QC
+(``final_qc.py``) + this gate. There is no AI reviewer: the acceptance layer
+after the gate is a HUMAN, who gets a review packet (``human_review.py``).
 
-* Switch: ``MIMIR_V6=0|1`` (default 0) or the CLI ``--v6``; ``--force-v6``
-  additionally re-runs only the V6 / selected-short dependent stages.
-* No silent fallback: every V6 subsystem that degrades is recorded here as
-  (subsystem, reason, level), printed, and makes the gate fail.
-* Final gate: deterministic checks on the FINAL artifacts (published file,
+* ``--rerender`` (alias ``--force-v6``) re-runs only the presentation /
+  render / QC stages; every upstream cache stays valid.
+* No silent fallback: every subsystem that degrades is recorded here as
+  (subsystem, reason, level) and printed. A fallback that touches caption truth
+  or the verified render path BLOCKS publishing; a presentation-quality
+  fallback (face tracking, planner/director, placement level, energy) is
+  published only as an explicit DEGRADED result, and only after the rendered
+  MP4 itself passed QC.
+* Final gate: deterministic checks on the FINAL candidate (rendered MP4,
   frozen caption truth, burned captions, camera plan, pixel proofs). A camera
   JSON or an importable module is never accepted as evidence on its own.
 
@@ -34,6 +40,10 @@ _TRUE = {"1", "true", "yes", "on"}
 # cache; downstream renders re-run because their inputs change.
 FORCE_V6_STAGES = frozenset({"caption_truth_v6", "pro_edit", "caption_render", "intro_final_base", "meme_render",
                              "publish"})
+
+# Fallbacks that change what the viewer reads or which render was verified.
+BLOCKING_FALLBACKS = frozenset({"caption_truth", "pro_edit", "pro_edit_render", "caption_presentation",
+                                "caption_presentation_render", "vision_runtime"})
 
 GATE_PASSED = "passed"
 GATE_FAILED = "failed"
@@ -208,7 +218,8 @@ def check_caption_truth(profile_path: str | Path | None, truth_path: str | Path 
                        "monotonic, inside the clip" if not timing else "; ".join(timing[:5])))
     speakers = caption_truth.speaker_issues(profile)
     rows.append(_check("speaker_ownership", "pass" if not speakers else "fail",
-                       "raw ids known, labels human-confirmed" if not speakers else "; ".join(speakers[:5])))
+                       "raw ids known, labels human-confirmed, colours follow the acoustic turns"
+                       if not speakers else "; ".join(speakers[:5])))
     return rows
 
 
@@ -280,8 +291,11 @@ def check_camera(prep: Any, direction_required: bool = True) -> list[dict[str, A
     if resolved is None:
         return [_check("camera_plan", "fail", "no resolved camera plan")]
     direction = dict(getattr(prep, "direction", {}) or {})
-    if direction_required and direction.get("status") != "directed":
-        rows.append(_check("camera_plan", "fail", f"V6 direction not applied: {direction.get('reason', direction)}"))
+    if direction.get("status") != "directed":
+        # The validated planner intent (or a static camera) was rendered instead:
+        # a degraded but legitimate edit; its pixels are still proven below.
+        rows.append(_check("camera_plan", "fail" if direction_required else "warn",
+                           f"evidence direction not applied: {direction.get('reason', direction)}"))
     else:
         rows.append(_check("camera_plan", "pass", f"{len(resolved.ops)} op(s), peak zoom "
                            f"{resolved.metrics.get('peak_zoom', 1.0)}, intents {direction.get('intents', {})}"))
@@ -342,8 +356,8 @@ def final_quality_gate(*, run: V6Run, final_output: str | Path, profile_path: st
                        main_proof: Mapping[str, Any] | None, final_proof: Mapping[str, Any] | None,
                        intro_proof: Mapping[str, Any] | None, story_intact: tuple[bool, str],
                        intro_handoff: Mapping[str, Any] | None, render_status: str,
-                       display_labels: Sequence[str] = ()) -> dict[str, Any]:
-    """Deterministic V6 acceptance on the final artifacts. Never raises."""
+                       display_labels: Sequence[str] = (), qc_rows: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """Deterministic acceptance on the final candidate. Never raises."""
     checks: list[dict[str, Any]] = []
 
     def guarded(label: str, function: Any, *args: Any, **kwargs: Any) -> None:
@@ -369,7 +383,7 @@ def final_quality_gate(*, run: V6Run, final_output: str | Path, profile_path: st
     if handoff:
         checks.append(_check("intro_handoff", "pass" if handoff.get("status") == "verified" else "fail",
                              str(handoff.get("reason", handoff.get("status", "")))))
-    guarded("camera_plan", check_camera, prep)
+    guarded("camera_plan", check_camera, prep, False)
     guarded("story_regions_visible", check_geometry, main_proof)
     checks.append(check_proof("camera_pixels_main", main_proof, required=True))
     checks.append(check_proof("camera_pixels_final", final_proof, required=True))
@@ -377,12 +391,19 @@ def final_quality_gate(*, run: V6Run, final_output: str | Path, profile_path: st
         checks.append(check_proof("camera_pixels_intro", intro_proof, required=False))
     checks.append(_check("v6_render_path", "pass" if render_status == "pro_edit" else "fail",
                          f"main render status={render_status}"))
-    if run.fallbacks:
-        checks.append(_check("no_silent_fallback", "fail", "; ".join(f"{r['subsystem']}->{r['level']}"
-                                                                     for r in run.fallbacks[:6]),
-                             fallbacks=list(run.fallbacks)))
+    blocking = [r for r in run.fallbacks if r["subsystem"] in BLOCKING_FALLBACKS]
+    degraded = [r for r in run.fallbacks if r["subsystem"] not in BLOCKING_FALLBACKS]
+    if blocking:
+        checks.append(_check("no_blocking_fallback", "fail", "; ".join(f"{r['subsystem']}->{r['level']}"
+                                                                       for r in blocking[:6]),
+                             fallbacks=list(blocking)))
     else:
-        checks.append(_check("no_silent_fallback", "pass", "no V6 subsystem fell back"))
+        checks.append(_check("no_blocking_fallback", "pass", "caption truth and the verified render path held"))
+    if degraded:
+        checks.append(_check("presentation_degradations", "warn", "; ".join(f"{r['subsystem']}->{r['level']}"
+                                                                            for r in degraded[:6]),
+                             fallbacks=list(degraded)))
+    checks.extend(dict(row) for row in qc_rows)
     failed = [c for c in checks if c["status"] == "fail"]
     warned = [c for c in checks if c["status"] == "warn"]
     status = GATE_FAILED if failed else ("passed_with_warnings" if warned else GATE_PASSED)

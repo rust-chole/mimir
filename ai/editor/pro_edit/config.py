@@ -27,18 +27,18 @@ MIMIR_PRO_EDIT_ENERGY=0|1          global editorial energy coordinator (default 
 MIMIR_PRO_EDIT_ENERGY_WINDOW_MS=<300..2000>      energy window (default 800)
 MIMIR_PRO_EDIT_ENERGY_BUDGET=<2..10>             max energy inside one window (default 4)
 MIMIR_PRO_EDIT_ENERGY_TABLE=<JSON object>        override event energies (known keys, integers 0..5)
-MIMIR_PRO_EDIT_PLANNER_TIMEOUT=<seconds>       (default 90)
-MIMIR_PRO_EDIT_MODEL=<model id>    (default: MIMIR Luna model)
-MIMIR_PRO_EDIT_REASONING=<effort>  (default medium)
+MIMIR_PRO_EDIT_PLANNER_TIMEOUT=<seconds>       (default 300: the director reasons at high effort)
+MIMIR_EDIT_DIRECTOR_MODEL / MIMIR_EDIT_DIRECTOR_REASONING   (ai/model_config.py; default Astra 6 / high)
+MIMIR_PRO_EDIT_MODEL / MIMIR_PRO_EDIT_REASONING             (legacy per-run override of the two above)
 MIMIR_PRO_EDIT_STYLE=pro_stream_v1
 MIMIR_PRO_EDIT_OUTPUT_PROFILE=preserve|16:9|9:16|1:1  (default preserve)
 MIMIR_PRO_EDIT_INTERPOLATION=linear|cubic             (default cubic)
 MIMIR_PRO_EDIT_DEBUG=0|1           keep failed temp renders / verbose trace
 MIMIR_PRO_EDIT_SUBJECTS=<path to subject sidecar JSON> (optional tracker output)
 
-Model settings intentionally live here instead of ai/model_config.py: that
-module is fingerprinted by existing stage signatures, and touching it would
-invalidate (and re-bill) unrelated cached stages.
+The director model comes from ai/model_config.py (routing lives in one place);
+stage signatures carry the exact model ids, so routing changes never re-bill
+unrelated cached stages.
 """
 from __future__ import annotations
 
@@ -61,8 +61,8 @@ _EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 class ProEditConfig:
     enabled: bool = False
     planner: str = "model"
-    model: str = model_config.DEFAULT_LUNA_MODEL
-    reasoning_effort: str = "medium"
+    model: str = model_config.EDIT_DIRECTOR_MODEL
+    reasoning_effort: str = model_config.EDIT_DIRECTOR_REASONING_EFFORT
     style: str = "pro_stream_v1"
     output_profile: OutputProfile = OutputProfile.PRESERVE
     interpolation: str = "cubic"
@@ -88,7 +88,7 @@ class ProEditConfig:
     energy_budget: int = 4
     energy_table: tuple[tuple[str, int], ...] = ()
     replay_path: str | None = None
-    planner_timeout_s: float = 90.0
+    planner_timeout_s: float = 300.0
     v6: bool = False
     problems: tuple[str, ...] = field(default_factory=tuple)
 
@@ -178,11 +178,12 @@ def load_config(override_enabled: bool | None = None, environ: Mapping[str, str]
     if planner not in _PLANNERS:
         problems.append(f"MIMIR_PRO_EDIT_PLANNER={planner!r} invalid; using static")
         planner = "static"
-    model = str(env.get("MIMIR_PRO_EDIT_MODEL", "")).strip() or model_config.DEFAULT_LUNA_MODEL
-    effort = str(env.get("MIMIR_PRO_EDIT_REASONING", "medium")).strip().casefold() or "medium"
+    model = str(env.get("MIMIR_PRO_EDIT_MODEL", "")).strip() or model_config.EDIT_DIRECTOR_MODEL
+    default_effort = model_config.EDIT_DIRECTOR_REASONING_EFFORT
+    effort = str(env.get("MIMIR_PRO_EDIT_REASONING", default_effort)).strip().casefold() or default_effort
     if effort not in _EFFORTS:
-        problems.append(f"MIMIR_PRO_EDIT_REASONING={effort!r} invalid; using medium")
-        effort = "medium"
+        problems.append(f"MIMIR_PRO_EDIT_REASONING={effort!r} invalid; using {default_effort}")
+        effort = default_effort
     style = str(env.get("MIMIR_PRO_EDIT_STYLE", "pro_stream_v1")).strip() or "pro_stream_v1"
     if style not in available_style_packs():
         problems.append(f"MIMIR_PRO_EDIT_STYLE={style!r} unknown; using pro_stream_v1")
@@ -210,12 +211,12 @@ def load_config(override_enabled: bool | None = None, environ: Mapping[str, str]
         problems.append("MIMIR_PRO_EDIT_PLANNER=replay without MIMIR_PRO_EDIT_REPLAY; using static")
         planner = "static"
     try:
-        timeout = float(str(env.get("MIMIR_PRO_EDIT_PLANNER_TIMEOUT", "90")).strip() or 90)
+        timeout = float(str(env.get("MIMIR_PRO_EDIT_PLANNER_TIMEOUT", "300")).strip() or 300)
         if not 5 <= timeout <= 900:
             raise ValueError
     except ValueError:
-        problems.append("MIMIR_PRO_EDIT_PLANNER_TIMEOUT invalid; using 90")
-        timeout = 90.0
+        problems.append("MIMIR_PRO_EDIT_PLANNER_TIMEOUT invalid; using 300")
+        timeout = 300.0
     shaper = str(env.get("MIMIR_CAPTION_SHAPER", "naive")).strip().casefold() or "naive"
     if shaper not in ("naive", "auto", "harfbuzz"):
         problems.append(f"MIMIR_CAPTION_SHAPER={shaper!r} invalid; using naive")

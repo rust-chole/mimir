@@ -43,11 +43,11 @@ foreach ($Tool in @("ffmpeg", "ffprobe", "curl")) {
 }
 
 Write-Host "[4/4] Kod doğrulanıyor..."
-& $Python -m compileall -q ai main.py verify_optimal_v8.py
+& $Python -m compileall -q ai main.py verify_unified_clean.py
 if ($LASTEXITCODE -ne 0) { throw "compileall başarısız." }
 
-& $Python .\verify_optimal_v8.py
-if ($LASTEXITCODE -ne 0) { throw "Optimal V8 doğrulaması başarısız." }
+& $Python .\verify_unified_clean.py
+if ($LASTEXITCODE -ne 0) { throw "MIMIR doğrulaması başarısız." }
 
 Write-Host ""
 Write-Host "[DONE] MIMIR Optimal V8 hazır."
