@@ -290,7 +290,8 @@ class HumanAcceptanceTests(unittest.TestCase):
             degradations=["face_tracking -> stable_wide: no face"])
         focus = [(item["kind"], item["final_s"]) for item in packet["focus"]]
         self.assertEqual(focus, [("caption_uncertain", 6.0), ("caption_changed_by_judge", 9.0)])
-        self.assertEqual(packet["speakers"], {"Mira": 1, "S1": 3})
+        self.assertEqual(packet["speaker_colors"], {"plain": 4})            # no colour column: plain captions
+        self.assertNotIn("speakers", packet)                                  # no per-name count: names are gone
         text = human_review.render_markdown(packet)
         self.assertIn('0:06.0 caption "Marra"', text)
         self.assertIn('"top" -> "stop"', text)
@@ -352,13 +353,15 @@ class RunStatusTests(unittest.TestCase):
             self.assertEqual(self.state()["run_status"], status)
 
     def test_a_new_run_starts_without_the_previous_failure(self) -> None:
-        self.previous_run(run_status="failed", run_error="RuntimeError: an older failure")
+        self.previous_run(run_status="failed", run_error="RuntimeError: an older failure",
+                          speaker_preview="/old/speaker_previews/clip_01_A.wav")    # legacy naming preview
         at_start = {}
         with self.fail_after_start(RuntimeError("new failure"), lambda: at_start.update(self.state())), \
                 self.assertRaises(RuntimeError):
             self.sp.run_pipeline(self.video)
         self.assertEqual(at_start["run_status"], "running")
         self.assertNotIn("run_error", at_start)
+        self.assertNotIn("speaker_preview", at_start)
         self.assertEqual(self.state()["run_error"], "RuntimeError: new failure")
 
     def test_a_failure_before_the_run_wrote_its_state_touches_nothing(self) -> None:
@@ -443,9 +446,9 @@ class RunStatusTests(unittest.TestCase):
     def test_a_failure_after_publication_is_reported_as_published(self) -> None:
         published = Path(self._tmp.name) / "final" / "vod_short.mp4"
 
-        def body(video_path, *, started, **options):
+        def body(video_path, *, book_out, **options):
             book = self.book(run_status="running", publish_status="published", final_output=str(published))
-            started.append(book)
+            book_out.append(book)
             raise OSError("review sheet write failed")
 
         with mock.patch.object(self.sp, "_run_pipeline", body), self.assertRaises(OSError) as raised:
@@ -487,7 +490,70 @@ class RunStatusTests(unittest.TestCase):
         self.assertIs(pickle.loads(pickle.dumps(self.sp.run_pipeline)), self.sp.run_pipeline)
         parameters = inspect.signature(self.sp.run_pipeline).parameters
         self.assertIn("rerender", parameters)
-        self.assertNotIn("started", parameters)
+        self.assertNotIn("book_out", parameters)
+
+
+class PublishFinalTests(unittest.TestCase):
+    """Publishing replaces final/<name>_short.mp4 only with a validated, complete copy."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from ai import shorts_pipeline
+
+        self.sp = shorts_pipeline
+        self._tmp = tempfile.TemporaryDirectory(prefix="mimir publish ş ")
+        root = Path(self._tmp.name)
+        patch = mock.patch.object(shorts_pipeline, "PUBLISHED_DIR", root / "final")
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(self._tmp.cleanup)
+        self.video = root / "vod.mp4"
+        self.candidate = root / "candidate.mp4"
+        self.candidate.write_bytes(b"N" * 8192)
+        self.previous = b"P" * 6000                     # a good short from an earlier run
+        self.final = root / "final" / "vod_short.mp4"
+        self.final.parent.mkdir()
+        self.final.write_bytes(self.previous)
+
+    def leftovers(self) -> list[str]:
+        return sorted(p.name for p in self.final.parent.iterdir() if p.name != self.final.name)
+
+    def test_a_valid_candidate_replaces_the_final_short(self) -> None:
+        self.assertEqual(self.sp._publish_final(self.candidate, self.video), self.final.resolve())
+        self.assertEqual(self.final.read_bytes(), self.candidate.read_bytes())
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_failed_publish_never_destroys_the_previous_short(self) -> None:
+        def truncated(src, dst, *a, **k):
+            Path(dst).write_bytes(Path(src).read_bytes()[:3000])       # a copy that came out short
+
+        def crashing(src, dst, *a, **k):
+            Path(dst).write_bytes(b"N" * 100)
+            raise OSError(28, "No space left on device")
+
+        cases = {
+            "truncated copy": (dict(link=OSError("no hard links"), copy2=truncated), self.sp.ShortsPipelineError),
+            "copy crashes mid-write": (dict(link=OSError("no hard links"), copy2=crashing), OSError),
+            "replace fails": (dict(replace=OSError("replace refused")), OSError),
+        }
+        for name, (faults, error) in cases.items():
+            with self.subTest(name):
+                patches = [mock.patch.object(self.sp.os, "link", side_effect=faults["link"])] if "link" in faults else []
+                if "copy2" in faults:
+                    patches.append(mock.patch.object(self.sp.shutil, "copy2", side_effect=faults["copy2"]))
+                if "replace" in faults:
+                    patches.append(mock.patch.object(self.sp.os, "replace", side_effect=faults["replace"]))
+                for patch in patches:
+                    patch.start()
+                try:
+                    with self.assertRaises(error):
+                        self.sp._publish_final(self.candidate, self.video)
+                finally:
+                    for patch in patches:
+                        patch.stop()
+                self.assertEqual(self.final.read_bytes(), self.previous)     # the earlier short survives intact
+                self.assertEqual(self.leftovers(), [])                       # no staged copy left behind
 
 
 if __name__ == "__main__":

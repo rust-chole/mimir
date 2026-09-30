@@ -141,6 +141,13 @@ _NEUTRAL_VOICE = LaneColours(caption_truth.NEUTRAL_BASE_TEXT_COLOR, _v31_colour(
                              _v31_colour(caption_truth.NEUTRAL_HIGHLIGHT_TEXT_COLOR))
 
 
+def _with_roles(colours: LaneColours, roles: Mapping[str, str]) -> LaneColours:
+    """``colours`` with the given roles (text / active / emphasis / style_primary) replaced."""
+    values = {"style_primary": colours.style_primary, "text": colours.text, "active": colours.active,
+              "emphasis": colours.emphasis, **roles}
+    return LaneColours(values["style_primary"], values["text"], values["active"], values["emphasis"])
+
+
 def speaker_colours(brand: "BrandProfile") -> dict[str, LaneColours]:
     """Speaker colour key -> colours. A colour names a VOICE (captions V25), never
     a lane: "" (plain look) and "A" are the main colours, "B" the secondary
@@ -234,24 +241,24 @@ def parse_brand(data: Any, *, base: BrandProfile = MIMIR_DEFAULT) -> BrandProfil
                 lanes["tertiary"][role] = lanes["main"][role]
         if ("tertiary", "text") not in explicit:
             lanes["tertiary"]["style_primary"] = lanes["main"]["style_primary"]
-    # A third VOICE gets its own colours only when the profile sets them: the
-    # tertiary lane's main-palette parity must never make voice C look like A.
+    # Voice C takes only the tertiary roles the profile sets; every other role
+    # keeps the third-voice palette. The tertiary LANE's main-palette parity
+    # must never make voice C look like A.
     speakers = dict(base.speakers)
-    if any(lane == "tertiary" for lane, _role in explicit):
-        tertiary = lanes["tertiary"]
-        speakers["C"] = LaneColours(tertiary["style_primary"], tertiary["text"], tertiary["active"],
-                                    tertiary["emphasis"])
-    neutral_explicit = {role: _colour(data, key) for key, role in _NEUTRAL_COLOURS.items() if key in data}
-    if neutral_explicit:
-        current = speakers.get("neutral", _NEUTRAL_VOICE)
-        values = {"text": current.text, "active": current.active, "emphasis": current.emphasis,
-                  "style_primary": current.style_primary}
-        for role, value in neutral_explicit.items():
-            values[role] = ass_colour(value)
+    third = {role: lanes["tertiary"][role] for lane, role in explicit if lane == "tertiary"}
+    if third:
+        if "text" in third:
+            third["style_primary"] = lanes["tertiary"]["style_primary"]
+        speakers["C"] = _with_roles(speakers.get("C", _THIRD_VOICE), third)
+    neutral: dict[str, str] = {}
+    for key, role in _NEUTRAL_COLOURS.items():
+        value = _colour(data, key)
+        if value is not None:
+            neutral[role] = ass_colour(value)
             if role == "text":
-                values["style_primary"] = ass_style_colour(value)
-        speakers["neutral"] = LaneColours(values["style_primary"], values["text"], values["active"],
-                                          values["emphasis"])
+                neutral["style_primary"] = ass_style_colour(value)
+    if neutral:
+        speakers["neutral"] = _with_roles(speakers.get("neutral", _NEUTRAL_VOICE), neutral)
     outline = _colour(data, "outline_color")
     anchor = str(data.get("caption_anchor_policy", base.caption_anchor_policy))
     if anchor not in ANCHOR_POLICIES:

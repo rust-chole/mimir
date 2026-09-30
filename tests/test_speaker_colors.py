@@ -16,7 +16,7 @@ from unittest import mock
 
 import test_pro_edit_captions as base
 from ai.editor import caption_truth, captions, speaker_caption_support as scs, v6_runtime
-from ai.editor.pro_edit import caption_presentation as cp
+from ai.editor.pro_edit import caption_brand, caption_guard, caption_presentation as cp
 
 A_ACTIVE = cp.PALETTES["main"].active
 B_ACTIVE = cp.PALETTES["secondary"].active
@@ -134,6 +134,24 @@ class ColourAssignmentTests(unittest.TestCase):
         out, _ = colour(rows)
         self.assertEqual(json.dumps(rows, sort_keys=True), before)             # input untouched
         self.assertEqual([{k: v for k, v in r.items() if k != "speaker_color"} for r in out], rows)
+
+
+    def test_the_turn_stabilizer_and_the_colours_share_one_keep_rule(self) -> None:
+        seen = []
+        real = scs._is_stable_turn
+
+        def spy(*args):
+            seen.append(args)
+            return real(*args)
+
+        weak = [dict(w, speaker_candidate=w["speaker_raw"], speaker_candidate_confidence=w["speaker_confidence"])
+                for w in turn("S0", 4, 0.0) + turn("S1", 1, 1.3, confidence=0.7) + turn("S2", 4, 1.7)]
+        with mock.patch.object(scs, "_is_stable_turn", side_effect=spy):
+            scs._stabilize_speaker_turns(weak)
+            stabilizer_calls = len(seen)
+            colour(aba())
+        self.assertGreater(stabilizer_calls, 0)
+        self.assertGreater(len(seen), stabilizer_calls)
 
 
 class SpeakerProfileTests(unittest.TestCase):
@@ -299,6 +317,30 @@ class PresentationTests(unittest.TestCase):
         self.assertIn(B_ACTIVE, built.ass_text)
         self.assertEqual(built.metrics()["speaker_color_pages"].keys(), {"A", "B"})
 
+    def test_a_partial_third_voice_brand_keeps_the_rest_of_the_third_voice_palette(self) -> None:
+        default_c = caption_brand.speaker_colours(caption_brand.MIMIR_DEFAULT)["C"]
+        main = caption_brand.MIMIR_DEFAULT.lanes["main"]
+        for key, role in (("speaker_tertiary_color", "text"), ("speaker_tertiary_active_color", "active"),
+                          ("speaker_tertiary_emphasis_color", "emphasis")):
+            with self.subTest(only=key):
+                brand = caption_brand.parse_brand({"profile_id": "partial", "version": 1, key: "#123456"})
+                voice_c = caption_brand.speaker_colours(brand)["C"]
+                self.assertEqual(getattr(voice_c, role), caption_brand.ass_colour("#123456"))
+                for other in {"text", "active", "emphasis"} - {role}:
+                    self.assertEqual(getattr(voice_c, other), getattr(default_c, other))   # never voice A's
+                self.assertNotEqual(voice_c.active if role != "active" else voice_c.text,
+                                    main.active if role != "active" else main.text)
+        rows = turn("S0", 4, 0.0) + turn("S1", 4, 1.5) + turn("S2", 4, 3.0)
+        brand = caption_brand.parse_brand({"profile_id": "partial", "version": 1, "speaker_tertiary_color": "#123456"})
+        built = cp.build_presentation(profile=coloured_profile(rows, mode="triple", participants=("S0", "S1", "S2")),
+                                      clip_timeline=base.timeline(), plan=None, width=1080, height=1920,
+                                      metrics=base.BUILTIN, brand=brand)
+        page_c = next(p for p in built.pages if p.speaker_color == "C")
+        page_a = next(p for p in built.pages if p.speaker_color == "A")
+        style = lambda page: cp.page_style(page, built.geometry, built.settings.palettes, built.settings.speakers)
+        self.assertEqual(style(page_c).active_colour, default_c.active)
+        self.assertNotEqual(style(page_c).active_colour, style(page_a).active_colour)
+
     def test_presentation_matches_the_renderer_policy_and_keeps_the_style_lines(self) -> None:
         profile = coloured_profile(aba())
         tokens = cp.presentation_tokens(profile, 10.0)
@@ -362,6 +404,28 @@ class CaptionTruthIntegrityTests(unittest.TestCase):
         neutral = json.loads(json.dumps(profile))
         neutral["words"][2]["speaker_color"] = "neutral"                 # an uncertain word may always be neutral
         self.assertEqual(caption_truth.speaker_issues(neutral), [])
+
+    def test_a_colour_only_profile_mutation_fails_the_pro_edit_integrity_guard(self) -> None:
+        profile = coloured_profile(aba())
+        words = caption_guard.caption_words(profile)
+        self.assertEqual([w.speaker_color for w in words], colours(profile["words"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            profile_path = Path(tmp) / "profile.json"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            ass_path = Path(tmp) / "captions.ass"
+            ass_path.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,Main,,0,0,0,,x\n", encoding="utf-8")
+            integrity = caption_guard.CaptionIntegrity.capture(profile_path, ass_path)
+            integrity.verify(profile_path, ass_path, stage="unchanged")          # identical profile passes
+            mutated = json.loads(json.dumps(profile))
+            mutated["words"][0]["speaker_color"] = "B"                           # only the colour changes
+            profile_path.write_text(json.dumps(mutated), encoding="utf-8")
+            with self.assertRaisesRegex(caption_guard.CaptionIntegrityError, "caption truth changed"):
+                integrity.verify(profile_path, ass_path, stage="colour tamper")
+            dropped = json.loads(json.dumps(profile))
+            dropped["words"][0].pop("speaker_color")                              # a rebuilt word lost its colour
+            profile_path.write_text(json.dumps(dropped), encoding="utf-8")
+            with self.assertRaises(caption_guard.CaptionIntegrityError):
+                integrity.verify(profile_path, ass_path, stage="colour dropped")
 
     def test_the_final_gate_row_passes_for_a_clean_coloured_profile(self) -> None:
         profile = coloured_profile(aba())

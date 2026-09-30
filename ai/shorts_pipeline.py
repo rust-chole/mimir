@@ -1618,6 +1618,11 @@ def _run_video_brain(
 # ============================================================
 
 def _publish_final(source: Path, video_path: Path) -> Path:
+    """Atomically put ``source`` at ``final/<name>_short.mp4``.
+
+    The staged copy is validated (complete, same size as the source) BEFORE it
+    replaces anything, so a failed copy never destroys a previously published
+    short; a failed publish removes its staged copy and re-raises."""
     if not _valid_file(source, MIN_VIDEO_BYTES):
         raise ShortsPipelineError(f"Publish source geçersiz:\n{source}")
 
@@ -1634,11 +1639,19 @@ def _publish_final(source: Path, video_path: Path) -> Path:
         pass
 
     try:
-        os.link(source, temp)
-    except Exception:
-        shutil.copy2(source, temp)
-
-    os.replace(temp, output)
+        try:
+            os.link(source, temp)
+        except Exception:
+            shutil.copy2(source, temp)
+        if not _valid_file(temp, MIN_VIDEO_BYTES) or temp.stat().st_size != source.stat().st_size:
+            raise ShortsPipelineError(f"Publish kopyası eksik; önceki final korunuyor:\n{temp}")
+        os.replace(temp, output)
+    except BaseException:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     return output
 
 
@@ -2183,15 +2196,15 @@ def run_pipeline(
     run's own book records how it ended, then the error is re-raised unchanged
     (carrying ``published_output`` when the short had already been published)."""
     video_path = resolve_video_path(video_path)
-    started: list[StageBook] = []
+    book_out: list[StageBook] = []
     with _exclusive_run(_state_path(video_path)):
         try:
             return _run_pipeline(video_path, creator_name=creator_name, force=force, clip_index=clip_index,
                                  enable_memes=enable_memes, enable_video_brain=enable_video_brain,
-                                 keep_temp=keep_temp, rerender=rerender, force_v6=force_v6, started=started)
+                                 keep_temp=keep_temp, rerender=rerender, force_v6=force_v6, book_out=book_out)
         except BaseException as error:
-            if started:
-                book = started[0]
+            if book_out:
+                book = book_out[0]
                 book.close_run(error)
                 if book.state.get("publish_status") in {"published", "published_degraded"}:
                     try:
@@ -2212,9 +2225,9 @@ def _run_pipeline(
     keep_temp: bool,
     rerender: bool,
     force_v6: bool,
-    started: list[StageBook],
+    book_out: list[StageBook],
 ) -> dict[str, Any]:
-    """``run_pipeline``'s body. ``started`` receives this run's StageBook after its first save."""
+    """``run_pipeline``'s body. ``book_out`` receives this run's StageBook after its first save."""
     rerender = bool(rerender or force_v6)
     run_started = time.perf_counter()
     runtime_profiler = RuntimeProfiler()
@@ -2282,6 +2295,7 @@ def _run_pipeline(
     state.pop("final_qc", None)
     state.pop("publish_status", None)
     state.pop("run_error", None)
+    state.pop("speaker_preview", None)          # written only by the removed speaker-naming checkpoint
     state["warnings"] = []
     state["video_brain_source_report"] = None
     state["video_brain_report"] = None
@@ -2295,7 +2309,7 @@ def _run_pipeline(
         rerun=v6_runtime.FORCE_V6_STAGES if rerender else (),
     )
     book.save()
-    started.append(book)
+    book_out.append(book)
 
     _print_header(
         video_path,

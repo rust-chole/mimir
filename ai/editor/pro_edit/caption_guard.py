@@ -44,6 +44,7 @@ class CaptionWordRef:
     speaker_id: str | None
     speaker_label: str
     confidence: float
+    speaker_color: str = ""      # the voice's caption colour key (profile truth, unchanged)
 
 
 def _finite(value: Any) -> float | None:
@@ -86,6 +87,7 @@ def caption_words(profile: Mapping[str, Any] | None) -> tuple[CaptionWordRef, ..
             speaker_id=str(raw.get("speaker_raw") or "").strip() or None,
             speaker_label=str(raw.get("speaker_label") or ""),
             confidence=_finite(raw.get("speaker_confidence")) or 0.0,
+            speaker_color=str(raw.get("speaker_color") or ""),
         ))
     return tuple(words)
 
@@ -114,7 +116,7 @@ def trusted_display_names(profile: Mapping[str, Any] | None) -> dict[str, str]:
 
 def caption_signature(words: Iterable[CaptionWordRef]) -> str:
     rows = [[w.id, w.text, round(w.start, 4), round(w.end, 4), w.speaker_id or "", w.speaker_label,
-             round(w.confidence, 4)] for w in sorted(words, key=lambda w: w.id)]
+             round(w.confidence, 4), w.speaker_color] for w in sorted(words, key=lambda w: w.id)]
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 

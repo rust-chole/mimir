@@ -189,7 +189,7 @@ def main() -> int:
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
                                                           "stage_crash", "planner_down", "memes", "effect_broken",
-                                                          "fail_after_publish"])
+                                                          "fail_after_publish", "publish_copy_broken"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -243,6 +243,28 @@ def main() -> int:
 
         meme_renderer.render_memes = damaging_render
 
+    if args.mode == "publish_copy_broken":
+        import shutil
+
+        real_link, real_copy = shorts_pipeline.os.link, shutil.copy2
+
+        def staged(dst) -> bool:
+            return str(dst).endswith("_short.mp4.tmp")
+
+        def no_link(src, dst, *a, **k):
+            if staged(dst):
+                raise OSError("harness: no hard links on this volume")
+            return real_link(src, dst, *a, **k)
+
+        def truncating_copy(src, dst, *a, **k):
+            if staged(dst):                                  # the publish copy comes out incomplete
+                Path(dst).write_bytes(Path(src).read_bytes()[:4096])
+                return dst
+            return real_copy(src, dst, *a, **k)
+
+        shorts_pipeline.os.link = no_link
+        shutil.copy2 = truncating_copy
+
     if args.mode == "fail_after_publish":
         from ai.editor import human_review
 
@@ -259,7 +281,8 @@ def main() -> int:
     try:
         result = shorts_pipeline.run_pipeline(video, **kwargs)
     except Exception as error:
-        if args.mode != "fail_after_publish" and not isinstance(error, shorts_pipeline.ShortsPipelineError):
+        if args.mode not in ("fail_after_publish", "publish_copy_broken") \
+                and not isinstance(error, shorts_pipeline.ShortsPipelineError):
             raise
         state_file = shorts_pipeline._state_path(video)
         state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
@@ -272,6 +295,10 @@ def main() -> int:
             "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
             "v6_state": state.get("v6"), "final_qc": state.get("final_qc"),
             "published_exists": (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists(),
+            "published_md5": md5(shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4")
+            if (shorts_pipeline.PUBLISHED_DIR / f"{video.stem}_short.mp4").exists() else None,
+            "staged_leftovers": sorted(p.name for p in shorts_pipeline.PUBLISHED_DIR.glob("*.tmp"))
+            if shorts_pipeline.PUBLISHED_DIR.exists() else [],
             "rejected": sorted(p.name for p in shorts_pipeline.REJECTED_DIR.glob(f"{video.stem}_*"))
             if shorts_pipeline.REJECTED_DIR.exists() else [],
         })

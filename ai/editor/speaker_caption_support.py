@@ -69,6 +69,9 @@ TIMING_ONLY_MAX_CONFIDENCE = 0.72
 MIN_STABLE_TURN_WORDS = 2
 MIN_STABLE_TURN_SECONDS = 0.42
 MIN_STABLE_TURN_CONFIDENCE = 0.70
+# A turn shorter than MIN_STABLE_TURN_WORDS is still real with strong evidence.
+STRONG_SHORT_TURN_CONFIDENCE = 0.84      # ... when it also lasts MIN_STABLE_TURN_SECONDS
+STRONG_TURN_CONFIDENCE = 0.90            # ... at any length
 MAX_SINGLE_WORD_FLIP_SECONDS = 0.48
 # V5: continuity may bridge only a genuinely local diarization boundary. A
 # caption run seconds away from the last measured speaker turn is UNKNOWN, not
@@ -1239,6 +1242,16 @@ def _run_metrics(words: list[dict[str, Any]], start: int, end: int) -> dict[str,
     }
 
 
+def _is_stable_turn(words: int, duration: float, avg_confidence: float) -> bool:
+    """One keep rule for the turn stabilizer and the speaker colours: a real
+    turn, or a short turn with strong speaker evidence."""
+    return (
+        words >= MIN_STABLE_TURN_WORDS
+        or (duration >= MIN_STABLE_TURN_SECONDS and avg_confidence >= STRONG_SHORT_TURN_CONFIDENCE)
+        or avg_confidence >= STRONG_TURN_CONFIDENCE
+    )
+
+
 def _speaker_runs(words: list[dict[str, Any]]) -> list[tuple[int, int, str]]:
     if not words:
         return []
@@ -1361,11 +1374,7 @@ def _stabilize_speaker_turns(words: list[dict[str, Any]]) -> tuple[list[dict[str
         metrics = _run_metrics(result, start, end)
         if not speaker:
             continue
-        if metrics["words"] >= MIN_STABLE_TURN_WORDS:
-            continue
-        if metrics["duration"] >= MIN_STABLE_TURN_SECONDS and metrics["avg_confidence"] >= 0.84:
-            continue
-        if metrics["avg_confidence"] >= 0.90:
+        if _is_stable_turn(metrics["words"], metrics["duration"], metrics["avg_confidence"]):
             continue
         left_speaker = runs[run_index - 1][2] if run_index > 0 else ""
         right_speaker = runs[run_index + 1][2] if run_index + 1 < len(runs) else ""
@@ -1637,22 +1646,12 @@ SPEAKER_COLOR_VERSION = 1
 SPEAKER_COLOR_SLOTS = ("A", "B", "C")
 SPEAKER_COLOR_NEUTRAL = "neutral"
 # A turn earns its voice's colour only with the turn stabilizer's own keep rule
-# (a real turn, or a short turn with strong evidence) and a confidence floor.
+# (_is_stable_turn) and a confidence floor.
 MIN_COLOR_RUN_CONFIDENCE = 0.60
 # Whole-clip reliability: too much uncertain speech or too many colour changes
 # means the colours would flicker rather than follow turns -> no speaker colours.
 MAX_NEUTRAL_COLOR_SHARE = 0.34
 MAX_COLOR_CHANGES_PER_20_WORDS = MAX_DUAL_SWITCHES_PER_20_WORDS
-
-
-def _stable_color_run(words: int, duration: float, avg_confidence: float) -> bool:
-    if avg_confidence < MIN_COLOR_RUN_CONFIDENCE:
-        return False
-    return (
-        words >= MIN_STABLE_TURN_WORDS
-        or (duration >= MIN_STABLE_TURN_SECONDS and avg_confidence >= 0.84)
-        or avg_confidence >= 0.90
-    )
 
 
 def _assign_speaker_colors(
@@ -1723,7 +1722,8 @@ def _assign_speaker_colors(
         except (TypeError, ValueError):
             summary["demoted_turns"] += 1
             continue
-        if _stable_color_run(end - start, max(0.0, duration), sum(confidences) / len(confidences)):
+        average = sum(confidences) / len(confidences)
+        if average >= MIN_COLOR_RUN_CONFIDENCE and _is_stable_turn(end - start, max(0.0, duration), average):
             for index in range(start, end):
                 trusted[index] = voice
         else:

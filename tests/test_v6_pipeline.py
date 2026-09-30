@@ -149,6 +149,46 @@ class RunStatusEndToEndTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+class PublishFailureEndToEndTests(unittest.TestCase):
+    """A rerun whose publish copy comes out incomplete leaves the earlier short in
+    final/ byte for byte, and its state says it failed without publishing."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir publish e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        cls.video = make_video(base / "media ✓" / "publish vod.mp4", 30)
+        cls.results = {}
+        for mode in ("run", "publish_copy_broken"):
+            out = base / f"{mode}.json"
+            proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(cls.video),
+                                   "--mode", mode, "--out", str(out)], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=900,
+                                  env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+            if proc.returncode != 0:
+                raise AssertionError(f"harness mode {mode} failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+            cls.results[mode] = json.loads(out.read_text(encoding="utf-8"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_the_earlier_short_survives_and_the_run_reports_no_publication(self) -> None:
+        good, broken = self.results["run"], self.results["publish_copy_broken"]
+        self.assertEqual(good["status"], "published")
+        self.assertEqual(broken["error_type"], "ShortsPipelineError")
+        self.assertIn("Publish kopyası eksik", broken["error"])
+        self.assertEqual((broken["run_status"], broken["publish_status"]), ("failed", None))
+        self.assertIsNone(broken["published_output"])              # the CLI says nothing was published
+        self.assertTrue(broken["published_exists"])
+        self.assertEqual(broken["published_md5"], good["final_md5"])  # the earlier short, byte for byte
+        self.assertEqual(broken["staged_leftovers"], [])
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
 class SpeakerColorEndToEndTests(unittest.TestCase):
     """The REAL pipeline with two voices taking turns (A B A B ...): no naming prompt,
     the burned captions colour each voice on the one main lane, and the frozen truth,

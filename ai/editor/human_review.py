@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-HUMAN_REVIEW_VERSION = 1
+HUMAN_REVIEW_VERSION = 2
 
 
 def _clock(seconds: float | None) -> str:
@@ -92,11 +92,8 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
                       "confidence": row.get("confidence")})
 
     focus.sort(key=lambda item: item["final_s"])
-    speakers: dict[str, int] = {}
     colours: dict[str, int] = {}
     for row in words.values():
-        label = str(row[5] if len(row) > 5 else "") or "(unlabeled lane)"
-        speakers[label] = speakers.get(label, 0) + 1
         colour = str(row[6] if len(row) > 6 else "") or "plain"
         colours[colour] = colours.get(colour, 0) + 1
     intro = timeline_doc.get("intro") or {}
@@ -111,7 +108,6 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
         "cold_open": {"final_window_s": [0.0, round(float(intro.get("duration", 0.0) or 0.0), 3)],
                       "paced_window_s": intro.get("paced"), "headline": headline or ""},
         "effects_final_s": [[round(a, 3), round(b, 3)] for a, b in effect_windows],
-        "speakers": speakers,
         "speaker_colors": colours,
         "focus": focus,
         "degradations": list(degradations),
