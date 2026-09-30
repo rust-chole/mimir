@@ -218,7 +218,7 @@ class RendererAndPipelineTests(unittest.TestCase):
                          {"enabled": True, "v6": True, "presentation_in_signature": True, "flags_removed": True})
 
     def test_baseline_captions_are_untouched_by_the_port(self) -> None:
-        self.assertEqual(captions.CAPTION_VERSION, 24)
+        self.assertEqual(captions.CAPTION_VERSION, 25)
         with tempfile.TemporaryDirectory() as tmp:
             data = base.human_profile(overlapping_dialogue(), {"A": "KAI"}, primary_speaker="A",
                                       secondary_speaker="B")

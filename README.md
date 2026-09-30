@@ -48,7 +48,12 @@ cache), `--no-memes`, `--verbose`.
      neighbours as anchors; otherwise the legacy Whisper clock re-times the whole
      transcript (disclosed). One timing authority per run; no global shifts, no invented
      times.
-   - **Who** — diarization + your voice-confirmed names; never changes a word or a time.
+   - **Who** — diarization turns give each *voice* a caption colour (first voice A,
+     next B, then C; a returning voice keeps its colour). Nobody is asked who is
+     speaking and no name is printed; an uncertain word is neutral, and with fewer
+     than two reliable voices the captions stay plain. Colours never move a caption
+     to another lane (a second lane appears only during real overlapping speech) and
+     never change a word or a time.
    Verified-name spelling the name lock cannot decide is a closed choice for the judge
    (verified spelling / keep / uncertain). Caption truth proves the words still equal the
    frozen transcript and freezes the final result with who decided each word.
@@ -85,7 +90,7 @@ re-checked and the repair is disclosed (published as degraded).
 No model reviews the final short. `<name>_short.review.md` lists, on the published
 file's clock, every caption word the evidence could not settle, every word the caption
 judge changed, judge-decided name spellings, the cold open and headline, effects,
-speaker labels and every disclosed degradation, plus Accept / Reject boxes.
+the speaker colours and every disclosed degradation, plus Accept / Reject boxes.
 
 ## Model routing
 

@@ -19,7 +19,7 @@ CAPTION_OUTPUT_DIR = (
 # CONFIG
 # ============================================================
 
-CAPTION_VERSION = 24
+CAPTION_VERSION = 25
 
 PLAY_RES_X = 1080
 PLAY_RES_Y = 1920
@@ -56,6 +56,10 @@ CROSS_LANE_HANDOFF_EPSILON = 0.025
 # A second visual lane is NOT a permanent speaker lane. It exists only around
 # measured simultaneous/interrupting speech. Ordinary A->B conversation stays
 # on the same main caption position.
+#
+# V25 speaker colours: a lane is WHERE a caption sits, a colour is WHICH VOICE
+# speaks. The colour comes from the profile's acoustic turns
+# (speaker_caption_support._assign_speaker_colors), never from the lane.
 MIN_TRUE_SPEECH_OVERLAP = 0.045
 OVERLAP_WINDOW_PAD_BEFORE = 0.08
 OVERLAP_WINDOW_PAD_AFTER = 0.14
@@ -81,6 +85,21 @@ SECONDARY_BASE_TEXT_COLOR = "&H00FFF7E8"
 SECONDARY_ACTIVE_TEXT_COLOR = "&H00FFE054"
 SECONDARY_HIGHLIGHT_TEXT_COLOR = "&H00FF6BA9"
 SECONDARY_MARGIN_V = 650
+
+# Third voice palette (green family).
+TERTIARY_BASE_TEXT_COLOR = "&H00EAFFEA"
+TERTIARY_ACTIVE_TEXT_COLOR = "&H007AFF5C"
+TERTIARY_HIGHLIGHT_TEXT_COLOR = "&H00C85CFF"
+
+# Neutral palette: a word whose voice is uncertain inside a multi-voice clip.
+# No hue, so it never reads as any voice's colour.
+NEUTRAL_BASE_TEXT_COLOR = "&H00D8D8D8"
+NEUTRAL_ACTIVE_TEXT_COLOR = "&H00FFFFFF"
+NEUTRAL_HIGHLIGHT_TEXT_COLOR = "&H00FFFFFF"
+
+# Speaker colour key -> palette. "" (no speaker colours: single voice,
+# unresolved or unreliable turns) is the plain caption look, identical to A.
+SPEAKER_COLOR_KEYS = ("", "A", "B", "C", "neutral")
 
 OUTLINE_COLOR = "&H00000000"
 SHADOW_COLOR = "&HFF000000"
@@ -764,12 +783,13 @@ def split_caption_groups(
             current_label = str(word.get("speaker_label", "")).strip()
 
             # V24: raw A/B diarization is metadata, not a caption-layout command.
-            # Only a visible HUMAN-confirmed name transition may force a group
-            # boundary. If both identities are blank, dialogue flows naturally.
+            # Only a visible name transition or (V25) a speaker-colour change
+            # forces a group boundary, so one caption never mixes two voices'
+            # colours. Blank names and equal colours let dialogue flow.
             speaker_changed = (
                 (previous_label or current_label)
                 and previous_label.casefold() != current_label.casefold()
-            )
+            ) or speaker_color(previous) != speaker_color(word)
 
             if (
                 speaker_changed
@@ -831,20 +851,26 @@ def split_caption_groups(
 # WORD STYLE
 # ============================================================
 
-def _speaker_palette(role: str) -> tuple[str, str, str, str]:
-    if role == "secondary":
-        return (
-            SECONDARY_BASE_TEXT_COLOR,
-            SECONDARY_ACTIVE_TEXT_COLOR,
-            SECONDARY_HIGHLIGHT_TEXT_COLOR,
-            "ViralSecondary",
-        )
-    return (
-        INACTIVE_TEXT_COLOR,
-        ACTIVE_TEXT_COLOR,
-        HIGHLIGHT_TEXT_COLOR,
-        "ViralMain",
-    )
+def speaker_color(word: dict[str, Any]) -> str:
+    """The word's speaker colour key; anything unknown is the plain look."""
+    value = str(word.get("speaker_color", "") or "")
+    return value if value in SPEAKER_COLOR_KEYS else ""
+
+
+def _lane_style(role: str) -> str:
+    """ASS style (position) of a lane. Lanes never choose colours."""
+    return "ViralSecondary" if role == "secondary" else "ViralMain"
+
+
+def _color_palette(color: str) -> tuple[str, str, str]:
+    """(inactive, active, highlight) of a speaker colour key."""
+    if color == "B":
+        return SECONDARY_BASE_TEXT_COLOR, SECONDARY_ACTIVE_TEXT_COLOR, SECONDARY_HIGHLIGHT_TEXT_COLOR
+    if color == "C":
+        return TERTIARY_BASE_TEXT_COLOR, TERTIARY_ACTIVE_TEXT_COLOR, TERTIARY_HIGHLIGHT_TEXT_COLOR
+    if color == "neutral":
+        return NEUTRAL_BASE_TEXT_COLOR, NEUTRAL_ACTIVE_TEXT_COLOR, NEUTRAL_HIGHLIGHT_TEXT_COLOR
+    return INACTIVE_TEXT_COLOR, ACTIVE_TEXT_COLOR, HIGHLIGHT_TEXT_COLOR
 
 
 def render_word(
@@ -853,9 +879,11 @@ def render_word(
     active: bool,
     emphasized: bool,
     role: str,
+    color: str = "",
 ) -> str:
     text = escape_ass_text(word["word"])
-    inactive_color, active_color, highlight_color, style_name = _speaker_palette(role)
+    inactive_color, active_color, highlight_color = _color_palette(color)
+    style_name = _lane_style(role)
 
     if active and emphasized:
         return (
@@ -910,7 +938,8 @@ def build_caption_text(
     rendered = []
     role = str(group[0].get("speaker_role", "main")) if group else "main"
     label = str(group[0].get("speaker_label", "")).strip() if group else ""
-    _, _, _, style_name = _speaker_palette(role)
+    color = speaker_color(group[0]) if group else ""
+    style_name = _lane_style(role)
 
     for index, word in enumerate(group):
         # V21: keep the full group's geometry stable, but do NOT reveal future
@@ -927,12 +956,13 @@ def build_caption_text(
                 active=(index == active_index),
                 emphasized=word_is_emphasized(word, emphasis_markers),
                 role=role,
+                color=color,
             )
         )
 
     body = " ".join(rendered)
     if label:
-        _, active_color, _, style_name = _speaker_palette(role)
+        _, active_color, _ = _color_palette(color)
         prefix = f"{{\\b1\\c{active_color}}}{escape_ass_text(label)}:{{\\r{style_name}}}"
         return f"{prefix} {body}"
     return body
@@ -1074,6 +1104,7 @@ def _profile_edited_words(
                 "speaker_raw": str(raw.get("speaker_raw", "")),
                 "speaker_role": str(raw.get("speaker_role", "main")) or "main",
                 "speaker_label": str(raw.get("speaker_label", "")),
+                "speaker_color": speaker_color(raw),
                 "speaker_confidence": float(raw.get("speaker_confidence", 0.0) or 0.0),
                 "timing_source": str(raw.get("timing_source", "edited_clip")),
             }
@@ -1456,11 +1487,13 @@ def _prepare_adaptive_render_words(
     speaker_profile: dict[str, Any] | None,
     trusted_display_map: dict[str, str],
 ) -> tuple[list[dict[str, Any]], list[tuple[float, float]]]:
-    """Apply the final V24 render policy without touching text or timestamps.
+    """Apply the final V25 render policy without touching text or timestamps.
 
-    - Human names are sticky and authoritative.
-    - Blank naming means BLANK on screen: no automatic A/B/X placeholders.
-    - Ordinary sequential dialogue uses one main visual lane.
+    - A name is printed only from a human-confirmed display map; no automatic
+      A/B/X placeholders (the production profile carries no names).
+    - A word's colour is its voice's ``speaker_color`` from the profile's acoustic
+      turns; a diarization boundary hard failure shows no speaker colours.
+    - Ordinary sequential dialogue uses one main visual lane, whatever its colours.
     - Secondary lane appears only inside real measured overlap windows.
     """
     raw_map = _render_two_speaker_raw_map(
@@ -1478,6 +1511,7 @@ def _prepare_adaptive_render_words(
         (raw for raw, role in raw_map.items() if role == "secondary"),
         "",
     )
+    colors_allowed = not _speaker_render_hard_failure(speaker_profile)
 
     prepared: list[dict[str, Any]] = []
     for word in words:
@@ -1487,6 +1521,7 @@ def _prepare_adaptive_render_words(
         # Never leak automatic placeholder identity into published captions.
         # A label is printable only if it came from the human naming checkpoint.
         item["speaker_label"] = trusted_display_map.get(raw, "")
+        item["speaker_color"] = speaker_color(item) if colors_allowed else ""
 
         role = "main"
         if raw and raw == secondary_raw and collision_windows:

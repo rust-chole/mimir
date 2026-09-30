@@ -149,6 +149,62 @@ class RunStatusEndToEndTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+class SpeakerColorEndToEndTests(unittest.TestCase):
+    """The REAL pipeline with two voices taking turns (A B A B ...): no naming prompt,
+    the burned captions colour each voice on the one main lane, and the frozen truth,
+    QC and the final gate accept the colours."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir colours e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        video = make_video(base / "media ✓" / "colour vod.mp4", 30)
+        out = base / "run.json"
+        proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(video),
+                               "--mode", "run", "--out", str(out)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=900, stdin=subprocess.DEVNULL,
+                              env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                                   "HARNESS_SPEAKERS": "dual"})
+        if proc.returncode != 0:
+            raise AssertionError(f"harness failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+        cls.result = json.loads(out.read_text(encoding="utf-8"))
+        output = cls.copy / "vod_output"
+        cls.presentation = [p for p in output.rglob("*.ass")
+                            if "MIMIR Pro Edit Caption Presentation" in p.read_text(encoding="utf-8-sig")]
+        cls.truths = sorted(output.rglob("*_caption_truth_v*.json"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_the_short_is_published_with_the_speaker_colours_accepted(self) -> None:
+        self.assertEqual(self.result["status"], "published", self.result.get("v6_state"))
+        self.assertEqual(self.result["run_status"], "success")
+        gate = (self.result.get("v6_state") or {}).get("gate") or {}
+        self.assertNotIn("speaker_ownership", " ".join(map(str, gate.get("failed") or [])))
+
+    def test_the_burned_captions_colour_each_voice_on_the_main_lane(self) -> None:
+        from ai.editor.pro_edit import caption_presentation as cp
+
+        self.assertTrue(self.presentation)
+        text = self.presentation[-1].read_text(encoding="utf-8-sig")
+        events = [line for line in text.splitlines() if line.startswith("Dialogue:")]
+        self.assertTrue(events)
+        self.assertEqual({line.split(",")[3] for line in events}, {"MimirMain"})       # sequential turns: one lane
+        self.assertIn(cp.PALETTES["main"].active, text)                              # voice A
+        self.assertIn(cp.PALETTES["secondary"].active, text)                         # voice B
+
+    def test_the_frozen_truth_carries_the_colours(self) -> None:
+        self.assertTrue(self.truths)
+        truth = json.loads(self.truths[-1].read_text(encoding="utf-8"))
+        self.assertEqual(truth.get("speaker_issues"), [])
+        self.assertEqual({row[6] for row in truth["words"]}, {"A", "B"})             # frozen with the words
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
 @fx.needs_opencv
 class V6PipelineEndToEndTests(unittest.TestCase):
     @classmethod

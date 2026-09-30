@@ -218,7 +218,8 @@ def check_caption_truth(profile_path: str | Path | None, truth_path: str | Path 
                        "monotonic, inside the clip" if not timing else "; ".join(timing[:5])))
     speakers = caption_truth.speaker_issues(profile)
     rows.append(_check("speaker_ownership", "pass" if not speakers else "fail",
-                       "raw ids known, labels human-confirmed" if not speakers else "; ".join(speakers[:5])))
+                       "raw ids known, labels human-confirmed, colours follow the acoustic turns"
+                       if not speakers else "; ".join(speakers[:5])))
     return rows
 
 

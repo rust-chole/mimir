@@ -39,6 +39,10 @@ third lane). Hard breaks follow the renderer's visible-label rule, each lane on
 its own clock, and in a diarization hard failure (``_speaker_render_hard_failure``)
 pages in one lane never overlap. The raw ``speaker_raw`` id stays truth.
 
+Speaker colours (captions V25): a page's COLOURS come from its voice's
+``speaker_color`` (the profile's acoustic turns), its LANE only from measured
+overlap. A colour change is a hard break, so a page never mixes two voices.
+
 Geometry law: a page's geometry is fixed when it appears. Each line is one
 explicitly positioned ASS event (``\\an2\\pos``); future words are transparent
 but occupy their width; the active word changes colour (and, for emphasis
@@ -58,7 +62,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from ai.editor import captions as caption_truth
-from ai.editor.pro_edit.caption_brand import MIMIR_DEFAULT, BrandProfile
+from ai.editor.pro_edit.caption_brand import MIMIR_DEFAULT, BrandProfile, speaker_colours
 from ai.editor.pro_edit.caption_legibility import (
     LEGIBILITY_VERSION,
     Legibility,
@@ -88,7 +92,7 @@ from ai.editor.pro_edit.errors import ProEditError
 from ai.editor.pro_edit.font_metrics import FontMetrics, load_metrics, select_shaper
 from ai.editor.pro_edit.schema import CaptionStyle, EditPlan, StoryRole
 
-CAPTION_PRESENTATION_VERSION = 4
+CAPTION_PRESENTATION_VERSION = 5
 CAPTION_STYLE_PACK = "mimir_caption_v1"
 CAPTION_STYLE_PACK_VERSION = 2
 
@@ -116,6 +120,7 @@ class CaptionTokenRef:
     speaker_label: str        # DISPLAY label: printable (human-confirmed) name or ""
     normalized: str
     uncertain: bool = False   # truth-side uncertainty mask ("???"): shown, never emphasized
+    speaker_color: str = ""   # DISPLAY colour of the voice: "" plain, "A"/"B"/"C", "neutral"
 
     @property
     def lane(self) -> str:
@@ -152,9 +157,9 @@ def edited_duration(profile: Mapping[str, Any] | None, clip_timeline: Mapping[st
         return 0.0
 
 
-def display_metadata(profile: Mapping[str, Any] | None, duration: float) -> list[tuple[str, str]] | None:
-    """(speaker_role, speaker_label) of every displayed word under the CURRENT
-    caption renderer's speaker policy, in ``captions._profile_edited_words`` order.
+def display_metadata(profile: Mapping[str, Any] | None, duration: float) -> list[tuple[str, str, str]] | None:
+    """(speaker_role, speaker_label, speaker_color) of every displayed word under
+    the CURRENT caption renderer's speaker policy, in ``captions._profile_edited_words`` order.
 
     Captions V24 owns WHO is displayable and on which lane: only human-confirmed
     names are printed (``_trusted_human_display_map``) and the secondary lane
@@ -170,8 +175,8 @@ def display_metadata(profile: Mapping[str, Any] | None, duration: float) -> list
     source = dict(profile) if profile else None
     words = caption_truth._profile_edited_words(source, duration)
     prepared, _windows = prepare(words, speaker_profile=source, trusted_display_map=trusted(source))
-    return [(str(word.get("speaker_role", "main") or "main"), str(word.get("speaker_label", "")))
-            for word in prepared]
+    return [(str(word.get("speaker_role", "main") or "main"), str(word.get("speaker_label", "")),
+             str(word.get("speaker_color", "") or "")) for word in prepared]
 
 
 def strict_lane_timing(profile: Mapping[str, Any] | None) -> bool:
@@ -219,6 +224,7 @@ def presentation_tokens(profile: Mapping[str, Any] | None, duration: float) -> t
             speaker_label=str(raw.get("speaker_label", "")),
             normalized=caption_truth.normalize_word(text),
             uncertain=_is_uncertainty_mask(raw, text),
+            speaker_color=_speaker_color(raw),
         ))
     rows.sort(key=lambda t: (t.start, t.end))
     display = display_metadata(profile, duration)
@@ -226,9 +232,14 @@ def presentation_tokens(profile: Mapping[str, Any] | None, duration: float) -> t
         if len(display) != len(rows):
             raise CaptionPresentationError(
                 f"display metadata covers {len(display)} words, presentation has {len(rows)}")
-        rows = [dataclasses.replace(row, speaker_role=role, speaker_label=label)
-                for row, (role, label) in zip(rows, display)]
+        rows = [dataclasses.replace(row, speaker_role=role, speaker_label=label, speaker_color=color)
+                for row, (role, label, color) in zip(rows, display)]
     return tuple(rows)
+
+
+def _speaker_color(raw: Mapping[str, Any]) -> str:
+    reader = getattr(caption_truth, "speaker_color", None)
+    return reader(dict(raw)) if callable(reader) else ""
 
 
 def verify_token_parity(tokens: Sequence[CaptionTokenRef], profile: Mapping[str, Any] | None,
@@ -243,9 +254,11 @@ def verify_token_parity(tokens: Sequence[CaptionTokenRef], profile: Mapping[str,
         raise CaptionPresentationError(
             f"presentation tokens differ from caption truth ({len(ours)} vs {len(theirs)} words)")
     display = display_metadata(profile, duration)
-    expected = display if display is not None else [(w["speaker_role"], w["speaker_label"]) for w in baseline]
-    if [(t.speaker_role, t.speaker_label) for t in tokens] != list(expected):
-        raise CaptionPresentationError("presentation speaker lanes/labels differ from the caption renderer policy")
+    expected = display if display is not None else [
+        (w["speaker_role"], w["speaker_label"], str(w.get("speaker_color", "") or "")) for w in baseline]
+    if [(t.speaker_role, t.speaker_label, t.speaker_color) for t in tokens] != list(expected):
+        raise CaptionPresentationError(
+            "presentation speaker lanes/labels/colours differ from the caption renderer policy")
 
 
 # ============================================================
@@ -364,9 +377,21 @@ _LANE_STYLE_NAMES = {"main": "MimirMain", "secondary": "MimirSecondary", "tertia
 
 
 def palettes_for(brand: BrandProfile) -> Mapping[str, LanePalette]:
-    """Lane palettes of a brand profile (``mimir_default`` == PALETTES)."""
+    """Lane palettes of a brand profile (``mimir_default`` == PALETTES).
+
+    A lane palette gives a page its ASS style line (where it sits); the words'
+    colours come from the voice (``speaker_palettes_for``)."""
     return {lane: LanePalette(_LANE_STYLE_NAMES[lane], colours.style_primary, colours.text, colours.active,
                               colours.emphasis) for lane, colours in brand.lanes.items()}
+
+
+def speaker_palettes_for(brand: BrandProfile) -> Mapping[str, LanePalette]:
+    """Speaker colour key ("", "A", "B", "C", "neutral") -> colours of that voice."""
+    return {key: LanePalette("", colours.style_primary, colours.text, colours.active, colours.emphasis)
+            for key, colours in speaker_colours(brand).items()}
+
+
+SPEAKER_PALETTES: Mapping[str, LanePalette] = speaker_palettes_for(MIMIR_DEFAULT)
 PALETTE_ROLES = ("inactive", "active", "highlight")
 
 
@@ -460,12 +485,16 @@ class ResolvedCaptionStyle:
 
 def resolve_caption_style(style: CaptionStyle, lane: str, geometry: LayoutGeometry, *,
                           fit_scale: float = 1.0, palettes: Mapping[str, LanePalette] | None = None,
-                          outline_boost: float = 1.0) -> ResolvedCaptionStyle:
+                          outline_boost: float = 1.0, colour: str = "",
+                          speakers: Mapping[str, LanePalette] | None = None) -> ResolvedCaptionStyle:
+    """``lane`` picks the ASS style (position), ``colour`` the voice's colours."""
     definition = STYLE_DEFINITIONS[style]
-    palette = (palettes or PALETTES)[lane]
+    lane_palette = (palettes or PALETTES)[lane]
+    voices = speakers or SPEAKER_PALETTES
+    palette = voices.get(colour) or voices[""]
     outline = round(geometry.outline_px * definition.outline_scale * fit_scale * outline_boost, 1)
     return ResolvedCaptionStyle(
-        name=style, lane=lane, ass_style=palette.style_name,
+        name=style, lane=lane, ass_style=lane_palette.style_name,
         font_px=round(geometry.font_px * definition.base_font_scale * fit_scale, 1),
         outline_px=outline,
         active_outline_px=round(outline * definition.active_outline_scale, 1),
@@ -551,6 +580,10 @@ class CaptionPage:
     @property
     def speaker_role(self) -> str:
         return self.tokens[0].speaker_role
+
+    @property
+    def speaker_color(self) -> str:
+        return self.tokens[0].speaker_color
 
 
 ResolvedCaptionPage = CaptionPage
@@ -826,9 +859,10 @@ def _label_changed(previous: CaptionTokenRef, token: CaptionTokenRef) -> bool:
 
 
 def split_runs(tokens: Sequence[CaptionTokenRef]) -> list[list[CaptionTokenRef]]:
-    """Hard breaks, same rules as the baseline groups (captions V24): a visible
-    label change, a gap of GROUP_BREAK_GAP or more, sentence punctuation. Each
-    display lane is grouped on its own clock, like the baseline's lanes."""
+    """Hard breaks, same rules as the baseline groups (captions V25): a visible
+    label change, a speaker-colour change, a gap of GROUP_BREAK_GAP or more,
+    sentence punctuation. Each display lane is grouped on its own clock, like
+    the baseline's lanes."""
     by_lane: dict[str, list[CaptionTokenRef]] = {}
     for token in tokens:
         by_lane.setdefault(token.lane, []).append(token)
@@ -838,7 +872,7 @@ def split_runs(tokens: Sequence[CaptionTokenRef]) -> list[list[CaptionTokenRef]]
         for token in lane_tokens:
             if current:
                 previous = current[-1]
-                if (_label_changed(previous, token)
+                if (_label_changed(previous, token) or previous.speaker_color != token.speaker_color
                         or token.start - previous.end >= caption_truth.GROUP_BREAK_GAP):
                     runs.append(current)
                     current = []
@@ -1194,10 +1228,12 @@ def build_presentation(
         last_index[lane] = index
 
     palettes = palettes_for(brand)
+    speakers = speaker_palettes_for(brand)
     pages: list[CaptionPage] = []
     for index, ((draft, style, directive_id), emphasis) in enumerate(zip(styled, page_emphasis)):
         lane = draft.tokens[0].lane
-        resolved = resolve_caption_style(style, lane, geometry, fit_scale=draft.fit_scale, palettes=palettes)
+        resolved = resolve_caption_style(style, lane, geometry, fit_scale=draft.fit_scale, palettes=palettes,
+                                         colour=draft.tokens[0].speaker_color, speakers=speakers)
         measure = _Measure(font, resolved.font_px, active_shaper)
         label = draft.tokens[0].speaker_label.strip()
         lines: list[CaptionLine] = []
@@ -1225,7 +1261,7 @@ def build_presentation(
         geometries = []
         for page in pages:
             style = resolve_caption_style(page.style, page.lane, geometry, fit_scale=page.fit_scale,
-                                          palettes=palettes)
+                                          palettes=palettes, colour=page.speaker_color, speakers=speakers)
             scale = style.emphasis_scale if page.emphasis_ids and allow_scale else 1.0
             geometries.append(PageGeometry(page.page_id, page.start, page.end,
                                            _line_boxes_px(page, geometry, font, style, scale)))
@@ -1257,7 +1293,7 @@ def build_presentation(
     effects, primitive_log = resolve_page_effects(facts, brand.allowed_primitives, brand.budget)
     plates = PrimitiveId.STATIC_ACCENT_BACKPLATE in brand.allowed_primitives or any(e.draws for e in effects)
     settings = RenderSettings(
-        palettes=palettes, font_family=font_family or brand.font_family, bold=bold,
+        palettes=palettes, speakers=speakers, font_family=font_family or brand.font_family, bold=bold,
         outline_colour=brand.outline_color, effects={e.page_id: e for e in effects}, plates=plates,
         plate_colour=brand.backplate_color, plate_alpha=brand.backplate_alpha, metrics=font, shaper=active_shaper,
         allow_emphasis_scale=allow_scale)
@@ -1271,11 +1307,12 @@ def build_presentation(
     return presentation
 
 
-def page_style(page: CaptionPage, geometry: LayoutGeometry, palettes: Mapping[str, LanePalette] | None = None
-               ) -> ResolvedCaptionStyle:
-    """Resolved style of a page including its legibility outline boost."""
+def page_style(page: CaptionPage, geometry: LayoutGeometry, palettes: Mapping[str, LanePalette] | None = None,
+               speakers: Mapping[str, LanePalette] | None = None) -> ResolvedCaptionStyle:
+    """Resolved style of a page (its lane's style, its voice's colours) including
+    its legibility outline boost."""
     return resolve_caption_style(page.style, page.lane, geometry, fit_scale=page.fit_scale, palettes=palettes,
-                                 outline_boost=page.outline_boost)
+                                 outline_boost=page.outline_boost, colour=page.speaker_color, speakers=speakers)
 
 
 def _page_box_norm(page: CaptionPage, geometry: LayoutGeometry, font: FontMetrics, style: ResolvedCaptionStyle,
@@ -1306,8 +1343,9 @@ def assess_pages(pages: Sequence[CaptionPage], geometry: LayoutGeometry, font: F
     fingerprint = str(getattr(getattr(background, "inner", background), "fingerprint", ""))
     allow_plate = brand.legibility == "auto"
     rows: list[tuple[CaptionPage, Any, TextAppearance, str, LegibilityDecision]] = []
+    speakers = speaker_palettes_for(brand)
     for page in pages:
-        style = page_style(page, geometry, palettes)
+        style = page_style(page, geometry, palettes, speakers)
         scale = style.emphasis_scale if page.emphasis_ids and allow_scale else 1.0
         box = _page_box_norm(page, geometry, font, style, scale)
         stats = background.region_stats(page.start, page.end, box)
@@ -1443,6 +1481,7 @@ class RenderSettings:
     """Brand + primitive decisions for the ASS writer (defaults == V3.1)."""
 
     palettes: Mapping[str, LanePalette] = field(default_factory=lambda: PALETTES)
+    speakers: Mapping[str, LanePalette] = field(default_factory=lambda: SPEAKER_PALETTES)
     font_family: str = caption_truth.FONT_NAME
     bold: bool = True
     outline_colour: str = caption_truth.OUTLINE_COLOR
@@ -1486,7 +1525,7 @@ def render_line_text(page: CaptionPage, line: CaptionLine, active_index: int, ge
                      interval_ms: int = 10_000, settings: RenderSettings = DEFAULT_SETTINGS,
                      fade_ms: int = 0) -> str:
     """One positioned line of a page with word ``active_index`` active."""
-    style = page_style(page, geometry, settings.palettes)
+    style = page_style(page, geometry, settings.palettes, settings.speakers)
     effects = settings.effects_for(page)
     order = {t.word_id: i for i, t in enumerate(page.tokens)}
     by_id = {t.word_id: t for t in page.tokens}
@@ -1568,7 +1607,7 @@ def _drawings(page: CaptionPage, geometry: LayoutGeometry, settings: RenderSetti
     effects = settings.effects_for(page)
     if not effects.draws or settings.metrics is None:
         return []
-    style = page_style(page, geometry, settings.palettes)
+    style = page_style(page, geometry, settings.palettes, settings.speakers)
     measure = _Measure(settings.metrics, style.font_px, settings.shaper)
     pad = style.font_px * PLATE_PAD_RATIO
     order = {t.word_id: i for i, t in enumerate(page.tokens)}
@@ -1646,7 +1685,7 @@ def page_events(page: CaptionPage, geometry: LayoutGeometry, settings: RenderSet
     events: list[tuple[int, int, int, str, str]] = []
     drawings = _drawings(page, geometry, settings)
     if drawings:
-        style = page_style(page, geometry, settings.palettes)
+        style = page_style(page, geometry, settings.palettes, settings.speakers)
         legibility_alpha = page.plate_alpha if effects.plate_reason == "legibility" else None
         for drawing in drawings:
             a = boundaries[drawing.first_index]
@@ -1735,6 +1774,8 @@ def verify_presentation(presentation: CaptionPresentation) -> None:
                 raise CaptionPresentationError(f"word {token.word_id} truth mutated in presentation")
         if page.end <= page.start:
             raise CaptionPresentationError(f"page {page.page_id} has no display time")
+        if len({t.speaker_color for t in page.tokens}) != 1:
+            raise CaptionPresentationError(f"page {page.page_id} mixes speaker colours")
         line_ids = [w for line in page.lines for w in line.word_ids]
         if line_ids != [t.word_id for t in page.tokens]:
             raise CaptionPresentationError(f"page {page.page_id} lines reorder or drop words")
@@ -1764,7 +1805,7 @@ def page_safe_band(page: CaptionPage, presentation: CaptionPresentation) -> tupl
     (text, largest outline accent and any backplate)."""
     geometry = presentation.geometry
     settings = presentation.settings or DEFAULT_SETTINGS
-    style = page_style(page, geometry, settings.palettes)
+    style = page_style(page, geometry, settings.palettes, settings.speakers)
     scale = style.emphasis_scale if page.emphasis_ids else 1.0
     border = max(style.outline_px, style.active_outline_px, style.emphasis_outline_px)
     shadow = geometry.shadow_px if page.shadow_px is None else max(page.shadow_px, geometry.shadow_px)
@@ -1851,6 +1892,8 @@ def presentation_metrics(presentation: CaptionPresentation) -> dict[str, Any]:
         "secondary_pages": sum(1 for p in pages if p.lane == "secondary"),
         "tertiary_pages": sum(1 for p in pages if p.lane == "tertiary"),
         "labeled_pages": sum(1 for p in pages if p.label),
+        "speaker_color_pages": {colour or "plain": sum(1 for p in pages if p.speaker_color == colour)
+                                for colour in sorted({p.speaker_color for p in pages})},
         "uncertain_words": sum(1 for t in presentation.tokens if t.uncertain),
         "same_lane_overlaps": overlaps,
         "placement_zones": dict(presentation.placement.zones) if presentation.placement else {"bottom": len(pages)},
@@ -1896,7 +1939,8 @@ def build_manifest(presentation: CaptionPresentation, *, caption_signature: str 
                      "start": page.start, "end": round(page.end, 3),
                      "lines": [list(line.word_ids) for line in page.lines], "style": page.style.value,
                      "emphasized_word_ids": sorted(page.emphasis_ids), "speaker_role": page.speaker_role,
-                     "lane": page.lane, "label": page.label, "font_px": page.font_px,
+                     "lane": page.lane, "speaker_color": page.speaker_color, "label": page.label,
+                     "font_px": page.font_px,
                      "fit_scale": round(page.fit_scale, 3), "safe_region": [round(y0, 4), round(y1, 4)],
                      "placement_zone": page.placement_zone,
                      "legibility": page.legibility or "not_analysed", "outline_boost": page.outline_boost,

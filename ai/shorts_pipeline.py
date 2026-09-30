@@ -42,7 +42,6 @@ from ai.editor import (
     pacing_cutter,
     participant_name_lock,
     speaker_caption_support,
-    speaker_naming,
     speaker_role_judge,
     teaser_analyzer,
     timeline,
@@ -2771,8 +2770,8 @@ def _run_pipeline(
     # --------------------------------------------------------
     # Correct order:
     #   exact pacing AUDIO only -> diarization -> Luna-low participant/crowd
-    #   role judge -> optional high-confidence 2/3-person audio identity -> heavy video render.
-    # No video frame is encoded before the identity question.
+    #   role judge -> heavy video render. The acoustic turns only colour the
+    #   caption voices later (speaker_caption_support); nobody is asked who speaks.
     expected_edited = Path(
         pacing_cutter.get_output_path(timeline_data, selected_timeline)
     ).resolve()
@@ -2784,11 +2783,11 @@ def _run_pipeline(
             speaker_audio_path, selected_clip_index
         )
     ).resolve()
-    # V14 safe speed scheduling: pacing video output is independent of speaker
-    # identity. Pre-compute its cache state now so, after the small speaker WAV
-    # exists, an otherwise-needed encode may run in the background while
-    # diarization/naming waits on network or user input. Render content is
-    # unchanged; only scheduling overlaps.
+    # V14 safe speed scheduling: pacing video output is independent of the
+    # speaker scan. Pre-compute its cache state now so, after the small speaker
+    # WAV exists, an otherwise-needed encode may run in the background while
+    # diarization waits on the network. Render content is unchanged; only
+    # scheduling overlaps.
     existing_edited = _resolve_edited_clip(expected_edited)
     previous_pacing = dict((state.get("stages") or {}).get("pacing_cut") or {})
     pacing_cut_sig = _stage_signature(
@@ -2810,26 +2809,25 @@ def _run_pipeline(
     speaker_preflight_sig = _stage_signature(
         "speaker_preflight",
         inputs=[timeline_path, video_path],
-        modules=[pacing_cutter, speaker_caption_support, speaker_naming, speaker_role_judge],
+        modules=[pacing_cutter, speaker_caption_support, speaker_role_judge],
         options={
             "clip_index": selected_clip_index,
             "speaker_profile_version": int(
                 getattr(speaker_caption_support, "SPEAKER_PROFILE_VERSION", 13)
             ),
-            "speaker_naming_version": int(getattr(speaker_naming, "SPEAKER_NAMING_VERSION", 11)),
             "speaker_role_version": int(getattr(speaker_role_judge, "ROLE_JUDGE_VERSION", 2)),
             "speaker_role_model": str(getattr(model_config, "SPEAKER_ROLE_MODEL", "gpt-5.6-luna")),
             "speaker_role_effort": str(getattr(model_config, "SPEAKER_ROLE_REASONING_EFFORT", "low")),
             "diarization_vad_threshold": float(getattr(speaker_caption_support, "DIARIZATION_VAD_THRESHOLD", 0.35)),
             "diarization_vad_prefix_padding_ms": int(getattr(speaker_caption_support, "DIARIZATION_VAD_PREFIX_PADDING_MS", 300)),
             "diarization_vad_silence_ms": int(getattr(speaker_caption_support, "DIARIZATION_VAD_SILENCE_MS", 220)),
-            "speaker_identity_policy": "prompt_only_confident_2_or_3_else_plain; blank_name=plain",
+            "speaker_identity_policy": "acoustic_turn_colors_no_identity_prompt",
             "render_order": "speaker_resolution_before_video_render",
         },
     )
 
-    started = _stage_start(5, "Speaker preflight (optional confident 2/3-person identity)")
-    print("🎧 Speaker taraması: yalnız yüksek güvenli 2/3 gerçek seste isim sorulur; diğer durumlarda normal altyazıyla devam...")
+    started = _stage_start(5, "Speaker preflight (acoustic speaker turns)")
+    print("🎧 Speaker taraması: konuşmacı değişimleri caption renklerine dönüşür; isim sorulmaz...")
     if book.reusable(
         "speaker_preflight",
         speaker_preflight_sig,
@@ -2857,7 +2855,7 @@ def _run_pipeline(
         ).resolve()
 
         # The audio-only speaker asset is ready. If the exact pacing video is
-        # not cached, start that identical encode now while diarization/naming
+        # not cached, start that identical encode now while diarization
         # proceeds. No speaker result is consumed by the video renderer.
         if SAFE_PIPELINE_PARALLEL and not pacing_cut_cached:
             pacing_render_executor = ThreadPoolExecutor(
@@ -2888,24 +2886,12 @@ def _run_pipeline(
                 f"(confidence={float(role.get('confidence', 0.0) or 0.0):.2f})"
             )
 
-        naming = speaker_naming.resolve_interactive_speaker_names(
-            speaker_profile_path=speaker_scan_path,
-            edited_clip_path=expected_edited,
-            clip_index=selected_clip_index,
-            creator_name=creator_name,
-        )
-        speaker_scan_path = Path(
-            naming.get("profile_path", speaker_scan_path)
-        ).resolve()
-        preview_path = naming.get("preview_path")
-        if preview_path:
-            state["speaker_preview"] = str(Path(preview_path).resolve())
         book.record(
             "speaker_preflight",
             "done",
             speaker_preflight_sig,
             path=speaker_scan_path,
-            note=(f"audio_preview={preview_path}" if preview_path else "speaker scan complete"),
+            note="speaker scan complete",
             elapsed=time.perf_counter() - started,
         )
 
@@ -3038,7 +3024,7 @@ def _run_pipeline(
     captions_sig = _stage_signature(
         "captions",
         inputs=[edited_clip_path, transcript_path, timeline_path, speaker_scan_path],
-        modules=[captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
+        modules=[captions, speaker_caption_support, speaker_role_judge, vod_processor,
                  caption_judge, *caption_stack_modules],
         options={
             "clip_index": selected_clip_index,
@@ -3048,7 +3034,6 @@ def _run_pipeline(
             "speaker_caption_version": int(
                 getattr(speaker_caption_support, "SPEAKER_PROFILE_VERSION", 13)
             ),
-            "speaker_naming_version": int(getattr(speaker_naming, "SPEAKER_NAMING_VERSION", 11)),
             # Every setting that changes WHAT is heard or WHEN it is timed (never the key).
             "caption_stack": caption_stack_settings.public(),
             "caption_stack_contract": final_captions.CONTRACT,
@@ -3060,9 +3045,9 @@ def _run_pipeline(
     )
 
     def _create_speaker_aware_captions() -> Path:
-        # Speaker scan + optional human identity happened BEFORE video render.
-        # Final word timing comes from the rendered edited clip; if identity was
-        # skipped/uncertain, the accurate transcript stays as one unlabeled lane.
+        # The speaker scan happened BEFORE video render. Final word timing comes
+        # from the rendered edited clip; the acoustic turns only colour voices,
+        # and uncertain speaker structure keeps the plain caption look.
         speaker_profile_path = speaker_caption_support.create_speaker_profile(
             edited_clip_path=edited_clip_path,
             clip_index=selected_clip_index,
@@ -3098,10 +3083,9 @@ def _run_pipeline(
             )
         elif str(speaker_profile.get("mode", "")) == "unresolved":
             quality = speaker_profile.get("assignment", {}).get("separation_quality", "?")
-            name_source = str((speaker_profile.get("speaker_names") or {}).get("source", ""))
             book.warn(
-                "Speaker isimlendirmesi atlandı veya ayrım yeterince güvenli değildi; "
-                f"tek isimsiz caption lane ile devam edildi. quality={quality}, source={name_source or 'plain'}"
+                "Konuşmacı ayrımı yeterince güvenli değildi; konuşmacı renkleri olmadan "
+                f"normal caption ile devam edildi. quality={quality}"
             )
 
         caption_quality = speaker_profile.get("caption_quality", {})
@@ -3146,7 +3130,7 @@ def _run_pipeline(
             transcript_path,
             timeline_path,
             speaker_scan_path,
-            *_module_paths([captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
+            *_module_paths([captions, speaker_caption_support, speaker_role_judge, vod_processor,
                             caption_judge, *caption_stack_modules]),
         ],
         error_message="Caption ASS dosyası oluşmadı.",
@@ -3166,8 +3150,8 @@ def _run_pipeline(
     # --------------------------------------------------------
     # 7B. VERIFIED PARTICIPANT NAME LOCK (caption truth)
     # --------------------------------------------------------
-    # Runs on the identity-resolved final profile, where WHO is known (the V7
-    # text-level vocative lock runs before speaker assignment). Only word TEXT
+    # Runs on the final profile (the V7 text-level vocative lock runs before
+    # speaker assignment). Only word TEXT
     # may change; word ids, times and speakers are verified unchanged, and the
     # caption ASS is regenerated from the corrected truth. Local and cheap:
     # the paid caption stage above is never re-run for it.

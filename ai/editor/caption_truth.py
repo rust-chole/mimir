@@ -7,7 +7,8 @@ Separate authorities own the final caption words:
                                      (Astra) for disputed spans -> a FROZEN transcript
     TIMING   when it was spoken   -> one word-alignment provider over the frozen words
                                      (Qwen3-ForcedAligner; a validated fallback otherwise)
-    SPEAKER  who spoke it         -> diarization + human identity checkpoint
+    SPEAKER  which voice spoke it -> diarization acoustic turns; a caption colour
+                                     per voice, never a person's identity
     IDENTITY canonical spelling of verified people/entities
                                   -> participant_name_lock (evidence-gated), then the
                                      caption judge for what the lock could not decide
@@ -28,7 +29,7 @@ re-transcribes the clip. It:
 5. marks words the evidence could not settle as ``caption_uncertain`` (shown,
    never emphasized) instead of guessing;
 6. validates timing/speaker invariants and FREEZES the result: a truth
-   document with a signature over (id, text, start, end, speaker, label).
+   document with a signature over (id, text, start, end, speaker, label, colour).
    Downstream presentation may only consume it; the final quality gate proves
    the published captions still equal the frozen truth.
 """
@@ -137,7 +138,7 @@ def verified_extra_entities(creator_name: str | None, entities: Sequence[str] = 
 # ============================================================
 
 def truth_rows(profile: Mapping[str, Any] | None) -> list[list[Any]]:
-    """(id, text, start, end, speaker_raw, speaker_label) of every profile word."""
+    """(id, text, start, end, speaker_raw, speaker_label, speaker_color) of every profile word."""
     rows: list[list[Any]] = []
     for index, word in enumerate((profile or {}).get("words", []) or []):
         if not isinstance(word, Mapping):
@@ -148,7 +149,7 @@ def truth_rows(profile: Mapping[str, Any] | None) -> list[list[Any]]:
         except (TypeError, ValueError):
             start, end = float("nan"), float("nan")
         rows.append([index, str(word.get("word", "")), start, end, str(word.get("speaker_raw") or ""),
-                     str(word.get("speaker_label") or "")])
+                     str(word.get("speaker_label") or ""), str(word.get("speaker_color") or "")])
     return rows
 
 
@@ -206,7 +207,9 @@ def timing_issues(profile: Mapping[str, Any]) -> list[str]:
 
 def speaker_issues(profile: Mapping[str, Any]) -> list[str]:
     """Speaker ownership: raw ids from the profile's speaker set; printed labels only
-    from the human-confirmed display map and consistent with the raw id."""
+    from the human-confirmed display map and consistent with the raw id; speaker
+    colours exactly as the acoustic colour record assigned them (one colour per
+    voice, ``neutral`` only for uncertain words, none when colours are off)."""
     from ai.editor import captions
 
     trusted = captions._trusted_human_display_map(dict(profile))
@@ -225,6 +228,30 @@ def speaker_issues(profile: Mapping[str, Any]) -> list[str]:
             issues.append(f"word {index}: unknown speaker id {raw!r}")
         if label and trusted.get(raw) != label:
             issues.append(f"word {index}: label {label!r} is not the confirmed name of speaker {raw!r}")
+    return issues + speaker_color_issues(profile)
+
+
+def speaker_color_issues(profile: Mapping[str, Any]) -> list[str]:
+    record = profile.get("speaker_colors") if isinstance(profile.get("speaker_colors"), Mapping) else None
+    engaged = bool(record and record.get("engaged"))
+    slots = {str(k): str(v) for k, v in ((record or {}).get("slots") or {}).items()} if engaged else {}
+    if engaged and len(set(slots.values())) != len(slots):
+        return ["speaker colour record gives two voices the same colour"]
+    issues: list[str] = []
+    for index, word in enumerate(profile.get("words", []) or []):
+        if not isinstance(word, Mapping):
+            continue
+        color = str(word.get("speaker_color") or "")
+        if not engaged:
+            if color:
+                issues.append(f"word {index}: speaker colour {color!r} without reliable speaker colours")
+            continue
+        if color == "neutral":
+            continue
+        expected = slots.get(str(word.get("speaker_raw") or ""))
+        if not color or color != expected:
+            issues.append(f"word {index}: speaker colour {color!r} is not the colour of voice "
+                          f"{str(word.get('speaker_raw') or '')!r} ({expected!r})")
     return issues
 
 

@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 SPEAKER_OUTPUT_DIR = PROJECT_ROOT / "vod_output" / "speaker_captions"
 TEMP_DIR = PROJECT_ROOT / "vod_output" / "temp" / "speaker_captions"
 
-SPEAKER_PROFILE_VERSION = 26
+SPEAKER_PROFILE_VERSION = 27
 DIARIZATION_MODEL = os.getenv(
     "CAPTION_DIARIZATION_MODEL",
     "gpt-4o-transcribe-diarize",
@@ -47,8 +47,9 @@ SPEAKER_COUNT_CONFIRM_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("MIMIR_SPEA
 
 # Final-caption WORDS and their CLOCK are produced by ai.caption_stack from the
 # exact final edited clip (Qwen ears -> frozen transcript -> forced alignment).
-# This module owns WHO: diarization, human identity and word -> speaker
-# assignment. Speaker metadata can never rewrite a caption word or its timing.
+# This module owns WHO: diarization, word -> speaker assignment and the caption
+# colour of each VOICE (never a person's identity). Speaker metadata can never
+# rewrite a caption word or its timing.
 
 # Real participants must have a meaningful amount of speech.  Tiny speaker
 # fragments are usually cross-talk, game audio, crowd noise or diarization
@@ -80,24 +81,6 @@ MAX_DUAL_SWITCHES_PER_20_WORDS = 6.0
 MIN_DUAL_MEANING_COVERAGE = 0.94
 TEXT_ALIGNMENT_SOFT_TIME_DRIFT = 0.55
 TEXT_ALIGNMENT_MAX_TIME_DRIFT = 1.25
-
-# V27 human-verified identity lock. Once the user has listened to A/B/C and
-# supplied real names, those names are not merely cosmetic labels anymore.
-# We rerun diarization on the exact final 48 kHz audio with OpenAI
-# known_speaker_names + 2-10s voice references, using three independent
-# segmentation views. A visible name is emitted only when the anchored
-# evidence agrees (or one pass has very strong uncontested overlap).
-IDENTITY_LOCK_ENABLED = str(os.getenv("MIMIR_IDENTITY_LOCK_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
-IDENTITY_LOCK_VAD_THRESHOLD = max(0.0, min(1.0, float(os.getenv("MIMIR_IDENTITY_LOCK_VAD_THRESHOLD", "0.30") or 0.30)))
-IDENTITY_LOCK_VAD_PREFIX_PADDING_MS = max(0, int(os.getenv("MIMIR_IDENTITY_LOCK_VAD_PREFIX_PADDING_MS", "320") or 320))
-IDENTITY_LOCK_VAD_SILENCE_MS = max(50, int(os.getenv("MIMIR_IDENTITY_LOCK_VAD_SILENCE_MS", "180") or 180))
-
-# V30 speaker-boundary calibration. Known-speaker segment timestamps can lag a
-# real turn by a few hundred milliseconds even when the diarized TEXT belongs to
-# the correct speaker. Never let pure segment overlap decide a word that sits on
-# a known-speaker transition. At those boundaries, exact monotonic lexical
-# alignment across the anchored diarization passes is the tie-breaker; without
-# lexical majority the word stays unlabeled rather than being assigned wrongly.
 
 # A diarizer can split cheers, laughter, game/room audio or a one-off shout into
 # extra speaker IDs.  These IDs must not become a third human participant.
@@ -520,8 +503,8 @@ def _classify_with_luna(
         background = [str(x) for x in decision.get("background_speakers", []) if str(x) in known_set]
         confidence = float(decision.get("confidence", 0.0) or 0.0)
 
-        # Preserve two coherent lexical voices internally, but do not force a
-        # human prompt here. speaker_naming separately requires high confidence.
+        # Preserve two coherent lexical voices internally; caption colours are
+        # still earned per turn later (_assign_speaker_colors).
         if len(coherent) == 2 and mode != "dual":
             explicitly_background = set(background)
             rejected = [x for x in coherent if x in explicitly_background]
@@ -1429,1148 +1412,6 @@ def _turns_from_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return turns
 
 
-def _manual_identity_map(scan: dict[str, Any]) -> dict[str, str]:
-    """Return raw diarizer-id -> human-confirmed display name.
-
-    V28 accepts both the legacy all-or-nothing preview source and the new
-    per-speaker calibrated source. Partial human identity is valid: one trusted
-    voice may be named while every other voice stays unlabeled.
-    """
-    if not IDENTITY_LOCK_ENABLED or not isinstance(scan, dict):
-        return {}
-    names_meta = scan.get("speaker_names") if isinstance(scan.get("speaker_names"), dict) else {}
-    source = str(names_meta.get("source", ""))
-    if source not in {"manual_after_audio_preview", "manual_voice_calibrated_v28"}:
-        return {}
-    labels = scan.get("display_labels") if isinstance(scan.get("display_labels"), dict) else {}
-    participants = [str(x) for x in scan.get("participant_speakers", []) if str(x)]
-    ordered: dict[str, str] = {}
-    for raw in participants:
-        value = " ".join(str(labels.get(raw, "")).replace("\n", " ").split()).strip()
-        if not value or value.upper() in {"A", "B", "C"}:
-            continue
-        ordered[raw] = value[:32]
-    folded = [value.casefold() for value in ordered.values()]
-    if not ordered or len(ordered) > 3 or len(set(folded)) != len(folded):
-        return {}
-    return ordered
-
-
-
-def _confirmed_identity_ranges(row: dict[str, Any]) -> list[tuple[float, float]]:
-    """Return only ranges explicitly stored under a human-verified identity."""
-    if not isinstance(row, dict) or row.get("human_verified") is not True:
-        return []
-    ranges: list[tuple[float, float]] = []
-    for key in ("reference_ranges", "verification_ranges"):
-        for pair in row.get(key, []) or []:
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                continue
-            try:
-                start = float(pair[0]); end = float(pair[1])
-            except (TypeError, ValueError):
-                continue
-            if end <= start + 0.08:
-                continue
-            ranges.append((max(0.0, start), max(0.0, end)))
-    # Keep the originally confirmed order but remove exact duplicates.
-    unique: list[tuple[float, float]] = []
-    for pair in ranges:
-        if pair not in unique:
-            unique.append(pair)
-    return unique
-
-
-def _render_confirmed_identity_reference(
-    audio_path: Path,
-    ranges: list[tuple[float, float]],
-    *,
-    clip_index: int,
-    raw_speaker: str,
-) -> Path | None:
-    """Stitch human-confirmed snippets into OpenAI's 2-10s reference contract.
-
-    V5 regenerated a too-short human reference from generic raw A/B diarization.
-    That can contaminate the identity sample with the wrong person—the exact
-    failure we are trying to prevent.  V6 instead stitches only ranges that the
-    user already confirmed as the same voice.
-    """
-    if not ranges:
-        return None
-    picked: list[tuple[float, float]] = []
-    total = 0.0
-    for start, end in ranges:
-        if total >= 9.8:
-            break
-        length = max(0.0, end - start)
-        if length <= 0.08:
-            continue
-        take = min(length, 9.8 - total)
-        picked.append((start, start + take))
-        total += take
-        if total >= DIARIZATION_REFERENCE_MIN_SECONDS:
-            break
-    if total + 1e-6 < DIARIZATION_REFERENCE_MIN_SECONDS:
-        return None
-
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    safe_raw = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_speaker))[:16] or "speaker"
-    output = TEMP_DIR / f"clip_{int(clip_index):02d}_human_confirmed_ref_{safe_raw}.wav"
-    filters: list[str] = []
-    labels: list[str] = []
-    for idx, (start, end) in enumerate(picked):
-        tag = f"hcr{idx}"
-        filters.append(
-            f"[0:a]atrim=start={start:.3f}:end={end:.3f},"
-            f"asetpts=PTS-STARTPTS,aresample=48000,"
-            f"aformat=sample_fmts=s16:channel_layouts=mono[{tag}]"
-        )
-        labels.append(f"[{tag}]")
-    if len(labels) == 1:
-        filters.append(f"{labels[0]}anull[aout]")
-    else:
-        filters.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[aout]")
-    command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(audio_path),
-        "-filter_complex", ";".join(filters),
-        "-map", "[aout]", "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le",
-        str(output),
-    ]
-    completed = subprocess.run(
-        command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
-    )
-    if completed.returncode != 0 or not output.is_file() or output.stat().st_size < 1024:
-        return None
-    try:
-        duration = _probe_duration(output)
-    except Exception:
-        return None
-    if duration < DIARIZATION_REFERENCE_MIN_SECONDS - 0.05 or duration > 10.05:
-        return None
-    return output
-
-def _identity_reference_bundle(
-    *,
-    audio_path: Path,
-    scan: dict[str, Any],
-    scan_segments: list[dict[str, Any]],
-    raw_to_name: dict[str, str],
-    clip_index: int,
-) -> tuple[list[str], list[str], list[str]]:
-    """Use HUMAN-confirmed reference WAVs first; regenerate only as fallback.
-
-    The naming checkpoint stores 2-10s, 48 kHz voice references that the human
-    actually listened to and verified on a disjoint utterance. Reusing those
-    exact bytes is safer than rebuilding identity anchors from a later heuristic
-    speaker map. This function has no caption timing authority.
-    """
-    calibration = scan.get("identity_calibration") if isinstance(scan.get("identity_calibration"), dict) else {}
-    by_raw: dict[str, dict[str, Any]] = {}
-    for row in calibration.values():
-        if not isinstance(row, dict) or row.get("human_verified") is not True:
-            continue
-        raw = str(row.get("raw_speaker", "")).strip()
-        name = " ".join(str(row.get("name", "")).split()).strip()
-        if raw and name:
-            by_raw[raw] = row
-
-    names: list[str] = []
-    references: list[str] = []
-    paths: list[str] = []
-    for idx, (raw_speaker, display_name) in enumerate(raw_to_name.items()):
-        confirmed = by_raw.get(raw_speaker)
-        ref_path: Path | None = None
-        if confirmed is not None:
-            candidate = Path(str(confirmed.get("reference_path", ""))).resolve()
-            confirmed_name = " ".join(str(confirmed.get("name", "")).split()).strip()
-            if candidate.is_file() and confirmed_name.casefold() == display_name.casefold():
-                try:
-                    ref_duration = _probe_duration(candidate)
-                except Exception:
-                    ref_duration = 0.0
-                if 1.95 <= ref_duration <= 10.10:
-                    ref_path = candidate
-
-        if ref_path is None and confirmed is not None:
-            ref_path = _render_confirmed_identity_reference(
-                audio_path,
-                _confirmed_identity_ranges(confirmed),
-                clip_index=clip_index,
-                raw_speaker=raw_speaker,
-            )
-
-        if ref_path is None:
-            # Last resort only.  Prefer human-confirmed material above; generic
-            # raw A/B speaker ranges can themselves contain the identity error.
-            ref_path = _render_speaker_reference(
-                audio_path,
-                scan_segments,
-                raw_speaker,
-                clip_index,
-                f"named_{idx + 1}",
-            )
-        if ref_path is None:
-            # Partial identity is valid. Skip only the unavailable identity.
-            continue
-        names.append(display_name)
-        references.append(_audio_data_url(ref_path))
-        paths.append(str(ref_path))
-    return names, references, paths
-
-
-def _verify_anchored_names_on_heldout(
-    *,
-    scan: dict[str, Any],
-    segment_sets: list[list[dict[str, Any]]],
-    raw_to_name: dict[str, str],
-    auto_check_names: set[str] | None = None,
-) -> tuple[list[str], dict[str, Any]]:
-    """Cross-check known-speaker labels on human-verified HELD-OUT utterances.
-
-    The reference ranges themselves were sent to OpenAI, so validating on those
-    same bytes would be circular. V28 stores a second disjoint utterance that the
-    user confirmed as the same person. A name survives only if a majority of the
-    anchored diarization passes also finds that name on the held-out interval.
-    When no held-out interval exists, the explicit human confirmation is retained
-    but marked as not automatically cross-checkable.
-    """
-    calibration = scan.get("identity_calibration") if isinstance(scan.get("identity_calibration"), dict) else {}
-    by_raw = {
-        str(row.get("raw_speaker", "")).strip(): row
-        for row in calibration.values()
-        if isinstance(row, dict) and row.get("human_verified") is True
-    }
-    trusted: list[str] = []
-    details: dict[str, Any] = {}
-    required = 2 if len(segment_sets) >= 2 else 1
-
-    auto_check_folded = {str(x).casefold() for x in (auto_check_names or set()) if str(x).strip()}
-
-    for raw, name in raw_to_name.items():
-        row = by_raw.get(raw) or {}
-        # Short human-preview identities may be too short for OpenAI's 2-10s
-        # known-speaker contract. If that name was never submitted as an anchor,
-        # do not falsely "verify" it against generic speaker IDs. The human's
-        # explicit reference+verification confirmation remains authoritative.
-        if name.casefold() not in auto_check_folded:
-            trusted.append(name)
-            details[name] = {
-                "status": "human_confirmed_short_preview_no_model_anchor",
-                "votes": None,
-                "required": None,
-            }
-            continue
-
-        ranges: list[tuple[float, float]] = []
-        for pair in row.get("verification_ranges", []) or []:
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                continue
-            try:
-                start = float(pair[0]); end = float(pair[1])
-            except (TypeError, ValueError):
-                continue
-            if end > start:
-                ranges.append((start, end))
-
-        if not ranges:
-            trusted.append(name)
-            details[name] = {
-                "status": "human_confirmed_no_heldout_auto_check",
-                "votes": None,
-                "required": None,
-            }
-            continue
-
-        ratios: list[float] = []
-        votes = 0
-        total_duration = sum(end - start for start, end in ranges)
-        for segments in segment_sets:
-            matched = 0.0
-            for start, end in ranges:
-                for seg in segments:
-                    if str(seg.get("speaker", "")).strip().casefold() != name.casefold():
-                        continue
-                    matched += _overlap(
-                        start,
-                        end,
-                        float(seg.get("start", 0.0) or 0.0),
-                        float(seg.get("end", 0.0) or 0.0),
-                    )
-            ratio = min(1.0, matched / max(0.04, total_duration))
-            ratios.append(ratio)
-            if ratio >= 0.55:
-                votes += 1
-
-        passed = votes >= required
-        if passed:
-            trusted.append(name)
-        details[name] = {
-            "status": "passed" if passed else "failed",
-            "votes": votes,
-            "required": required,
-            "pass_overlap_ratios": [round(value, 4) for value in ratios],
-            "heldout_ranges": [[round(a, 3), round(b, 3)] for a, b in ranges],
-        }
-
-    return trusted, details
-
-
-def _human_verified_identity_map(
-    scan: dict[str, Any],
-    raw_to_name: dict[str, str],
-) -> dict[str, str]:
-    """Return only raw->name pairs the human explicitly confirmed by voice.
-
-    The interactive preview is the authoritative identity action. Model-based
-    known-speaker passes may add diagnostics, but they must never silently erase
-    a human-confirmed name from the final ASS. Speaker WORD ownership remains
-    Gold V7 and is not changed here.
-    """
-    calibration = scan.get("identity_calibration") if isinstance(scan.get("identity_calibration"), dict) else {}
-    verified: dict[str, str] = {}
-    for row in calibration.values():
-        if not isinstance(row, dict) or row.get("human_verified") is not True:
-            continue
-        raw = str(row.get("raw_speaker", "")).strip()
-        name = " ".join(str(row.get("name", "")).split()).strip()
-        expected = " ".join(str(raw_to_name.get(raw, "")).split()).strip()
-        if raw and name and expected and name.casefold() == expected.casefold():
-            verified[raw] = expected
-    return verified
-
-
-def _disjoint_holdout_checkable_names(
-    scan: dict[str, Any],
-    raw_to_name: dict[str, str],
-) -> set[str]:
-    """Names whose verification utterance was not needed to build the reference.
-
-    A short human reference may be stitched with its verification range to meet
-    the 2-second known-speaker contract. In that case the same verification
-    bytes cannot honestly be counted again as held-out model evidence.
-    """
-    calibration = scan.get("identity_calibration") if isinstance(scan.get("identity_calibration"), dict) else {}
-    result: set[str] = set()
-    for row in calibration.values():
-        if not isinstance(row, dict) or row.get("human_verified") is not True:
-            continue
-        raw = str(row.get("raw_speaker", "")).strip()
-        name = " ".join(str(row.get("name", "")).split()).strip()
-        expected = " ".join(str(raw_to_name.get(raw, "")).split()).strip()
-        if not raw or not name or not expected or name.casefold() != expected.casefold():
-            continue
-        # This flag is set only when the original human reference itself already
-        # satisfies the 2-10s known-speaker contract. Therefore its verification
-        # utterance remains truly disjoint and may be used as a held-out check.
-        if row.get("known_speaker_reference_eligible") is True and (row.get("verification_ranges") or []):
-            result.add(expected)
-    return result
-
-
-def _run_human_identity_anchor(
-    *,
-    audio_path: Path,
-    duration: float,
-    scan: dict[str, Any],
-    clip_index: int,
-) -> dict[str, Any]:
-    """Whole-clip known-speaker anchor after the human A/B identity check.
-
-    One automatic-chunking pass supplies broad named-speaker evidence. Extra
-    identity work is reserved for short risky phrases later in the pipeline,
-    where two independently padded local windows must agree. This changes WHO
-    metadata only; caption text and Whisper timestamps remain untouched.
-    """
-    raw_to_name = _manual_identity_map(scan)
-    if not raw_to_name:
-        return {"status": "not_applicable", "segment_sets": []}
-
-    scan_segments = [dict(x) for x in (scan.get("segments") or []) if isinstance(x, dict)]
-    names, references, reference_paths = _identity_reference_bundle(
-        audio_path=audio_path,
-        scan=scan,
-        scan_segments=scan_segments,
-        raw_to_name=raw_to_name,
-        clip_index=clip_index,
-    )
-    if not names:
-        return {
-            "status": "reference_unavailable",
-            "segment_sets": [],
-            "raw_to_name": raw_to_name,
-        }
-
-    segment_sets: list[list[dict[str, Any]]] = []
-    errors: list[str] = []
-    # One whole-clip auto pass gives broad named-speaker coverage.  Previous
-    # explicit server_vad passes produced `chunking_strategy is required` 400s
-    # in real runs and contributed no evidence.  V6 spends any extra identity
-    # calls only on short risky phrases, where chunking is not required.
-    specs = [("auto", None, None, None)]
-    for label, threshold, prefix_ms, silence_ms in specs:
-        try:
-            data = _run_diarization(
-                audio_path,
-                chunking=label,
-                vad_threshold=threshold,
-                vad_prefix_padding_ms=prefix_ms,
-                vad_silence_ms=silence_ms,
-                known_speaker_names=names,
-                known_speaker_references=references,
-            )
-            normalized = _normalize_segments(data, duration)
-            if normalized:
-                segment_sets.append(normalized)
-            else:
-                errors.append(f"{label}: no segments")
-        except Exception as error:
-            errors.append(f"{label}: {error}")
-
-    trusted_names, heldout_verification = _verify_anchored_names_on_heldout(
-        scan=scan,
-        segment_sets=segment_sets,
-        raw_to_name=raw_to_name,
-        auto_check_names=_disjoint_holdout_checkable_names(scan, raw_to_name),
-    ) if segment_sets else (
-        list(raw_to_name.values()) if raw_to_name else [],
-        {name: {"status": "human_confirmed_no_model_anchor_available"} for name in raw_to_name.values()},
-    )
-
-    return {
-        "status": (
-            "ok" if segment_sets and trusted_names
-            else ("heldout_verification_failed" if segment_sets else ("human_only" if trusted_names else "failed"))
-        ),
-        "segment_sets": segment_sets,
-        "known_names": trusted_names,
-        "requested_known_names": names,
-        "raw_to_name": raw_to_name,
-        "reference_paths": reference_paths,
-        "passes_completed": len(segment_sets),
-        "heldout_verification": heldout_verification,
-        "errors": errors,
-        "model": DIARIZATION_MODEL,
-        "policy": (
-            "human-confirmed 2-10s voice refs -> one whole-clip known-speaker anchor -> "
-            "disjoint held-out check when the held-out audio was not consumed by reference stitching"
-        ),
-    }
-
-
-
-
-
-
-
-# V6 human-known-voice ownership lock.  The existing identity anchor already
-# performs a known-speaker diarization pass using the exact human-confirmed
-# reference WAVs.  V5 used that pass only to validate the cosmetic A/B -> name
-# map, while word ownership still came exclusively from generic raw A/B turns.
-# That allowed a swallowed speaker boundary to render one confirmed name as the other (or vice
-# versa).  V6 allows the already-paid known-speaker evidence to correct WHO
-# metadata only.  Wording and Whisper timestamps remain immutable.
-IDENTITY_PHRASE_BREAK_GAP_SECONDS = max(
-    0.35,
-    min(1.20, float(os.getenv("MIMIR_IDENTITY_PHRASE_BREAK_GAP_SECONDS", "0.62") or 0.62)),
-)
-IDENTITY_DIRECT_MIN_CONFIDENCE = max(
-    0.70,
-    min(0.95, float(os.getenv("MIMIR_IDENTITY_DIRECT_MIN_CONFIDENCE", "0.78") or 0.78)),
-)
-IDENTITY_MICRO_ENABLED = str(os.getenv("MIMIR_IDENTITY_MICRO_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
-IDENTITY_MICRO_RISK_GAP_SECONDS = max(0.55, min(2.5, float(os.getenv("MIMIR_IDENTITY_MICRO_RISK_GAP_SECONDS", "0.90") or 0.90)))
-IDENTITY_MICRO_MAX_PHRASES = max(1, min(8, int(os.getenv("MIMIR_IDENTITY_MICRO_MAX_PHRASES", "5") or 5)))
-IDENTITY_MICRO_MIN_TARGET_COVERAGE = max(0.30, min(0.90, float(os.getenv("MIMIR_IDENTITY_MICRO_MIN_TARGET_COVERAGE", "0.48") or 0.48)))
-
-
-def _known_name_pass_candidates(
-    words: list[dict[str, Any]],
-    segments: list[dict[str, Any]],
-    allowed_names: list[str],
-) -> list[dict[str, Any]]:
-    """Map immutable caption words onto direct KNOWN-SPEAKER segment names."""
-    allowed = {
-        " ".join(str(name).split()).strip().casefold():
-        " ".join(str(name).split()).strip()
-        for name in allowed_names
-        if " ".join(str(name).split()).strip()
-    }
-    provisional, _ = _provisional_assignments(words, segments)
-    result: list[dict[str, Any]] = []
-    for row in provisional:
-        candidate = " ".join(str(row.get("speaker_candidate", "")).split()).strip()
-        canonical = allowed.get(candidate.casefold(), "")
-        result.append(
-            {
-                "name": canonical,
-                "confidence": (
-                    float(row.get("speaker_candidate_confidence", 0.0) or 0.0)
-                    if canonical else 0.0
-                ),
-                "source": str(row.get("speaker_evidence_source", "")),
-            }
-        )
-    return result
-
-
-def _apply_human_known_voice_overlay(
-    *,
-    words: list[dict[str, Any]],
-    segment_sets: list[list[dict[str, Any]]],
-    raw_to_name: dict[str, str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Correct WHO from human-confirmed known-speaker evidence, fail closed.
-
-    Generic A/B diarization remains useful discovery evidence, but once the
-    human has named two voices and a known-speaker anchor pass exists, strong
-    direct-name lexical evidence outranks generic raw A/B ownership.  A weak
-    timing-only raw guess is never allowed to print a human name merely because
-    an A->name/B->name mapping exists.
-    """
-    result = [dict(row) for row in words]
-    audit: dict[str, Any] = {
-        "status": "not_needed",
-        "passes": 0,
-        "resolved_words": 0,
-        "remapped_words": 0,
-        "cleared_weak_words": 0,
-        "conflicts": 0,
-        "policy": (
-            "human-confirmed known-speaker evidence may change WHO metadata only; "
-            "text and edited_start/edited_end are immutable"
-        ),
-    }
-    if not result or len(raw_to_name) < 2 or not segment_sets:
-        return result, audit
-
-    allowed_names = [
-        " ".join(str(name).split()).strip()
-        for name in raw_to_name.values()
-        if " ".join(str(name).split()).strip()
-    ]
-    pass_candidates: list[list[dict[str, Any]]] = []
-    for segments in segment_sets:
-        if not isinstance(segments, list) or not segments:
-            continue
-        candidates = _known_name_pass_candidates(result, segments, allowed_names)
-        if len(candidates) == len(result):
-            pass_candidates.append(candidates)
-    if not pass_candidates:
-        audit["status"] = "no_usable_anchor_pass"
-        return result, audit
-
-    audit["passes"] = len(pass_candidates)
-    inverse = {
-        " ".join(str(name).split()).strip().casefold(): str(raw)
-        for raw, name in raw_to_name.items()
-        if " ".join(str(name).split()).strip()
-    }
-    raw_order = list(raw_to_name.keys())
-    raw_role = {
-        raw: ("main" if index == 0 else ("secondary" if index == 1 else "tertiary"))
-        for index, raw in enumerate(raw_order)
-    }
-    raw_display = {
-        str(raw): " ".join(str(name).split()).strip()
-        for raw, name in raw_to_name.items()
-    }
-
-    for index, word in enumerate(result):
-        votes: dict[str, list[tuple[float, str]]] = {}
-        for view in pass_candidates:
-            row = view[index]
-            name = " ".join(str(row.get("name", "")).split()).strip()
-            confidence = float(row.get("confidence", 0.0) or 0.0)
-            source = str(row.get("source", ""))
-            if name:
-                votes.setdefault(name.casefold(), []).append((confidence, source))
-
-        chosen_name = ""
-        chosen_conf = 0.0
-        if len(pass_candidates) >= 2:
-            ranked = sorted(
-                votes.items(),
-                key=lambda item: (len(item[1]), sum(v[0] for v in item[1])),
-                reverse=True,
-            )
-            if ranked:
-                folded, evidence = ranked[0]
-                # At least two independent anchored views must agree.
-                if len(evidence) >= 2:
-                    avg_conf = sum(v[0] for v in evidence) / len(evidence)
-                    if avg_conf >= IDENTITY_DIRECT_MIN_CONFIDENCE:
-                        chosen_name = next(
-                            (name for name in allowed_names if name.casefold() == folded),
-                            "",
-                        )
-                        chosen_conf = min(v[0] for v in evidence)
-        elif votes:
-            # The current API occasionally gives us only the auto-chunking
-            # anchored view.  One pass may override raw A/B only with lexical
-            # evidence, never timing-only overlap.
-            folded, evidence = max(
-                votes.items(),
-                key=lambda item: max((v[0] for v in item[1]), default=0.0),
-            )
-            conf, source = max(evidence, key=lambda item: item[0])
-            strong_single = (
-                (source == "text+timing_agree" and conf >= 0.84)
-                or (source == "text_alignment" and conf >= 0.80)
-            )
-            if strong_single:
-                chosen_name = next(
-                    (name for name in allowed_names if name.casefold() == folded),
-                    "",
-                )
-                chosen_conf = conf
-
-        original_raw = str(word.get("speaker_raw", ""))
-        original_label = str(word.get("speaker_label", ""))
-        if chosen_name:
-            canonical_raw = inverse.get(chosen_name.casefold(), "")
-            if canonical_raw:
-                word.setdefault("speaker_raw_before_known_voice", original_raw)
-                word.setdefault("speaker_label_before_known_voice", original_label)
-                word["speaker_raw"] = canonical_raw
-                word["speaker_role"] = raw_role.get(canonical_raw, "main")
-                word["speaker_label"] = chosen_name
-                word["speaker_confidence"] = round(float(chosen_conf), 3)
-                word["speaker_evidence_source"] = "human_known_voice_anchor"
-                word["identity_anchor_name"] = chosen_name
-                audit["resolved_words"] += 1
-                if original_raw != canonical_raw:
-                    audit["remapped_words"] += 1
-                    audit["conflicts"] += 1
-                continue
-
-        raw_conf = float(word.get("speaker_confidence", 0.0) or 0.0)
-        raw_source = str(word.get("speaker_evidence_source", ""))
-        weak_raw = (
-            not original_raw
-            or raw_conf < 0.70
-            or raw_source in {
-                "timing_only",
-                "continuity_fill",
-                "continuity_fill_local",
-                "unresolved_diarization_gap",
-                "turn_hysteresis",
-            }
-        )
-        if weak_raw:
-            word.setdefault("speaker_raw_before_known_voice", original_raw)
-            word.setdefault("speaker_label_before_known_voice", original_label)
-            word["speaker_raw"] = ""
-            word["speaker_role"] = "main"
-            word["speaker_label"] = ""
-            word["speaker_confidence"] = 0.0
-            word["speaker_evidence_source"] = "human_known_voice_unresolved"
-            if original_raw or raw_display.get(original_raw, ""):
-                audit["cleared_weak_words"] += 1
-
-    if audit["remapped_words"]:
-        audit["status"] = "resolved_with_remaps"
-    elif audit["resolved_words"]:
-        audit["status"] = "resolved"
-    else:
-        audit["status"] = "no_strong_direct_identity"
-    return result, audit
-
-
-def _identity_phrase_ranges(words: list[dict[str, Any]]) -> list[tuple[int, int]]:
-    """Build short spoken utterances without changing caption geometry."""
-    if not words:
-        return []
-    ranges: list[tuple[int, int]] = []
-    start = 0
-    for index in range(1, len(words)):
-        previous = words[index - 1]
-        current = words[index]
-        previous_text = str(previous.get("word", "")).strip()
-        gap = max(
-            0.0,
-            float(current.get("edited_start", 0.0) or 0.0)
-            - float(previous.get("edited_end", 0.0) or 0.0),
-        )
-        sentence_end = bool(re.search(r"[.!?][\"')\]]*$", previous_text))
-        too_long = (index - start) >= 12
-        if sentence_end or gap >= IDENTITY_PHRASE_BREAK_GAP_SECONDS or too_long:
-            ranges.append((start, index))
-            start = index
-    ranges.append((start, len(words)))
-    return ranges
-
-
-def _lock_human_identity_by_phrase(
-    *,
-    words: list[dict[str, Any]],
-    raw_to_name: dict[str, str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Never render two human identities inside one ordinary spoken phrase.
-
-    The winner is chosen only from direct human-known-voice anchor evidence.
-    If strong anchored voices conflict inside the same punctuation/gap-delimited
-    phrase and neither clearly dominates, the WHO label for the entire phrase is
-    blank.  This is intentionally fail-closed: an unlabeled caption is better
-    than A/B-name changing halfway through one utterance.
-    """
-    result = [dict(row) for row in words]
-    audit: dict[str, Any] = {
-        "status": "not_needed",
-        "locked_phrases": 0,
-        "cleared_conflict_phrases": 0,
-        "words_reassigned": 0,
-        "words_cleared": 0,
-        "policy": "one punctuation/gap-delimited utterance -> one verified human identity or UNKNOWN",
-    }
-    if not result or len(raw_to_name) < 2:
-        return result, audit
-
-    inverse = {
-        " ".join(str(name).split()).strip().casefold(): str(raw)
-        for raw, name in raw_to_name.items()
-        if " ".join(str(name).split()).strip()
-    }
-    raw_order = list(raw_to_name.keys())
-    raw_role = {
-        raw: ("main" if index == 0 else ("secondary" if index == 1 else "tertiary"))
-        for index, raw in enumerate(raw_order)
-    }
-
-    for start, end in _identity_phrase_ranges(result):
-        phrase = result[start:end]
-        if not phrase:
-            continue
-        direct: dict[str, list[float]] = {}
-        for row in phrase:
-            name = " ".join(str(row.get("identity_anchor_name", "")).split()).strip()
-            confidence = float(row.get("speaker_confidence", 0.0) or 0.0)
-            if name and confidence >= IDENTITY_DIRECT_MIN_CONFIDENCE:
-                direct.setdefault(name.casefold(), []).append(confidence)
-        if not direct:
-            continue
-
-        ranked = sorted(
-            direct.items(),
-            key=lambda item: (len(item[1]), sum(item[1])),
-            reverse=True,
-        )
-        winner_folded, winner_evidence = ranked[0]
-        runner_evidence = ranked[1][1] if len(ranked) > 1 else []
-        winner_count = len(winner_evidence)
-        runner_count = len(runner_evidence)
-        winner_score = sum(winner_evidence)
-        runner_score = sum(runner_evidence)
-        conflict = bool(runner_evidence)
-
-        # A phrase with conflicting direct voice evidence is published with a
-        # name only when one identity clearly dominates both count and weight.
-        dominant = (
-            not conflict
-            or (
-                winner_count >= max(2, runner_count + 1)
-                and winner_score >= max(1.35 * runner_score, runner_score + 0.55)
-            )
-        )
-        winner_name = next(
-            (name for name in raw_to_name.values() if str(name).casefold() == winner_folded),
-            "",
-        )
-        canonical_raw = inverse.get(winner_folded, "") if dominant else ""
-
-        if dominant and canonical_raw and winner_name:
-            phrase_conf = round(min(winner_evidence), 3)
-            for row in phrase:
-                previous_raw = str(row.get("speaker_raw", ""))
-                if previous_raw != canonical_raw:
-                    audit["words_reassigned"] += 1
-                row.setdefault("speaker_raw_before_phrase_lock", previous_raw)
-                row["speaker_raw"] = canonical_raw
-                row["speaker_role"] = raw_role.get(canonical_raw, "main")
-                row["speaker_label"] = str(winner_name)
-                row["speaker_confidence"] = phrase_conf
-                row["speaker_evidence_source"] = "human_known_voice_phrase_lock"
-                row["identity_phrase_name"] = str(winner_name)
-            audit["locked_phrases"] += 1
-        else:
-            for row in phrase:
-                if str(row.get("speaker_raw", "")) or str(row.get("speaker_label", "")):
-                    audit["words_cleared"] += 1
-                row.setdefault("speaker_raw_before_phrase_lock", str(row.get("speaker_raw", "")))
-                row["speaker_raw"] = ""
-                row["speaker_role"] = "main"
-                row["speaker_label"] = ""
-                row["speaker_confidence"] = 0.0
-                row["speaker_evidence_source"] = "human_known_voice_phrase_conflict"
-            audit["cleared_conflict_phrases"] += 1
-
-    if audit["cleared_conflict_phrases"]:
-        audit["status"] = "locked_with_fail_closed_conflicts"
-    elif audit["locked_phrases"]:
-        audit["status"] = "locked"
-    else:
-        audit["status"] = "no_direct_phrase_evidence"
-    return result, audit
-
-
-def _enforce_one_identity_per_phrase(
-    *,
-    words: list[dict[str, Any]],
-    raw_to_name: dict[str, str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Final fail-closed invariant: one spoken phrase gets one name or none.
-
-    Even after all identity evidence, renderer-visible A/B-name layers must never
-    alternate inside one phrase. A mixed or partially unresolved phrase is safer
-    unlabeled than confidently assigned to the wrong person. Text and timing are
-    never touched.
-    """
-    result = [dict(row) for row in words]
-    known_raw = {str(raw) for raw, name in raw_to_name.items() if str(raw) and str(name).strip()}
-    audit: dict[str, Any] = {
-        "status": "clean",
-        "phrases_checked": 0,
-        "phrases_cleared": 0,
-        "words_cleared": 0,
-        "policy": "one phrase = one human identity or UNKNOWN; mixed/partial identity fails closed",
-    }
-    if not result or len(known_raw) < 2:
-        audit["status"] = "not_applicable"
-        return result, audit
-
-    for start, end in _identity_phrase_ranges(result):
-        phrase = result[start:end]
-        if not phrase:
-            continue
-        audit["phrases_checked"] += 1
-        raws = [str(row.get("speaker_raw", "")).strip() for row in phrase]
-        named = {raw for raw in raws if raw in known_raw}
-        unresolved = any(raw not in known_raw for raw in raws)
-        if len(named) <= 1 and not (named and unresolved):
-            continue
-        for row in phrase:
-            if str(row.get("speaker_raw", "")).strip() or str(row.get("speaker_label", "")).strip():
-                audit["words_cleared"] += 1
-            row["speaker_raw"] = ""
-            row["speaker_role"] = "main"
-            row["speaker_label"] = ""
-            row["speaker_confidence"] = 0.0
-            row["speaker_evidence_source"] = "identity_phrase_final_fail_closed"
-        audit["phrases_cleared"] += 1
-
-    if audit["phrases_cleared"]:
-        audit["status"] = "cleared_mixed_or_partial_phrases"
-    return result, audit
-
-
-def _render_identity_micro_window(
-    audio_path: Path,
-    *,
-    start: float,
-    end: float,
-    clip_index: int,
-    phrase_index: int,
-    view_index: int,
-) -> Path:
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    output = TEMP_DIR / (
-        f"clip_{int(clip_index):02d}_identity_phrase_{int(phrase_index):02d}_"
-        f"view_{int(view_index):02d}.wav"
-    )
-    length = max(0.0, float(end) - float(start))
-    if length < 0.50:
-        raise RuntimeError("Identity micro window too short")
-    command = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-ss", f"{float(start):.3f}", "-t", f"{length:.3f}",
-        "-i", str(audio_path), "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le",
-        str(output),
-    ]
-    completed = subprocess.run(
-        command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
-    )
-    if completed.returncode != 0 or not output.is_file() or output.stat().st_size < 1024:
-        raise RuntimeError(completed.stderr.strip() or "identity micro ffmpeg failed")
-    return output
-
-
-def _identity_micro_window_bounds(
-    *,
-    phrase_start: float,
-    phrase_end: float,
-    duration: float,
-    pad: float,
-) -> tuple[float, float]:
-    start = max(0.0, phrase_start - pad)
-    end = min(duration, phrase_end + pad)
-    minimum = 2.40
-    if end - start < minimum:
-        shortage = minimum - (end - start)
-        left = min(start, shortage / 2.0)
-        start -= left
-        shortage -= left
-        end = min(duration, end + shortage)
-        if end - start < minimum and start > 0:
-            start = max(0.0, end - minimum)
-    return round(start, 3), round(end, 3)
-
-
-def _micro_identity_vote(
-    segments: list[dict[str, Any]],
-    *,
-    phrase_start_local: float,
-    phrase_end_local: float,
-    allowed_names: list[str],
-) -> tuple[str, float, dict[str, float]]:
-    duration = max(0.10, phrase_end_local - phrase_start_local)
-    allowed = {name.casefold(): name for name in allowed_names}
-    scores: dict[str, float] = {name: 0.0 for name in allowed_names}
-    for segment in segments:
-        raw_name = " ".join(str(segment.get("speaker", "")).split()).strip()
-        canonical = allowed.get(raw_name.casefold(), "")
-        if not canonical:
-            continue
-        amount = _overlap(
-            phrase_start_local,
-            phrase_end_local,
-            float(segment.get("start", 0.0) or 0.0),
-            float(segment.get("end", 0.0) or 0.0),
-        )
-        scores[canonical] = scores.get(canonical, 0.0) + amount
-    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    if not ranked or ranked[0][1] <= 0.0:
-        return "", 0.0, scores
-    top_name, top = ranked[0]
-    second = ranked[1][1] if len(ranked) > 1 else 0.0
-    coverage = min(1.0, top / duration)
-    if coverage < IDENTITY_MICRO_MIN_TARGET_COVERAGE:
-        return "", coverage, scores
-    if second > 0.0 and not (top >= second * 1.35 and top - second >= 0.10):
-        return "", coverage, scores
-    return top_name, coverage, scores
-
-
-
-def _identity_phrase_is_filler(phrase: list[dict[str, Any]]) -> bool:
-    filler = {"uh", "um", "erm", "hmm", "hm", "mm", "mhm"}
-    tokens: list[str] = []
-    for row in phrase:
-        value = _norm_token(str(row.get("word", "")))
-        if value:
-            tokens.append(value)
-    return bool(tokens) and all(token in filler for token in tokens)
-
-def _micro_verify_risky_identity_phrases(
-    *,
-    audio_path: Path,
-    duration: float,
-    scan: dict[str, Any],
-    scan_segments: list[dict[str, Any]],
-    words: list[dict[str, Any]],
-    raw_to_name: dict[str, str],
-    clip_index: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Two local known-voice ears decide only risky phrase identities.
-
-    A phrase is risky when it follows a substantial gap, contains unresolved or
-    conflicting identity evidence, or still relies on weak WHO confidence.  Two
-    short (<30s) windows must agree on the same human-confirmed voice; otherwise
-    the entire phrase is left unlabeled.  This prevents a confident-looking
-    whole-clip diarization mistake from becoming a visible A/B-name swap.
-    """
-    result = [dict(row) for row in words]
-    audit: dict[str, Any] = {
-        "status": "not_needed",
-        "checked_phrases": 0,
-        "resolved_phrases": 0,
-        "unresolved_phrases": 0,
-        "api_calls_attempted": 0,
-        "details": [],
-        "policy": "two short known-speaker views agree -> one phrase identity; disagreement -> UNKNOWN",
-    }
-    if not IDENTITY_MICRO_ENABLED or len(raw_to_name) < 2 or not result:
-        return result, audit
-
-    names, references, reference_paths = _identity_reference_bundle(
-        audio_path=audio_path,
-        scan=scan,
-        scan_segments=scan_segments,
-        raw_to_name=raw_to_name,
-        clip_index=clip_index,
-    )
-    if len(names) < 2 or len(names) != len(references):
-        audit["status"] = "reference_unavailable"
-        audit["reference_paths"] = reference_paths
-        return result, audit
-    audit["reference_paths"] = reference_paths
-
-    inverse = {str(name).casefold(): str(raw) for raw, name in raw_to_name.items()}
-    raw_order = list(raw_to_name.keys())
-    raw_role = {
-        raw: ("main" if index == 0 else ("secondary" if index == 1 else "tertiary"))
-        for index, raw in enumerate(raw_order)
-    }
-
-    phrase_ranges = _identity_phrase_ranges(result)
-    # A pure long-gap recheck is useful only after the clip has already shown a
-    # real speaker alternation. Before the first verified switch, a setup pause
-    # does not imply an A/B identity-namespace reset and is not worth an API call.
-    first_verified_switch_time = float("inf")
-    previous_raw = ""
-    for row in result:
-        current_raw = str(row.get("speaker_raw", ""))
-        if not current_raw:
-            continue
-        if previous_raw and current_raw != previous_raw:
-            first_verified_switch_time = float(row.get("edited_start", 0.0) or 0.0)
-            break
-        previous_raw = current_raw
-
-    risky_scored: list[tuple[float, int, int, list[str]]] = []
-    for phrase_index, (start_i, end_i) in enumerate(phrase_ranges):
-        phrase = result[start_i:end_i]
-        if not phrase:
-            continue
-        if _identity_phrase_is_filler(phrase):
-            # Filler is cheap to leave unlabeled; do not spend identity API
-            # budget proving who said a standalone "uh/um".
-            continue
-        phrase_start = float(phrase[0].get("edited_start", 0.0) or 0.0)
-        previous_end = (
-            float(result[start_i - 1].get("edited_end", phrase_start) or phrase_start)
-            if start_i > 0 else phrase_start
-        )
-        pre_gap = max(0.0, phrase_start - previous_end)
-        sources = {str(row.get("speaker_evidence_source", "")) for row in phrase}
-        labels = {str(row.get("speaker_label", "")).strip() for row in phrase if str(row.get("speaker_label", "")).strip()}
-        min_conf = min(float(row.get("speaker_confidence", 0.0) or 0.0) for row in phrase)
-        reasons: list[str] = []
-        score = 0.0
-        if (
-            pre_gap >= IDENTITY_MICRO_RISK_GAP_SECONDS
-            and phrase_start >= first_verified_switch_time
-        ):
-            reasons.append(f"pre_gap={pre_gap:.3f}")
-            score += 10.0 * pre_gap
-        if any("conflict" in source or "unresolved" in source for source in sources):
-            reasons.append("identity_conflict_or_unresolved")
-            score += 100.0
-        if len(labels) > 1:
-            reasons.append("mixed_visible_labels")
-            score += 120.0
-        if min_conf < 0.70:
-            reasons.append(f"weak_identity_conf={min_conf:.3f}")
-            score += 30.0 * (0.70 - min_conf)
-        if reasons:
-            # Slightly favor later ties: post-gap identity resets often surface
-            # near the tail of a short, as seen in a real two-speaker regression.
-            score += min(2.0, phrase_start / max(1.0, duration))
-            risky_scored.append((score, start_i, end_i, reasons))
-
-    risky_scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    risky = [(start_i, end_i, reasons) for _, start_i, end_i, reasons in risky_scored[:IDENTITY_MICRO_MAX_PHRASES]]
-    risky.sort(key=lambda item: item[0])
-
-    if not risky:
-        audit["status"] = "clean"
-        return result, audit
-
-    for phrase_number, (start_i, end_i, reasons) in enumerate(risky, 1):
-        phrase = result[start_i:end_i]
-        phrase_start = float(phrase[0].get("edited_start", 0.0) or 0.0)
-        phrase_end = float(phrase[-1].get("edited_end", phrase_start) or phrase_start)
-        votes: list[tuple[str, float]] = []
-        view_details: list[dict[str, Any]] = []
-        # Strict 2/2 local consensus. The whole-clip identity anchor is NOT a
-        # vote here; it is precisely the source we are auditing. This prevents a
-        # confident but wrong global A/B-name label from self-confirming.
-        for view_index, pad in enumerate((0.75, 1.35), 1):
-            window_start, window_end = _identity_micro_window_bounds(
-                phrase_start=phrase_start,
-                phrase_end=phrase_end,
-                duration=duration,
-                pad=pad,
-            )
-            try:
-                micro_path = _render_identity_micro_window(
-                    audio_path,
-                    start=window_start,
-                    end=window_end,
-                    clip_index=clip_index,
-                    phrase_index=phrase_number,
-                    view_index=view_index,
-                )
-                audit["api_calls_attempted"] += 1
-                data = _run_diarization(
-                    micro_path,
-                    chunking="auto",
-                    known_speaker_names=names,
-                    known_speaker_references=references,
-                )
-                micro_duration = max(0.0, window_end - window_start)
-                segments = _normalize_segments(data, micro_duration)
-                name, coverage, scores = _micro_identity_vote(
-                    segments,
-                    phrase_start_local=max(0.0, phrase_start - window_start),
-                    phrase_end_local=max(0.0, phrase_end - window_start),
-                    allowed_names=names,
-                )
-                if name:
-                    votes.append((name, coverage))
-                view_details.append(
-                    {
-                        "view": view_index,
-                        "window": [window_start, window_end],
-                        "vote": name,
-                        "coverage": round(coverage, 4),
-                        "scores": {key: round(value, 4) for key, value in scores.items()},
-                    }
-                )
-            except Exception as error:
-                view_details.append({"view": view_index, "error": str(error)})
-
-        resolved_name = ""
-        if len(votes) >= 2 and votes[0][0].casefold() == votes[1][0].casefold():
-            resolved_name = votes[0][0]
-        canonical_raw = inverse.get(resolved_name.casefold(), "") if resolved_name else ""
-        if canonical_raw:
-            confidence = round(min(v[1] for v in votes), 3)
-            for row in phrase:
-                row["speaker_raw"] = canonical_raw
-                row["speaker_role"] = raw_role.get(canonical_raw, "main")
-                row["speaker_label"] = str(raw_to_name.get(canonical_raw, resolved_name))
-                row["speaker_confidence"] = confidence
-                row["speaker_evidence_source"] = "human_known_voice_micro_consensus"
-                row["identity_micro_name"] = resolved_name
-            audit["resolved_phrases"] += 1
-        else:
-            for row in phrase:
-                row["speaker_raw"] = ""
-                row["speaker_role"] = "main"
-                row["speaker_label"] = ""
-                row["speaker_confidence"] = 0.0
-                row["speaker_evidence_source"] = "human_known_voice_micro_unresolved"
-            audit["unresolved_phrases"] += 1
-
-        audit["checked_phrases"] += 1
-        audit["details"].append(
-            {
-                "phrase_words": [str(row.get("word", "")) for row in phrase],
-                "range": [round(phrase_start, 3), round(phrase_end, 3)],
-                "reasons": reasons,
-                "views": view_details,
-                "resolved_name": resolved_name,
-            }
-        )
-
-    audit["status"] = "checked"
-    return result, audit
-
-
-
-
-
-
 def _assign_words(
     words: list[dict[str, Any]],
     segments: list[dict[str, Any]],
@@ -2788,6 +1629,129 @@ def _assign_words(
         "safety_fallback_to_unresolved": safety_fallback,
     }
 
+# ============================================================
+# SPEAKER COLOURS (a colour names a VOICE, never a person)
+# ============================================================
+
+SPEAKER_COLOR_VERSION = 1
+SPEAKER_COLOR_SLOTS = ("A", "B", "C")
+SPEAKER_COLOR_NEUTRAL = "neutral"
+# A turn earns its voice's colour only with the turn stabilizer's own keep rule
+# (a real turn, or a short turn with strong evidence) and a confidence floor.
+MIN_COLOR_RUN_CONFIDENCE = 0.60
+# Whole-clip reliability: too much uncertain speech or too many colour changes
+# means the colours would flicker rather than follow turns -> no speaker colours.
+MAX_NEUTRAL_COLOR_SHARE = 0.34
+MAX_COLOR_CHANGES_PER_20_WORDS = MAX_DUAL_SWITCHES_PER_20_WORDS
+
+
+def _stable_color_run(words: int, duration: float, avg_confidence: float) -> bool:
+    if avg_confidence < MIN_COLOR_RUN_CONFIDENCE:
+        return False
+    return (
+        words >= MIN_STABLE_TURN_WORDS
+        or (duration >= MIN_STABLE_TURN_SECONDS and avg_confidence >= 0.84)
+        or avg_confidence >= 0.90
+    )
+
+
+def _assign_speaker_colors(
+    words: list[dict[str, Any]],
+    *,
+    mode: str,
+    participants: list[str],
+    hard_failure: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Caption colour of every word from the acoustic speaker turns.
+
+    The first voice with a stable turn is colour ``A``, the next ``B``, then
+    ``C``, and a voice keeps its colour for the whole clip (A -> B -> A returns
+    to A). Words without speaker evidence, and turns too short or weak to
+    trust, are ``neutral``: no colour is guessed and one jittered word cannot
+    flash another voice's colour. A clip without two reliable voices (single
+    speaker, unresolved, boundary hard failure, too much uncertainty or colour
+    flicker) gets no speaker colours at all (``""``, the plain caption look).
+
+    Only ``speaker_color`` is written; text, times and speaker ids are untouched.
+    """
+    output = [dict(word) for word in words]
+    voices = list(dict.fromkeys(str(x) for x in (participants or []) if str(x)))[:len(SPEAKER_COLOR_SLOTS)]
+    summary: dict[str, Any] = {
+        "version": SPEAKER_COLOR_VERSION,
+        "engaged": False,
+        "reason": "",
+        "slots": {},
+        "words": len(output),
+        "neutral_words": 0,
+        "color_changes": 0,
+        "demoted_turns": 0,
+        "policy": "colour per voice in order of first stable turn; uncertain or weak turns neutral; "
+                  "fewer than two reliable voices -> no speaker colours; lanes are layout only",
+    }
+
+    def plain(reason: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        for word in output:
+            word["speaker_color"] = ""
+        summary["reason"] = reason
+        return output, summary
+
+    if hard_failure:
+        return plain("speaker_boundary_hard_failure")
+    if mode not in {"dual", "triple"}:
+        return plain(f"mode_{mode or 'unknown'}")
+    if len(voices) < 2:
+        return plain("fewer_than_two_voices")
+    if not output:
+        return plain("no_words")
+
+    runs: list[list[Any]] = []          # [start, end, voice]
+    for index, word in enumerate(output):
+        voice = str(word.get("speaker_raw") or "")
+        voice = voice if voice in voices else ""
+        if runs and runs[-1][2] == voice:
+            runs[-1][1] = index + 1
+        else:
+            runs.append([index, index + 1, voice])
+
+    trusted: list[str] = [""] * len(output)
+    for start, end, voice in runs:
+        if not voice:
+            continue
+        try:
+            duration = float(output[end - 1].get("edited_end", 0.0)) - float(output[start].get("edited_start", 0.0))
+            confidences = [float(output[i].get("speaker_confidence", 0.0) or 0.0) for i in range(start, end)]
+        except (TypeError, ValueError):
+            summary["demoted_turns"] += 1
+            continue
+        if _stable_color_run(end - start, max(0.0, duration), sum(confidences) / len(confidences)):
+            for index in range(start, end):
+                trusted[index] = voice
+        else:
+            summary["demoted_turns"] += 1
+
+    slots: dict[str, str] = {}
+    for voice in trusted:
+        if voice and voice not in slots:
+            slots[voice] = SPEAKER_COLOR_SLOTS[len(slots)]
+    colors = [slots[voice] if voice else SPEAKER_COLOR_NEUTRAL for voice in trusted]
+    neutral = colors.count(SPEAKER_COLOR_NEUTRAL)
+    changes = sum(1 for previous, current in zip(colors, colors[1:]) if previous != current)
+    summary.update(slots=dict(slots), neutral_words=neutral, color_changes=changes)
+
+    if len(slots) < 2:
+        return plain("fewer_than_two_reliable_voices")
+    if neutral / len(colors) > MAX_NEUTRAL_COLOR_SHARE:
+        return plain("too_much_uncertain_speaker_evidence")
+    if changes * 20.0 / len(colors) > MAX_COLOR_CHANGES_PER_20_WORDS:
+        return plain("speaker_color_flicker")
+
+    for word, color in zip(output, colors):
+        word["speaker_color"] = color
+    summary["engaged"] = True
+    summary["reason"] = "two_or_more_reliable_voices"
+    return output, summary
+
+
 def _scan_output_path(edited_clip_path: str | Path, clip_index: int) -> Path:
     edited_clip_path = Path(edited_clip_path).resolve()
     directory = SPEAKER_OUTPUT_DIR / _safe_name(edited_clip_path.parent.name)
@@ -2808,8 +1772,8 @@ def create_speaker_scan_from_audio(
     """Speaker scan from the exact pre-render pacing audio.
 
     No video render is required. The full selected clip audio is diarized first,
-    Luna-low classifies real participants versus crowd/noise, then the human
-    naming checkpoint can run before the heavy video encode.
+    then Luna-low classifies real participants versus crowd/noise. The acoustic
+    turns feed caption colours only; nobody is asked who is speaking.
     """
     audio_path = Path(audio_path).resolve()
     if not audio_path.is_file():
@@ -2823,6 +1787,7 @@ def create_speaker_scan_from_audio(
     ensemble_audit: list[dict[str, Any]] = []
     speaker_count_confidence = 0.0
     selection_reason = ""
+    scan: dict[str, Any] = {}
     try:
         scan = _speaker_ensemble_scan(audio_path, duration, clip_index)
         segments = list(scan.get("segments", []) or [])
@@ -2865,7 +1830,7 @@ def create_speaker_scan_from_audio(
         "speaker_selection_reason": selection_reason,
         "speaker_boundary_quality": float(scan.get("speaker_boundary_quality", 0.0) or 0.0),
         "speaker_boundary_audit": dict(scan.get("speaker_boundary_audit", {}) or {}),
-        "display_labels": ({primary: "A", secondary: "B"} if mode == "dual" and primary and secondary else {}),
+        "display_labels": {},
         "speaker_stats": stats,
         "segments": segments,
         "words": [],
@@ -2874,8 +1839,8 @@ def create_speaker_scan_from_audio(
         "diarization_error": diarization_error,
         "policy": {
             "speaker_algorithm": "48k raw auto diarization -> conditional sensitive retry -> conditional known-speaker anchored confirmation -> Gold V7 assignment",
-            "render_order": "audio scan -> optional high-confidence 2/3-person audio identity -> video render",
-            "identity_prompt": "only high-confidence 2/3 real speakers; otherwise plain captions without a teaser",
+            "render_order": "audio scan -> video render (no identity prompt)",
+            "speaker_colors": "acoustic turns colour voices on the final profile; no person identity",
             "primary_chunking": "auto",
             "retry_vad_threshold": DIARIZATION_RETRY_VAD_THRESHOLD,
             "known_speaker_anchor": "2-10s references only after plausible multi-speaker evidence",
@@ -2897,8 +1862,7 @@ def create_speaker_scan(
 
     This is the correctness boundary: one diarization request gets the entire
     final edited clip by itself.  No other API request runs concurrently with
-    it. The returned profile is sufficient for an optional 2/3-speaker audio
-    identity checkpoint; uncertain identity never blocks plain captions.
+    it. Uncertain speaker structure never blocks plain captions.
     """
     edited_clip_path = Path(edited_clip_path).resolve()
     output = _scan_output_path(edited_clip_path, clip_index)
@@ -2913,6 +1877,7 @@ def create_speaker_scan(
         ensemble_audit: list[dict[str, Any]] = []
         speaker_count_confidence = 0.0
         selection_reason = ""
+        scan: dict[str, Any] = {}
         try:
             scan = _speaker_ensemble_scan(audio_path, duration, clip_index)
             segments = list(scan.get("segments", []) or [])
@@ -2955,10 +1920,7 @@ def create_speaker_scan(
             "speaker_selection_reason": selection_reason,
             "speaker_boundary_quality": float(scan.get("speaker_boundary_quality", 0.0) or 0.0),
             "speaker_boundary_audit": dict(scan.get("speaker_boundary_audit", {}) or {}),
-            "display_labels": (
-                {primary: "A", secondary: "B"}
-                if mode == "dual" and primary and secondary else {}
-            ),
+            "display_labels": {},
             "speaker_stats": stats,
             "segments": segments,
             "words": [],
@@ -2967,7 +1929,7 @@ def create_speaker_scan(
             "diarization_error": diarization_error,
             "policy": {
                 "speaker_algorithm": "Gold V7 assignment + Luna-low participant/crowd role judge",
-                "api_order": "diarization alone first; Luna-low role judge; human naming; video render later",
+                "api_order": "diarization alone first; Luna-low role judge; video render later",
                 "crowd": "ambient crowd/laughter/cheering is not participant #3",
             },
         }
@@ -3003,13 +1965,14 @@ def create_speaker_profile(
     speaker_scan_path: str | Path | None = None,
     verified_terms: list[str] | tuple[str, ...] | None = None,
 ) -> Path:
-    """Build the final caption profile without letting identity recalibrate words.
+    """Build the final caption profile without letting speakers recalibrate words.
 
     1. ai.caption_stack produces the WORDS (frozen transcript) and their CLOCK
        (one word-alignment provider) from the exact final edited clip.
     2. Pre-render diarization segments feed the proven Gold V7 turn assignment.
-    3. Human voice references only validate raw-speaker -> display-name mapping.
-       They never re-segment caption words and never touch timestamps/text.
+    3. The acoustic turns give every word its voice's caption colour
+       (``_assign_speaker_colors``). No person is identified or named; speaker
+       metadata never touches text or timestamps.
 
     ``verified_terms``: user-verified names/terms (creator, configured entities)
     given to the precision ear as spelling references only.
@@ -3020,8 +1983,6 @@ def create_speaker_profile(
     # Keep diagnostic fallback construction safe even if an early probe/read
     # fails before the scan metadata is loaded.
     scan: dict[str, Any] = {}
-    inherited_names: dict[str, Any] = {}
-    inherited_labels: dict[str, Any] = {}
 
     try:
         duration = _probe_duration(edited_clip_path)
@@ -3036,22 +1997,10 @@ def create_speaker_profile(
 
         audio_path = _extract_audio(edited_clip_path, clip_index)
         scan_segments = [dict(x) for x in (scan.get("segments") or []) if isinstance(x, dict)]
-        inherited_names = scan.get("speaker_names") if isinstance(scan.get("speaker_names"), dict) else {}
-        inherited_labels = scan.get("display_labels") if isinstance(scan.get("display_labels"), dict) else {}
-
-        caption_known_names: list[str] = []
-        for value in [
-            *(inherited_names.get(key, "") for key in ("A", "B", "C")),
-            *inherited_labels.values(),
-        ]:
-            clean = " ".join(str(value).split()).strip()
-            if clean and clean.upper() not in {"A", "B", "C"} and clean not in caption_known_names:
-                caption_known_names.append(clean)
 
         words, alignment_ratio, text_source, caption_quality = final_captions.transcribe_final_short(
             edited_clip_path,
             duration,
-            participant_names=caption_known_names,
             verified_terms=list(verified_terms or ()),
         )
 
@@ -3091,12 +2040,7 @@ def create_speaker_profile(
                 "unresolved", None, None, [], [], []
             )
 
-        force_plain_captions = bool(scan.get("force_plain_captions", False))
-        if force_plain_captions:
-            mode, primary, secondary, kept, background_speakers = "unresolved", None, None, [], []
-
-        # IMPORTANT: Gold V7 owns word->raw-speaker assignment for EVERY clip,
-        # including clips whose real names were human-calibrated.
+        # Gold V7 owns word -> raw-speaker assignment for EVERY clip.
         assigned_words, assignment = _assign_words(
             words=words,
             segments=segments,
@@ -3113,111 +2057,25 @@ def create_speaker_profile(
                 secondary = None
                 kept = [primary] if primary and mode != "unresolved" else []
 
-        # Human identity anchor: once the user has confirmed A/B voices, the
-        # existing known-speaker pass is allowed to correct WHO metadata only.
-        # Text and word timing remain immutable.
-        identity_anchor: dict[str, Any] = {"status": "not_applicable", "segment_sets": []}
-        identity_overlay: dict[str, Any] = {"status": "not_applicable"}
-        identity_phrase_lock: dict[str, Any] = {"status": "not_applicable"}
-        identity_micro_verify: dict[str, Any] = {"status": "not_applicable"}
-        identity_final_guard: dict[str, Any] = {"status": "not_applicable"}
-        manual_map = _manual_identity_map(scan)
-        validated_identity_map: dict[str, str] = {}
-        if manual_map and not force_plain_captions:
-            # A name entered after the user listened to that raw speaker's
-            # reference is already human-verified identity evidence. Preserve
-            # that raw-id -> name map as the final DISPLAY mapping. Optional
-            # model anchors remain diagnostic only and can never erase it.
-            validated_identity_map.update(_human_verified_identity_map(scan, manual_map))
-            try:
-                identity_anchor = _run_human_identity_anchor(
-                    audio_path=audio_path,
-                    duration=duration,
-                    scan=scan,
-                    clip_index=clip_index,
-                )
-            except Exception as error:
-                identity_anchor = {"status": "failed", "segment_sets": [], "errors": [str(error)]}
-
-            trusted = {
-                " ".join(str(name).split()).strip().casefold()
-                for name in (identity_anchor.get("known_names") or [])
-                if " ".join(str(name).split()).strip()
-            }
-            for raw_speaker, display_name in manual_map.items():
-                clean_name = " ".join(str(display_name).split()).strip()
-                if clean_name and clean_name.casefold() in trusted:
-                    validated_identity_map[str(raw_speaker)] = clean_name
-            if isinstance(identity_anchor, dict):
-                identity_anchor["human_verified_display_map"] = dict(validated_identity_map)
-                identity_anchor["model_anchor_can_erase_human_name"] = False
-
-        display_labels: dict[str, str] = {}
-        if manual_map:
-            # Partial validation is intentional: one trusted name can be labeled
-            # while an uncertain second voice remains unlabeled.
-            display_labels = dict(validated_identity_map)
-        elif not force_plain_captions:
-            if mode in {"dual", "triple"}:
-                for index, speaker in enumerate(participants[:3]):
-                    key = chr(ord("A") + index)
-                    label = str(inherited_labels.get(speaker) or inherited_names.get(key) or key).strip()
-                    if label:
-                        display_labels[speaker] = label
-            elif mode == "single" and primary:
-                label = str(inherited_labels.get(primary) or inherited_names.get("A") or "").strip()
-                if label:
-                    display_labels[primary] = label
-
-        # V6: do not skip the rescue merely because generic Gold V7 degraded
-        # effective_mode to `unresolved`.  The whole point of the human-known
-        # voice anchor is to rescue WHO when raw A/B ownership is weak.
-        if manual_map and not force_plain_captions and len(manual_map) >= 2:
-            segment_sets = [
-                [dict(row) for row in segment_set if isinstance(row, dict)]
-                for segment_set in (identity_anchor.get("segment_sets") or [])
-                if isinstance(segment_set, list)
-            ]
-            assigned_words, identity_overlay = _apply_human_known_voice_overlay(
-                words=assigned_words,
-                segment_sets=segment_sets,
-                raw_to_name=manual_map,
-            )
-            assigned_words, identity_phrase_lock = _lock_human_identity_by_phrase(
-                words=assigned_words,
-                raw_to_name=manual_map,
-            )
-            assigned_words, identity_micro_verify = _micro_verify_risky_identity_phrases(
-                audio_path=audio_path,
-                duration=duration,
-                scan=scan,
-                scan_segments=segments,
-                words=assigned_words,
-                raw_to_name=manual_map,
-                clip_index=clip_index,
-            )
-            assigned_words, identity_final_guard = _enforce_one_identity_per_phrase(
-                words=assigned_words,
-                raw_to_name=manual_map,
-            )
-
+        boundary_audit = dict(scan.get("speaker_boundary_audit", {}) or {})
+        assigned_words, speaker_colors = _assign_speaker_colors(
+            assigned_words,
+            mode=mode,
+            participants=participants,
+            hard_failure=bool(boundary_audit.get("hard_failure", False)),
+        )
         for raw in assigned_words:
-            if not isinstance(raw, dict):
-                continue
-            speaker = str(raw.get("speaker_raw") or "")
-            # One final label projection prevents stale A/B-name text after a
-            # raw-speaker remap. UNKNOWN always renders without a human name.
-            raw["speaker_label"] = str(display_labels.get(speaker, ""))
+            if isinstance(raw, dict):
+                # A colour names a voice; no caption ever prints a speaker name.
+                raw["speaker_label"] = ""
 
         if isinstance(caption_quality, dict):
             caption_quality["speaker_mutates_text"] = False
             caption_quality["speaker_mutates_timestamps"] = False
-            caption_quality["identity_word_assignment"] = "gold_v7_plus_human_known_voice_phrase_lock_plus_risky_micro_consensus"
-            caption_quality["identity_label_validation"] = str(identity_anchor.get("status", "not_applicable"))
-            caption_quality["identity_overlay"] = dict(identity_overlay)
-            caption_quality["identity_phrase_lock"] = dict(identity_phrase_lock)
-            caption_quality["identity_micro_verify"] = dict(identity_micro_verify)
-            caption_quality["identity_final_guard"] = dict(identity_final_guard)
+            caption_quality["speaker_word_assignment"] = "gold_v7_acoustic_turns"
+            caption_quality["speaker_colors"] = {
+                key: speaker_colors[key] for key in ("engaged", "reason", "slots", "neutral_words")
+            }
 
         profile = {
             "version": SPEAKER_PROFILE_VERSION,
@@ -3238,29 +2096,23 @@ def create_speaker_profile(
             "kept_speakers": kept,
             "participant_speakers": participants,
             "background_speakers": background_speakers,
-            "display_labels": display_labels,
-            "speaker_names": inherited_names,
+            "display_labels": {},
+            "speaker_colors": speaker_colors,
             "speaker_stats": stats,
             "speaker_boundary_quality": float(scan.get("speaker_boundary_quality", 0.0) or 0.0),
-            "speaker_boundary_audit": dict(scan.get("speaker_boundary_audit", {}) or {}),
+            "speaker_boundary_audit": boundary_audit,
             "segments": segments,
             "words": assigned_words,
             "assignment": assignment,
-            "identity_anchor": identity_anchor,
-            "identity_overlay": identity_overlay,
-            "identity_phrase_lock": identity_phrase_lock,
-            "identity_micro_verify": identity_micro_verify,
-            "identity_final_guard": identity_final_guard,
-            "validated_identity_map": validated_identity_map,
             "diarization_status": "ok" if segments else "fallback_single",
             "diarization_error": diarization_error,
             "policy": {
                 "word_truth": "caption_stack frozen transcript (Qwen ears, agreement / caption judge); "
                               "speaker layer cannot rewrite text",
                 "clock_truth": "one word-alignment provider over the frozen words; no post calibration",
-                "speaker_truth": "Gold V7 discovery + human-confirmed known-speaker phrase lock + risky local two-view consensus",
-                "identity_truth": "human voice references may remap speaker metadata only; text/time immutable",
-                "uncertain_identity": "risky phrase needs two local known-voice votes; otherwise no identity label",
+                "speaker_truth": "Gold V7 acoustic turns (diarization + text/timing evidence); no person identity",
+                "speaker_color": "a colour names a voice: first reliable voice A, next B, then C, for the whole "
+                                 "clip; uncertain/weak turns neutral; fewer than two reliable voices -> plain",
             },
             "compatibility": {
                 "transcript_path": str(transcript_path) if transcript_path else None,
@@ -3269,10 +2121,8 @@ def create_speaker_profile(
             },
         }
     except Exception as error:
-        # Diagnostic fallback only. Preserve the PRE-RENDER human identity
-        # metadata so a clock failure can never look like "the user never named
-        # the speakers". The pipeline refuses to publish legacy-timed captions
-        # from this profile (see shorts_pipeline mandatory final-clock guard).
+        # Diagnostic fallback only: the pipeline refuses to publish legacy-timed
+        # captions from this profile (see shorts_pipeline mandatory final-clock guard).
         profile = {
             "version": SPEAKER_PROFILE_VERSION,
             "status": "fallback",
@@ -3288,9 +2138,7 @@ def create_speaker_profile(
             "kept_speakers": [str(x) for x in (scan.get("kept_speakers") or []) if str(x)],
             "participant_speakers": [str(x) for x in (scan.get("participant_speakers") or []) if str(x)],
             "background_speakers": [str(x) for x in (scan.get("background_speakers") or []) if str(x)],
-            "display_labels": dict(inherited_labels),
-            "speaker_names": dict(inherited_names),
-            "force_plain_captions": bool(scan.get("force_plain_captions", False)),
+            "display_labels": {},
             "error": str(error),
         }
     finally:
@@ -3301,4 +2149,3 @@ def create_speaker_profile(
                 pass
 
     return _write_json(output, profile)
-

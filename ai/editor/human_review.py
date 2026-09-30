@@ -93,9 +93,12 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
 
     focus.sort(key=lambda item: item["final_s"])
     speakers: dict[str, int] = {}
+    colours: dict[str, int] = {}
     for row in words.values():
         label = str(row[5] if len(row) > 5 else "") or "(unlabeled lane)"
         speakers[label] = speakers.get(label, 0) + 1
+        colour = str(row[6] if len(row) > 6 else "") or "plain"
+        colours[colour] = colours.get(colour, 0) + 1
     intro = timeline_doc.get("intro") or {}
     failed = [r for r in qc_rows if r.get("status") == "fail"]
     return {
@@ -109,6 +112,7 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
                       "paced_window_s": intro.get("paced"), "headline": headline or ""},
         "effects_final_s": [[round(a, 3), round(b, 3)] for a, b in effect_windows],
         "speakers": speakers,
+        "speaker_colors": colours,
         "focus": focus,
         "degradations": list(degradations),
         "repairs": list(repairs),
@@ -154,10 +158,14 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
     lines += ["", "## Effects"]
     lines += [f"- [ ] {_clock(a)}-{_clock(b)}: effect placed away from captions" for a, b in effects] or \
         ["- none"]
-    speakers = packet.get("speakers") or {}
+    colours = packet.get("speaker_colors") or {}
     lines += ["", "## Speakers"]
-    lines += [f"- {label}: {count} word(s)" for label, count in sorted(speakers.items())] or ["- none"]
-    lines.append("- Names are shown only when a human verified the voice; anonymous speakers stay S1/S2.")
+    if any(key in colours for key in ("A", "B", "C")):
+        counts = ", ".join(f"{key}: {count} word(s)" for key, count in sorted(colours.items()))
+        lines.append(f"- [ ] Each voice keeps one caption colour and colour changes follow the speakers ({counts})")
+        lines.append("- A colour names a voice, never a person; words with an uncertain voice are neutral.")
+    else:
+        lines.append("- Speaker colours off (one voice, or speaker turns too uncertain): plain captions.")
     lines += ["", "## Disclosed degradations"]
     lines += [f"- {row}" for row in packet.get("degradations") or []] or ["- none"]
     if packet.get("repairs"):

@@ -658,9 +658,14 @@ class StyleSystemTests(unittest.TestCase):
         self.assertAlmostEqual(impact.font_px, round(74 * 1.08, 1))
         self.assertGreater(impact.emphasis_outline_px, impact.outline_px)
         self.assertEqual(impact.ass_style, "MimirSecondary")
-        self.assertEqual(impact.active_colour, cp.PALETTES["secondary"].active)
-        tertiary = cp.resolve_caption_style(CaptionStyle.DEFAULT, "tertiary", geometry)
-        self.assertEqual(tertiary.active_colour, cp.PALETTES["main"].active)     # baseline palette parity
+        # Captions V25: the lane is only WHERE a page sits; its colours are its voice's.
+        self.assertEqual(impact.active_colour, cp.PALETTES["main"].active)       # plain voice on lane 2
+        voice_b = cp.resolve_caption_style(CaptionStyle.DEFAULT, "main", geometry, colour="B")
+        self.assertEqual((voice_b.ass_style, voice_b.active_colour), ("MimirMain", cp.PALETTES["secondary"].active))
+        voice_c = cp.resolve_caption_style(CaptionStyle.DEFAULT, "tertiary", geometry, colour="C")
+        neutral = cp.resolve_caption_style(CaptionStyle.DEFAULT, "main", geometry, colour="neutral")
+        actives = {default.active_colour, voice_b.active_colour, voice_c.active_colour, neutral.active_colour}
+        self.assertEqual(len(actives), 4)                                         # every voice is distinguishable
 
     def test_accent_is_outline_and_colour_only_and_bounded_by_the_word_interval(self) -> None:
         rows = words("this is the payoff moment right here", gap=0.05)

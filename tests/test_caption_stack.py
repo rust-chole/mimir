@@ -509,7 +509,7 @@ class FinalShortTests(unittest.TestCase):
         seen = {}
         real_run = self.run_short(self.A, self.A)[0]              # the real stack with fake providers
 
-        def fake_stack(clip, duration, *, participant_names, verified_terms):
+        def fake_stack(clip, duration, *, participant_names=(), verified_terms=()):
             seen.update(clip=Path(clip), names=list(participant_names), terms=list(verified_terms))
             return real_run
 
@@ -519,7 +519,8 @@ class FinalShortTests(unittest.TestCase):
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         self.assertEqual(data["status"], "ok", data.get("error"))
         self.assertEqual(seen["clip"], self.clip.resolve())                       # the FINAL edited short itself
-        self.assertEqual((seen["names"], seen["terms"]), (["KAI", "TYLA"], ["Creator X"]))
+        # No speaker is named any more: names left in a legacy scan are never spelling references.
+        self.assertEqual((seen["names"], seen["terms"]), ([], ["Creator X"]))
         self.assertEqual(data["timing_basis"], final_captions.TIMING_BASIS)
         self.assertEqual(" ".join(w["word"] for w in data["words"]), self.A)
         self.assertTrue(all("token_ids" in w for w in data["words"]))

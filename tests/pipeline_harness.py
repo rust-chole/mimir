@@ -50,8 +50,7 @@ WORDS = [(f"word{i}", 0.5 + i * 0.45, 0.5 + i * 0.45 + 0.32) for i in range(58)]
 
 def install_fakes(video: Path) -> None:
     from ai import vod_processor
-    from ai.editor import (clip_analyzer, intro_analyzer, pacing, speaker_caption_support, speaker_naming,
-                           teaser_analyzer, timeline)
+    from ai.editor import clip_analyzer, intro_analyzer, pacing, speaker_caption_support, teaser_analyzer, timeline
 
     stem = video.stem
 
@@ -102,19 +101,25 @@ def install_fakes(video: Path) -> None:
         return write(Path(path), {"version": speaker_caption_support.SPEAKER_PROFILE_VERSION, "status": "ok",
                                   "mode": "single", "segments": [], "role_judge": {}})
 
-    def resolve_interactive_speaker_names(speaker_profile_path, edited_clip_path, clip_index, creator_name=None):
-        return {"profile_path": str(speaker_profile_path), "preview_path": None}
-
     def create_speaker_profile(edited_clip_path, clip_index, transcript_path=None, timeline_path=None,
                                speaker_scan_path=None, verified_terms=None):
         path = speaker_caption_support._output_path(edited_clip_path, clip_index)
         words = [(w, s, e) for w, s, e in WORDS if e < 27.9]
+        # HARNESS_SPEAKERS=dual: two voices taking turns of six words (A B A B ...),
+        # coloured by the REAL speaker-colour assignment.
+        dual = os.environ.get("HARNESS_SPEAKERS") == "dual"
+        rows = [{"word": w, "edited_start": s, "edited_end": e,
+                 "speaker_raw": ("A", "B")[(i // 6) % 2] if dual else "A", "speaker_role": "main",
+                 "speaker_label": "", "speaker_confidence": 0.9} for i, (w, s, e) in enumerate(words)]
+        mode, participants = ("dual", ["A", "B"]) if dual else ("single", ["A"])
+        rows, colors = speaker_caption_support._assign_speaker_colors(rows, mode=mode, participants=participants,
+                                                                      hard_failure=False)
         return write(Path(path), {
             "version": speaker_caption_support.SPEAKER_PROFILE_VERSION, "status": "ok", "phase": "final_profile",
-            "timing_basis": "exact_final_48k_audio", "clip_duration": 28.0, "mode": "single",
-            "diarization_status": "ok", "display_labels": {}, "caption_quality": {},
-            "words": [{"word": w, "edited_start": s, "edited_end": e, "speaker_raw": "A", "speaker_role": "main",
-                       "speaker_label": ""} for w, s, e in words]})
+            "timing_basis": "exact_final_48k_audio", "clip_duration": 28.0, "mode": mode,
+            "primary_speaker": "A", "secondary_speaker": "B" if dual else None, "participant_speakers": participants,
+            "diarization_status": "ok", "display_labels": {}, "caption_quality": {}, "speaker_colors": colors,
+            "words": rows})
 
     def analyze_teasers(timeline_path, transcript_path, clip_index, edited_video_path=None, video_report_path=None,
                         caption_profile_path=None):
@@ -168,7 +173,6 @@ def install_fakes(video: Path) -> None:
     pacing.create_pacing_analysis = create_pacing_analysis
     timeline.create_edit_timeline = create_edit_timeline
     speaker_caption_support.create_speaker_scan_from_audio = create_speaker_scan_from_audio
-    speaker_naming.resolve_interactive_speaker_names = resolve_interactive_speaker_names
     speaker_caption_support.create_speaker_profile = create_speaker_profile
     teaser_analyzer.analyze_teasers = analyze_teasers
     intro_analyzer.analyze_intros = analyze_intros
