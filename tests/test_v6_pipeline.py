@@ -106,6 +106,50 @@ class PacedClipIdentityTests(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
 @fx.needs_opencv
+class RunStatusEndToEndTests(unittest.TestCase):
+    """The REAL pipeline fails right after the short reached final/, then reruns cleanly."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="mimir run status e2e ş'")
+        base = Path(cls._tmp.name)
+        cls.copy = base / "repo copy"
+        shutil.copytree(ROOT, cls.copy, ignore=shutil.ignore_patterns(".git", "vod_output", "__pycache__", ".venv*",
+                                                                     "venv*", "_v5_*", "_pass2_*", ".env", "*.zip"))
+        cls.video = make_video(base / "media ✓" / "status vod.mp4", 30)
+        cls.results = {}
+        for mode in ("fail_after_publish", "rerender"):
+            out = base / f"{mode}.json"
+            proc = subprocess.run([sys.executable, str(HARNESS), "--root", str(cls.copy), "--video", str(cls.video),
+                                   "--mode", mode, "--out", str(out)], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=900,
+                                  env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+            if proc.returncode != 0:
+                raise AssertionError(f"harness mode {mode} failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+            cls.results[mode] = json.loads(out.read_text(encoding="utf-8"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_a_failure_after_publication_names_the_published_short(self) -> None:
+        result = self.results["fail_after_publish"]
+        self.assertEqual(result["error_type"], "OSError")
+        self.assertEqual(result["run_status"], "failed_after_publish")
+        self.assertIn("review sheet write failure", result["run_error"])
+        self.assertTrue(result["published_exists"])
+        self.assertEqual(result["published_output"], result["final_output_state"])
+        self.assertTrue(result["published_output"].endswith("status vod_short.mp4"))
+
+    def test_a_successful_rerun_clears_the_stale_failure(self) -> None:
+        result = self.results["rerender"]
+        self.assertIn(result["status"], ("published", "published_degraded"))
+        self.assertEqual(result["run_status"], "success")
+        self.assertIsNone(result["run_error"])
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "ffmpeg/ffprobe not available on PATH")
+@fx.needs_opencv
 class V6PipelineEndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

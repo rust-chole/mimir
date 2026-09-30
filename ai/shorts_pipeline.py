@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from ai import model_config, vod_processor
 from ai.caption_stack import alignment as caption_alignment
@@ -539,6 +539,48 @@ def _state_path(video_path: Path) -> Path:
     return (STATE_DIR / f"{_safe_name(video_path.stem)}_pipeline.json").resolve()
 
 
+def _lock_file(handle: Any, lock: bool) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK if lock else msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), (fcntl.LOCK_EX | fcntl.LOCK_NB) if lock else fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _exclusive_run(state_path: Path) -> Iterator[None]:
+    """One run per state file at a time.
+
+    The state file and every artifact (transcript, clips, ``final/<name>_short.mp4``)
+    are keyed by the video's name, so two runs of same-named videos, even from
+    different folders, must never overlap. An OS-level lock: the OS drops it when
+    the process dies, so it never goes stale. Releasing never masks an error."""
+    handle = open(state_path.with_name(state_path.stem + ".lock"), "a+b")
+    try:
+        _lock_file(handle, True)
+    except OSError:
+        handle.close()
+        raise ShortsPipelineError(
+            f"'{state_path.stem.removesuffix('_pipeline')}' adlı bir video için başka bir MIMIR çalışması "
+            "sürüyor; aynı adlı videolar aynı çıktı dosyalarını kullanır. O çalışma bitince tekrar dene."
+        ) from None
+    try:
+        yield
+    finally:
+        try:
+            _lock_file(handle, False)
+        except BaseException:
+            pass
+        try:
+            handle.close()
+        except BaseException:
+            pass
+
+
 def _load_state(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
@@ -595,6 +637,29 @@ class StageBook:
     def save(self) -> None:
         self.state["updated_at"] = _now()
         _write_json_atomic(self.state_path, self.state)
+
+    def close_run(self, error: BaseException) -> None:
+        """Record how this started run ended when it ended in an exception.
+
+        Acts only on this run's own in-memory state: an outcome the run already
+        recorded (``rejected``) is kept, and a failure after the short was
+        published says so. Never masks the original error."""
+        if self.state.get("run_status") != "running":
+            return
+        if isinstance(error, NoStrongClipError):
+            status = "no_strong_clip"
+        elif isinstance(error, KeyboardInterrupt):
+            status = "interrupted"
+        elif self.state.get("publish_status") in {"published", "published_degraded"}:
+            status = "failed_after_publish"
+        else:
+            status = "failed"
+        self.state["run_status"] = status
+        self.state["run_error"] = f"{type(error).__name__}: {' '.join(str(error).split())}"[:600]
+        try:
+            self.save()
+        except BaseException:
+            pass
 
     def warn(self, text: str) -> None:
         warnings = self.state.setdefault("warnings", [])
@@ -2112,7 +2177,45 @@ def run_pipeline(
 
     ``rerender`` (legacy alias ``force_v6``) recomputes only the presentation,
     render, QC and publish stages; transcription, story discovery, caption ASR
-    and the other paid upstream stages keep their caches."""
+    and the other paid upstream stages keep their caches.
+
+    Runs of same-named videos never overlap (``_exclusive_run``). Once the run
+    has written its state, an exception never leaves that state ``running``: the
+    run's own book records how it ended, then the error is re-raised unchanged
+    (carrying ``published_output`` when the short had already been published)."""
+    video_path = resolve_video_path(video_path)
+    started: list[StageBook] = []
+    with _exclusive_run(_state_path(video_path)):
+        try:
+            return _run_pipeline(video_path, creator_name=creator_name, force=force, clip_index=clip_index,
+                                 enable_memes=enable_memes, enable_video_brain=enable_video_brain,
+                                 keep_temp=keep_temp, rerender=rerender, force_v6=force_v6, started=started)
+        except BaseException as error:
+            if started:
+                book = started[0]
+                book.close_run(error)
+                if book.state.get("publish_status") in {"published", "published_degraded"}:
+                    try:
+                        error.published_output = str(book.state.get("final_output") or "")  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+            raise
+
+
+def _run_pipeline(
+    video_path: str | Path,
+    *,
+    creator_name: str | None,
+    force: bool,
+    clip_index: int | None,
+    enable_memes: bool,
+    enable_video_brain: bool | None,
+    keep_temp: bool,
+    rerender: bool,
+    force_v6: bool,
+    started: list[StageBook],
+) -> dict[str, Any]:
+    """``run_pipeline``'s body. ``started`` receives this run's StageBook after its first save."""
     rerender = bool(rerender or force_v6)
     run_started = time.perf_counter()
     runtime_profiler = RuntimeProfiler()
@@ -2179,6 +2282,7 @@ def run_pipeline(
     state.pop("v6", None)
     state.pop("final_qc", None)
     state.pop("publish_status", None)
+    state.pop("run_error", None)
     state["warnings"] = []
     state["video_brain_source_report"] = None
     state["video_brain_report"] = None
@@ -2192,6 +2296,7 @@ def run_pipeline(
         rerun=v6_runtime.FORCE_V6_STAGES if rerender else (),
     )
     book.save()
+    started.append(book)
 
     _print_header(
         video_path,
@@ -4384,6 +4489,8 @@ def run_pipeline(
     if not _valid_file(published_path, MIN_VIDEO_BYTES):
         raise ShortsPipelineError("Published final short oluşmadı.")
     publish_status = "published" if gate.get("status") == v6_runtime.GATE_PASSED else "published_degraded"
+    state["publish_status"] = publish_status        # the short is in final/: a later failure is failed_after_publish
+    state["final_output"] = str(published_path)
     blocking = set(getattr(v6_runtime, "BLOCKING_FALLBACKS", ()))
     review_packet = human_review.build_review_packet(
         published=published_path, source=video_path, status=publish_status, qc_rows=qc_rows,
@@ -4644,8 +4751,13 @@ def main() -> None:
         print(f"   {error}")
         raise SystemExit(2)
     except Exception as error:
+        published = getattr(error, "published_output", "")
         print()
-        print("❌ MIMIR işlemi tamamlayamadı (hiçbir şey yayınlanmadı).")
+        if published:
+            print("⚠️ Short YAYINLANDI, ancak sonraki bir adım başarısız oldu:")
+            print(f"   📂 {published}")
+        else:
+            print("❌ MIMIR işlemi tamamlayamadı (hiçbir şey yayınlanmadı).")
         print(f"   {error}")
         print("   Daha fazla detay için aynı komutu --verbose ile çalıştır.")
         raise SystemExit(1)

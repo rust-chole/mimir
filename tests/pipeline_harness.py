@@ -18,6 +18,8 @@ Modes (there is ONE production path; modes only inject faults):
     memes          a selected local SFX goes through the real meme renderer + QC effect checks
     effect_broken  the effect render damages the short (drops its tail) -> QC fails -> the
                    bounded repair drops the effect and publishes the re-checked base, DEGRADED
+    fail_after_publish  the short reaches final/, then writing its review sheet fails ->
+                   the state must say failed_after_publish and name the published file
 """
 from __future__ import annotations
 
@@ -182,7 +184,8 @@ def main() -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
-                                                          "stage_crash", "planner_down", "memes", "effect_broken"])
+                                                          "stage_crash", "planner_down", "memes", "effect_broken",
+                                                          "fail_after_publish"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -236,6 +239,14 @@ def main() -> int:
 
         meme_renderer.render_memes = damaging_render
 
+    if args.mode == "fail_after_publish":
+        from ai.editor import human_review
+
+        def failing_sheet(*a, **k):
+            raise OSError("harness-injected review sheet write failure")
+
+        human_review.write_review_packet = failing_sheet
+
     kwargs = dict(force=True, enable_memes=args.mode in ("memes", "effect_broken"), enable_video_brain=False,
                   keep_temp=True)
     if args.mode == "rerender":
@@ -243,11 +254,16 @@ def main() -> int:
     summary: dict = {"mode": args.mode}
     try:
         result = shorts_pipeline.run_pipeline(video, **kwargs)
-    except shorts_pipeline.ShortsPipelineError as error:
+    except Exception as error:
+        if args.mode != "fail_after_publish" and not isinstance(error, shorts_pipeline.ShortsPipelineError):
+            raise
         state_file = shorts_pipeline._state_path(video)
         state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
         summary.update({
-            "error": str(error), "run_status": state.get("run_status"),
+            "error": str(error), "error_type": type(error).__name__,
+            "published_output": getattr(error, "published_output", None),
+            "run_status": state.get("run_status"), "run_error": state.get("run_error"),
+            "final_output_state": state.get("final_output"),
             "publish_status": state.get("publish_status"),
             "stages": {k: v.get("status") for k, v in state.get("stages", {}).items()},
             "v6_state": state.get("v6"), "final_qc": state.get("final_qc"),
@@ -261,6 +277,8 @@ def main() -> int:
     state = json.loads(Path(result["state_file"]).read_text(encoding="utf-8"))
     summary.update({
         "status": result.get("status"),
+        "run_status": state.get("run_status"),
+        "run_error": state.get("run_error"),
         "final_output": str(final),
         "human_review": result.get("human_review"),
         "qc_report": json.loads(final.with_suffix(".qc.json").read_text(encoding="utf-8")),

@@ -297,5 +297,198 @@ class HumanAcceptanceTests(unittest.TestCase):
         self.assertIn("none (no grounded headline was approved)", text)
         self.assertIn("face_tracking -> stable_wide", text)
 
+
+class RunStatusTests(unittest.TestCase):
+    """A started run that ends in an exception never leaves its state file saying ``running``.
+
+    Drives the REAL run_pipeline lifecycle; the failure is injected at the first
+    step after the run wrote its state (the header print)."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from ai import shorts_pipeline
+
+        self.sp = shorts_pipeline
+        self._tmp = tempfile.TemporaryDirectory(prefix="mimir run status ş ")
+        self.video = Path(self._tmp.name) / "vod.mp4"
+        self.video.write_bytes(b"0" * 4096)
+        self._state_dir = mock.patch.object(shorts_pipeline, "STATE_DIR", Path(self._tmp.name) / "pipeline")
+        self._state_dir.start()
+
+    def tearDown(self) -> None:
+        self._state_dir.stop()
+        self._tmp.cleanup()
+
+    def state(self) -> dict:
+        return json.loads(self.sp._state_path(self.video).read_text(encoding="utf-8"))
+
+    def previous_run(self, **fields) -> None:
+        state = self.sp._new_state(self.sp._source_fingerprint(self.video))
+        state.update(fields)
+        self.sp._write_json_atomic(self.sp._state_path(self.video), state)
+
+    def fail_after_start(self, error: BaseException, on_start=None):
+        def header(*args, **kwargs):
+            if on_start is not None:
+                on_start()
+            raise error
+        return mock.patch.object(self.sp, "_print_header", header)
+
+    def test_a_failure_after_the_run_started_is_recorded_and_still_raised(self) -> None:
+        error = RuntimeError("Mandatory exact-final caption profile failed; legacy timing fallback disabled.")
+        with self.fail_after_start(error), self.assertRaises(RuntimeError) as raised:
+            self.sp.run_pipeline(self.video, force=True)
+        self.assertIs(raised.exception, error)                          # the original error, unchanged
+        state = self.state()
+        self.assertEqual(state["run_status"], "failed")
+        self.assertIn("Mandatory exact-final caption profile failed", state["run_error"])
+
+    def test_interrupt_and_missing_story_have_their_own_outcome(self) -> None:
+        for error, status in ((KeyboardInterrupt(), "interrupted"),
+                              (self.sp.NoStrongClipError("no strong clip"), "no_strong_clip")):
+            with self.subTest(status=status), self.fail_after_start(error), self.assertRaises(type(error)):
+                self.sp.run_pipeline(self.video, force=True)
+            self.assertEqual(self.state()["run_status"], status)
+
+    def test_a_new_run_starts_without_the_previous_failure(self) -> None:
+        self.previous_run(run_status="failed", run_error="RuntimeError: an older failure")
+        at_start = {}
+        with self.fail_after_start(RuntimeError("new failure"), lambda: at_start.update(self.state())), \
+                self.assertRaises(RuntimeError):
+            self.sp.run_pipeline(self.video)
+        self.assertEqual(at_start["run_status"], "running")
+        self.assertNotIn("run_error", at_start)
+        self.assertEqual(self.state()["run_error"], "RuntimeError: new failure")
+
+    def test_a_failure_before_the_run_wrote_its_state_touches_nothing(self) -> None:
+        self.previous_run(run_status="success")
+        with mock.patch.object(self.sp, "_load_pro_edit", side_effect=RuntimeError("pro edit config")), \
+                self.assertRaises(RuntimeError):
+            self.sp.run_pipeline(self.video, force=True)
+        state = self.state()
+        self.assertEqual(state["run_status"], "success")
+        self.assertNotIn("run_error", state)
+
+    def book(self, **fields):
+        state = self.sp._new_state(self.sp._source_fingerprint(self.video))
+        state.update(fields)
+        return self.sp.StageBook(self.sp._state_path(self.video), state, force=False)
+
+    def test_recorded_outcomes_are_kept_and_a_late_failure_is_named(self) -> None:
+        rejected = self.book(run_status="rejected")
+        rejected.close_run(RuntimeError("after rejection"))
+        self.assertEqual((rejected.state["run_status"], rejected.state.get("run_error")), ("rejected", None))
+        published = self.book(run_status="running", publish_status="published")
+        published.close_run(OSError("review sheet write failed"))
+        self.assertEqual(self.state()["run_status"], "failed_after_publish")
+
+    def test_closing_never_masks_the_original_error(self) -> None:
+        book = self.book(run_status="running")
+        with mock.patch.object(self.sp, "_write_json_atomic", side_effect=KeyboardInterrupt):
+            book.close_run(RuntimeError("original"))                   # a second Ctrl+C during the save
+        self.assertEqual(book.state["run_status"], "failed")
+
+    def hold_lock_in_another_process(self, video: Path) -> subprocess.Popen:
+        """A real second process holding the run lock of ``video`` until its stdin closes."""
+        code = ("import sys; from pathlib import Path; from unittest import mock; import ai.shorts_pipeline as sp; "
+                "mock.patch.object(sp, 'STATE_DIR', Path(sys.argv[1])).start(); "
+                "ctx = sp._exclusive_run(sp._state_path(Path(sys.argv[2]))); ctx.__enter__(); "
+                "print('locked', flush=True); sys.stdin.read()")
+        holder = subprocess.Popen([sys.executable, "-c", code, str(self.sp.STATE_DIR), str(video)], cwd=str(ROOT),
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.assertEqual(holder.stdout.readline().strip(), "locked")
+        return holder
+
+    def test_a_concurrent_run_of_a_same_named_video_is_refused_without_touching_state(self) -> None:
+        other = Path(self._tmp.name) / "another folder" / "vod.mp4"      # same name, different directory
+        other.parent.mkdir()
+        other.write_bytes(b"1" * 4096)
+        self.assertEqual(self.sp._state_path(other), self.sp._state_path(self.video))
+        self.previous_run(run_status="running", note="the live run's state")
+        holder = self.hold_lock_in_another_process(self.video)
+        try:
+            with self.fail_after_start(RuntimeError("must never start")), \
+                    self.assertRaisesRegex(self.sp.ShortsPipelineError, "başka bir MIMIR çalışması"):
+                self.sp.run_pipeline(other, force=True)
+            state = self.state()
+            self.assertEqual((state["run_status"], state["note"]), ("running", "the live run's state"))
+        finally:
+            holder.stdin.close()
+            holder.wait(timeout=30)
+            holder.stdout.close()
+        with self.fail_after_start(RuntimeError("now it may run")), self.assertRaises(RuntimeError):
+            self.sp.run_pipeline(other, force=True)                       # the dead holder's lock is gone
+        self.assertEqual(self.state()["run_error"], "RuntimeError: now it may run")
+
+    def test_the_lock_is_released_after_every_outcome(self) -> None:
+        for error in (RuntimeError("x"), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__), self.fail_after_start(error), \
+                    self.assertRaises(type(error)):
+                self.sp.run_pipeline(self.video, force=True)
+            with self.sp._exclusive_run(self.sp._state_path(self.video)):
+                pass                                                        # free again
+
+    def test_ctrl_c_keeps_the_original_interruption(self) -> None:
+        interruption = KeyboardInterrupt("first ctrl+c")
+        second = mock.patch.object(self.sp, "_write_json_atomic", side_effect=KeyboardInterrupt("second ctrl+c"))
+        try:
+            # The second Ctrl+C lands while the close is saving the state.
+            with self.fail_after_start(interruption, second.start), self.assertRaises(KeyboardInterrupt) as raised:
+                self.sp.run_pipeline(self.video, force=True)
+        finally:
+            second.stop()
+        self.assertIs(raised.exception, interruption)
+
+    def test_a_failure_after_publication_is_reported_as_published(self) -> None:
+        published = Path(self._tmp.name) / "final" / "vod_short.mp4"
+
+        def body(video_path, *, started, **options):
+            book = self.book(run_status="running", publish_status="published", final_output=str(published))
+            started.append(book)
+            raise OSError("review sheet write failed")
+
+        with mock.patch.object(self.sp, "_run_pipeline", body), self.assertRaises(OSError) as raised:
+            self.sp.run_pipeline(self.video)
+        self.assertEqual(raised.exception.published_output, str(published))
+        self.assertEqual(self.state()["run_status"], "failed_after_publish")
+        import contextlib
+        import io
+
+        for error, expected, forbidden in ((raised.exception, "YAYINLANDI", "hiçbir şey yayınlanmadı"),
+                                           (RuntimeError("caption failed"), "hiçbir şey yayınlanmadı", "YAYINLANDI")):
+            printed = io.StringIO()
+            with mock.patch.object(self.sp, "run_pipeline", side_effect=error), \
+                    mock.patch.object(sys, "argv", ["main.py", str(self.video)]), \
+                    contextlib.redirect_stdout(printed), self.assertRaises(SystemExit) as exit_:
+                self.sp.main()
+            self.assertEqual(exit_.exception.code, 1)
+            self.assertIn(expected, printed.getvalue())
+            self.assertNotIn(forbidden, printed.getvalue())
+
+    def test_the_windows_lock_uses_msvcrt_on_the_first_byte(self) -> None:
+        import types
+
+        calls = []
+        fake = types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0,
+                                     locking=lambda fd, mode, size: calls.append((mode, size)))
+        with open(Path(self._tmp.name) / "x.lock", "a+b") as handle, \
+                mock.patch.dict(sys.modules, {"msvcrt": fake}), mock.patch.object(self.sp.os, "name", "nt"):
+            self.sp._lock_file(handle, True)
+            self.sp._lock_file(handle, False)
+            self.assertEqual(handle.tell(), 0)
+        self.assertEqual(calls, [(2, 1), (0, 1)])
+
+    def test_the_public_entry_point_keeps_its_identity(self) -> None:
+        import inspect
+        import pickle
+
+        self.assertEqual(self.sp.run_pipeline.__name__, "run_pipeline")
+        self.assertIs(pickle.loads(pickle.dumps(self.sp.run_pipeline)), self.sp.run_pipeline)
+        parameters = inspect.signature(self.sp.run_pipeline).parameters
+        self.assertIn("rerender", parameters)
+        self.assertNotIn("started", parameters)
+
+
 if __name__ == "__main__":
     unittest.main()
