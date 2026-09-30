@@ -1033,15 +1033,16 @@ def _profile_edited_words(
 ) -> list[dict[str, Any]]:
     """Read words transcribed directly from the final edited clip.
 
-    Speaker metadata is WHO-only. Word timing comes from the exact final 48 kHz
-    edited-clip clock and is never clamped to diarization segment boundaries.
-    Both the legacy `edited_clip` marker and the clean baseline's explicit
-    `exact_final_48k_audio` marker are accepted.
+    Speaker metadata is WHO-only. Word timing is the caption stack's single
+    word-alignment clock on the exact final edited short and is never clamped
+    to diarization segment boundaries. The current `exact_final_short_audio`
+    marker and the earlier `edited_clip` / `exact_final_48k_audio` markers are
+    accepted.
     """
     if not speaker_profile or str(speaker_profile.get("status", "")) != "ok":
         return []
     timing_basis = str(speaker_profile.get("timing_basis", "")).strip()
-    if timing_basis not in {"edited_clip", "exact_final_48k_audio"}:
+    if timing_basis not in {"edited_clip", "exact_final_48k_audio", "exact_final_short_audio"}:
         return []
 
     result: list[dict[str, Any]] = []

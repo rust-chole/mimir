@@ -69,11 +69,12 @@ class EntityCanonicalizationTests(unittest.TestCase):
         data = profile("My only option is, um, Tyler. Would you like to go on a date with me?", "A",
                        {"A": "KAI", "B": "TYLA"}, flags=[("Tyler.", "tyla")])
         index = 5
-        start = data["words"][index]["edited_start"]
-        data["caption_quality"]["micro_accuracy"] = {"details": [{
-            "span": [index, index + 1], "audio_window": [0.0, start + 3.0], "selected_phrase": "Tyler.",
-            "candidate_votes": [{"phrase": "Tyler.", "votes": 3, "sources": ["asr_1", "asr_2", "asr_3"]}],
-            "resolved": True}]}
+        # What each caption ear heard at that word, as the caption stack records it ON the word.
+        data["words"][index]["lexical_alternatives"] = [
+            {"token": "Tyler.", "source": "qwen_primary", "prompted": False},
+            {"token": "Tyler.", "source": "fallback_local", "prompted": False},
+            {"token": "Tyler.", "source": "qwen_precision", "prompted": True}]
+        self.assertEqual(len(lock.alternatives_from_caption_quality(data)[index]), 3)
         result = lock.lock_participant_names(data)
         self.assertEqual(result.words[index]["word"], "Tyla.")
         self.assertEqual(len(result.audit["corrections"]), 1)
@@ -305,73 +306,92 @@ class CaptionTruthStageTests(unittest.TestCase):
         self.assertNotIn("caption_truth", cleared)
 
 
-def unresolved(data: dict, votes: list[tuple[str, list[str]]], window: tuple[float, float] | None = None) -> dict:
-    """Attach one caption-stage micro span the ears could not resolve (phrase -> sources)."""
-    words = data["words"]
-    w0, w1 = window if window is not None else (0.0, words[-1]["edited_end"] + 0.2)
-    data.setdefault("caption_quality", {})["micro_accuracy"] = {"details": [{
-        "span": [0, 1], "audio_window": [w0, w1], "resolved": False,
-        "candidate_votes": [{"phrase": phrase, "votes": len(sources), "sources": sources} for phrase, sources in votes],
-    }]}
+def frozen_profile(sentence: str, *, uncertain: dict[int, str] = (), spans: list[dict] = ()) -> dict:
+    """A caption-stack profile: words carry their frozen token ids + lexical status."""
+    from ai.caption_stack.lexical import lexical_signature
+
+    data = profile(sentence, "A", {})
+    tokens = sentence.split()
+    chunks = [(0.0, float(data["clip_duration"]))]
+    for index, word in enumerate(data["words"]):
+        word["token_ids"] = [index, index + 1]
+        word["lexical_status"] = "uncertain" if index in dict(uncertain) else "agreed"
+        if index in dict(uncertain):
+            word["lexical_span"] = dict(uncertain)[index]
+    data["caption_quality"] = {"lexical": {"frozen_tokens": tokens, "chunks": [list(c) for c in chunks],
+                                           "signature": lexical_signature(tokens, chunks), "spans": list(spans)}}
     return data
 
 
-def flagged(data: dict) -> list[str]:
-    return [texts([data["words"][i]]) for ids, _reason in caption_truth.unresolved_span_word_ids(data, data["words"])
-            for i in ids]
+def flagged(data: dict) -> list[list[str]]:
+    return [[data["words"][i]["word"] for i in ids]
+            for ids, _reason in caption_truth.unresolved_span_word_ids(data, data["words"])]
 
 
-class UncertaintyGranularityTests(unittest.TestCase):
-    """Unresolved micro spans: only words the independent ear majority did not hear are uncertain."""
+class FrozenLexicalRecordTests(unittest.TestCase):
+    """Uncertainty and decisions come from the caption stack's explicit record, never from guesswork."""
 
-    def test_majority_confirmed_words_stay_certain_including_numbers(self) -> None:
-        sentence = "He got 12 wins in arena then he said please stop it now"
-        data = unresolved(profile(sentence, "A", {}), [
-            (sentence, ["asr_1", "asr_5"]),
-            ("He got 12 wins in arena then he said please stop", ["asr_2"]),
-            ("He got wins in arena", ["asr_4"]),
-            ("", ["asr_3"])])
-        self.assertEqual(flagged(data), ["it", "now"])
+    def test_uncertain_words_are_exactly_the_frozen_uncertain_spans(self) -> None:
+        data = frozen_profile("He got 12 wins in arena then he said please stop it now",
+                              uncertain={2: "c0_d0", 11: "c0_d1", 12: "c0_d1"})
+        self.assertEqual(flagged(data), [["12"], ["it", "now"]])
+        data["words"][2]["lexical_status"] = "resolved"
+        self.assertEqual(flagged(data), [["it", "now"]])
 
     def test_disputed_number_is_uncertain_and_never_rewritten(self) -> None:
         sentence = "He got 12 wins in arena"
-        data = unresolved(profile(sentence, "A", {}), [
-            ("He got 20 wins in arena", ["asr_1", "asr_2", "asr_4", "asr_5"]), (sentence, ["asr_3"])])
-        self.assertEqual(flagged(data), ["12"])
+        data = frozen_profile(sentence, uncertain={2: "c0_d0"})
         with tempfile.TemporaryDirectory(prefix="mimir v6 unc ş ") as tmp:
-            path = Path(tmp) / "clip_01_speakers_v25.json"
+            path = Path(tmp) / "clip_01_speakers_v26.json"
             path.write_text(json.dumps(data), encoding="utf-8")
-            caption_truth.run_caption_truth(path, edited_clip_path=None)
+            result = caption_truth.run_caption_truth(path, edited_clip_path=None)
             saved = json.loads(path.read_text(encoding="utf-8"))
+            truth = json.loads(result.truth_path.read_text(encoding="utf-8"))
         self.assertEqual(texts(saved["words"]), sentence)                       # fail closed: text kept
         self.assertEqual([w["word"] for w in saved["words"] if w.get(caption_truth.UNCERTAIN_FLAG)], ["12"])
+        self.assertEqual(truth["uncertain"][0]["reason"], "lexical_evidence_unresolved")
 
-    def test_an_ear_mapped_elsewhere_does_not_widen_the_dispute(self) -> None:
-        sentence = "wait I flip the phone come on now all right do you want your phone back"
-        data = unresolved(profile(sentence, "A", {}), [
-            ("flip", ["asr_1", "asr_5"]), ("flipped", ["asr_2", "asr_3"]),
-            ("all right do you want your", ["asr_4"])])
-        self.assertEqual(flagged(data), ["flip"])
+    def test_a_rewritten_frozen_word_is_refused_before_the_freeze(self) -> None:
+        data = frozen_profile("I literally told you not to do that")
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
+        data["words"][4]["word"] = "now"                                        # a negation silently flipped
+        issues = caption_truth.lexical_freeze_issues(data)
+        self.assertIn("'now' is not the frozen 'not'", issues[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip_01_speakers_v26.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                caption_truth.run_caption_truth(path, edited_clip_path=None)
+        reordered = frozen_profile("I literally told you not to do that")
+        reordered["words"][1], reordered["words"][2] = reordered["words"][2], reordered["words"][1]
+        self.assertTrue(caption_truth.lexical_freeze_issues(reordered))
+        tampered = frozen_profile("I literally told you not to do that")
+        tampered["caption_quality"]["lexical"]["frozen_tokens"][4] = "now"
+        self.assertIn("signature", caption_truth.lexical_freeze_issues(tampered)[0])
 
-    def test_a_word_holding_several_spoken_tokens_is_judged_by_its_tokens(self) -> None:
-        data = profile("not allowed back to the mall ever okay per management", "A", {})
-        words = data["words"]
-        merged = dict(words[5], word="mall ever", edited_end=words[6]["edited_end"])
-        data["words"] = words[:5] + [merged] + words[7:]
-        unresolved(data, [("not allowed back to the mall ever okay for management", ["asr_1", "asr_2", "asr_5"]),
-                          ("yes sir ok", ["asr_4"]), ("", ["asr_3"])])
-        self.assertEqual(flagged(data), ["per"])
+    def test_recorded_verified_name_spelling_is_the_only_allowed_difference(self) -> None:
+        data = frozen_profile("hey Tyler come here")
+        data["words"][1]["word"] = "Tyla"
+        data["words"][1]["name_lock"] = {"from": "Tyler", "to": "Tyla"}
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
+        data["words"][1]["name_lock"] = {"from": "Taylor", "to": "Tyla"}
+        self.assertTrue(caption_truth.lexical_freeze_issues(data))
 
-    def test_a_prompted_only_majority_is_not_confirmation(self) -> None:
-        sentence = "that was the big 5 moment"
-        data = unresolved(profile(sentence, "A", {}), [
-            (sentence, ["asr_3", "asr_4", "asr_5"]), ("that was the big file moment", ["asr_1", "asr_2"])])
-        self.assertEqual(flagged(data), ["5"])
+    def test_ambient_word_omission_by_speaker_assignment_is_not_a_rewrite(self) -> None:
+        data = frozen_profile("crowd noise then I said hello")
+        data["words"] = data["words"][2:]                                        # a proven ambient turn dropped
+        self.assertEqual(caption_truth.lexical_freeze_issues(data), [])
 
-    def test_few_recorded_ears_keep_whole_region_flagging(self) -> None:
-        sentence = "honestly that was crazy man"
-        data = unresolved(profile(sentence, "A", {}), [("that was crazy", ["asr_1"]), ("that is lazy", ["asr_2"])])
-        self.assertEqual(flagged(data), ["that", "was", "crazy"])
+    def test_lexical_decisions_map_to_words_by_span_id(self) -> None:
+        span = {"span_id": "c0_d0", "from": "top", "to": "stop", "changed": True, "resolved": True,
+                "decided_by": "caption_judge", "confidence": 0.9, "supporting_ears": ["fallback_local"],
+                "audio_window": [0.0, 3.0]}
+        data = frozen_profile("please stop it now", spans=[span])
+        data["words"][1]["lexical_span"] = "c0_d0"
+        rows = caption_truth.lexical_decision_rows(data, data["words"])
+        self.assertEqual((rows[0]["word_ids"], rows[0]["from"], rows[0]["to"], rows[0]["decided_by"]),
+                         ([1], "top", "stop", "caption_judge"))
+        self.assertAlmostEqual(rows[0]["paced_start"], data["words"][1]["edited_start"])
 
 
 class PresentationAndGateTests(unittest.TestCase):

@@ -337,69 +337,26 @@ class AltObservation:
     probability: float | None = None   # token probability when the backend reports logprobs
 
 
-def _micro_source_prompted(source: str) -> bool:
-    """Caption micro evidence order (speaker_caption_support): asr_1 raw acoustic and
-    asr_2 enhanced acoustic are unprompted; later ears carry name context."""
-    return str(source) not in ("asr_1", "asr_2")
-
-
 def alternatives_from_caption_quality(profile: Mapping[str, Any],
                                       words: Sequence[Any] | None = None) -> dict[int, list[AltObservation]]:
-    """Independent ASR candidates recorded by the caption stage, mapped to word ids.
+    """Independent ear readings the caption stage recorded ON a single-token word.
 
-    Only single-slot spans are used (every candidate phrase is one token), so
-    a phrase can never be mis-aligned onto the wrong word. Mapping is by audio
-    time: the word must lie inside the micro window, spell the span's phrase,
-    and be the closest such word to the window centre. ``words`` defaults to
-    the profile words (pass the ASR-restored words when a lock was applied).
+    The caption stack stores, on every word whose frozen span is one token,
+    what each ear heard there (``lexical_alternatives``: token, source ear,
+    whether that ear was prompted with the verified names). Nothing is mapped
+    by time or position guesswork. ``words`` defaults to the profile words
+    (pass the ASR-restored words when a lock was applied).
     """
-    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
-    micro = quality.get("micro_accuracy") if isinstance(quality.get("micro_accuracy"), Mapping) else {}
     rows_words = list(words if words is not None else (profile.get("words", []) or []))
     result: dict[int, list[AltObservation]] = {}
-    for detail in micro.get("details", []) or []:
-        if not isinstance(detail, Mapping):
+    for index, word in enumerate(rows_words):
+        if not isinstance(word, Mapping):
             continue
-        span = detail.get("span") or []
-        window = detail.get("audio_window") or []
-        if len(span) != 2 or len(window) != 2:
-            continue
-        try:
-            if int(span[1]) - int(span[0]) != 1:
+        for row in word.get("lexical_alternatives", []) or []:
+            if not isinstance(row, Mapping) or not letters(str(row.get("token", ""))):
                 continue
-            w0, w1 = float(window[0]), float(window[1])
-        except (TypeError, ValueError):
-            continue
-        votes = [row for row in detail.get("candidate_votes", []) or [] if isinstance(row, Mapping)]
-        phrases = [(str(row.get("phrase", "")).split(), [str(s) for s in row.get("sources", []) or []])
-                   for row in votes]
-        if not phrases or any(len(tokens) > 1 for tokens, _ in phrases):
-            continue
-        target = str(detail.get("selected_phrase") or "").strip()
-        if not target:
-            ranked = sorted(votes, key=lambda row: -int(row.get("votes", 0) or 0))
-            target = str(ranked[0].get("phrase", "")).strip() if ranked else ""
-        if not letters(target):
-            continue
-        centre = (w0 + w1) / 2.0
-        best: tuple[float, int] | None = None
-        for index, word in enumerate(rows_words):
-            if not isinstance(word, Mapping) or letters(str(word.get("word", ""))) != letters(target):
-                continue
-            try:
-                start, end = float(word.get("edited_start", -1)), float(word.get("edited_end", -1))
-            except (TypeError, ValueError):
-                continue
-            if w0 - 1e-3 <= start and end <= w1 + 1e-3:
-                distance = abs((start + end) / 2.0 - centre)
-                if best is None or distance < best[0]:
-                    best = (distance, index)
-        if best is None:
-            continue
-        bucket = result.setdefault(best[1], [])
-        for tokens, sources in phrases:
-            for source in sources:
-                bucket.append(AltObservation(tokens[0] if tokens else "", source, _micro_source_prompted(source)))
+            result.setdefault(index, []).append(AltObservation(
+                str(row.get("token", "")), str(row.get("source", "caption_ear")), bool(row.get("prompted", False))))
     return result
 
 

@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ai import model_config, vod_processor
+from ai.caption_stack import alignment as caption_alignment
+from ai.caption_stack import audio as caption_audio
+from ai.caption_stack import config as caption_stack_config
+from ai.caption_stack import final_captions, legacy_whisper, openai_ears as caption_openai_ears, qwen_omni
+from ai.caption_stack import lexical as caption_lexical
 from ai.editor import (
     caption_judge,
     caption_renderer,
@@ -1851,9 +1856,11 @@ def _run_caption_truth_v6(
         return _stage_signature(
             "caption_truth_v6",
             inputs=[profile_path, caption_path, timeline_path, transcript_path, edited_clip_path],
-            modules=[truth_mod, participant_name_lock, captions, caption_judge],
+            modules=[truth_mod, participant_name_lock, captions, caption_judge, caption_lexical, qwen_omni,
+                     caption_openai_ears, caption_audio],
             options={
                 "clip_index": clip_index,
+                "caption_stack": caption_stack_config.load_settings().public(),
                 "caption_judge_model": model_config.CAPTION_JUDGE_MODEL,
                 "caption_judge_reasoning_effort": model_config.CAPTION_JUDGE_REASONING_EFFORT,
                 "version": int(getattr(truth_mod, "CAPTION_TRUTH_VERSION", 1)),
@@ -2919,11 +2926,15 @@ def run_pipeline(
         / f"clip_{selected_clip_index:02d}_captions_v{caption_version}.ass"
     ).resolve()
 
+    caption_stack_settings = caption_stack_config.load_settings()
+    caption_verified_terms = [term for term in [creator_name or "", *v6_entities] if term]
+    caption_stack_modules = [final_captions, caption_lexical, caption_alignment, caption_audio, qwen_omni,
+                             caption_openai_ears, legacy_whisper, caption_stack_config]
     captions_sig = _stage_signature(
         "captions",
         inputs=[edited_clip_path, transcript_path, timeline_path, speaker_scan_path],
         modules=[captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
-                 caption_judge],
+                 caption_judge, *caption_stack_modules],
         options={
             "clip_index": selected_clip_index,
             "caption_version": caption_version,
@@ -2933,13 +2944,12 @@ def run_pipeline(
                 getattr(speaker_caption_support, "SPEAKER_PROFILE_VERSION", 13)
             ),
             "speaker_naming_version": int(getattr(speaker_naming, "SPEAKER_NAMING_VERSION", 11)),
-            "caption_text_model": str(getattr(vod_processor, "CAPTION_ACCURATE_MODEL", "gpt-transcribe")),
-            "caption_crosscheck_model": str(getattr(vod_processor, "CAPTION_CROSSCHECK_MODEL", "gpt-4o-transcribe")),
-            "caption_consensus_policy": "primary + cross-check locator -> micro ears -> unanimous settles, "
-                                        "caption judge decides the rest (grounded), strict 3/3-4/5 without it",
-            "caption_micro_max_spans": int(getattr(speaker_caption_support, "CAPTION_MICRO_MAX_SPANS", 8)),
-            "caption_quality_target": float(getattr(speaker_caption_support, "CAPTION_WORD_ACCURACY_TARGET", 0.97)),
-            "caption_quality_retry_limit": int(getattr(speaker_caption_support, "CAPTION_QUALITY_RETRY_LIMIT", 1)),
+            # Every setting that changes WHAT is heard or WHEN it is timed (never the key).
+            "caption_stack": caption_stack_settings.public(),
+            "caption_stack_contract": final_captions.CONTRACT,
+            "caption_verified_terms": caption_verified_terms,
+            "caption_policy": "qwen pass A + pass B -> deterministic agreement / caption judge -> frozen "
+                              "transcript -> one word-alignment provider (validated, local recovery, fallback)",
             "timing_basis": "edited_clip",
         },
     )
@@ -2954,6 +2964,7 @@ def run_pipeline(
             transcript_path=transcript_path,
             timeline_path=timeline_path,
             speaker_scan_path=speaker_scan_path,
+            verified_terms=caption_verified_terms,
         )
 
         try:
@@ -2990,31 +3001,23 @@ def run_pipeline(
 
         caption_quality = speaker_profile.get("caption_quality", {})
         if isinstance(caption_quality, dict) and caption_quality:
-            # The current caption stage reports ``quality_score`` (final text vs the independent
-            # cross-check) and ``full_asr_passes``; older profiles used the other keys.
-            best_agreement = float(caption_quality.get("best_reference_agreement",
-                                                       caption_quality.get("quality_score", 0.0)) or 0.0)
-            target = float(caption_quality.get("target", 0.97) or 0.97)
-            local_fixes = int(caption_quality.get("local_corrections", 0) or 0)
-            unresolved = int(caption_quality.get("unresolved_local_conflicts", 0) or 0)
-            passes = int(caption_quality.get("strong_asr_passes", caption_quality.get("full_asr_passes", 0)) or 0)
-            micro = caption_quality.get("micro_accuracy", {}) if isinstance(caption_quality.get("micro_accuracy", {}), dict) else {}
-            micro_checked = int(micro.get("checked_spans", 0) or 0)
-            micro_corrected = int(micro.get("corrected_spans", 0) or 0)
-            target_met = caption_quality.get("target_met")
-            if target_met is None:
-                target_met = best_agreement >= target and unresolved == 0
-            if target_met is True:
-                print(
-                    f"   ✅ Caption QA: {best_agreement * 100:.1f}% ASR consensus "
-                    f"(target {target * 100:.0f}%, full_passes={passes}, micro={micro_checked}/{micro_corrected}, local_fixes={local_fixes})"
-                )
+            lexical_report = caption_quality.get("lexical", {}) if isinstance(caption_quality.get("lexical"), dict) else {}
+            alignment_report = caption_quality.get("alignment", {}) if isinstance(caption_quality.get("alignment"), dict) else {}
+            summary = (
+                f"text={caption_quality.get('text_model', '?')}, timing={alignment_report.get('provider', '?')}, "
+                f"A/B agreement={float(caption_quality.get('quality_score', 0.0) or 0.0) * 100:.1f}%, "
+                f"disputes={int(lexical_report.get('disputes', 0) or 0)} "
+                f"(agreement {int(lexical_report.get('settled_by_agreement', 0) or 0)}, "
+                f"changed {int(caption_quality.get('local_corrections', 0) or 0)}, "
+                f"uncertain {int(caption_quality.get('unresolved_local_conflicts', 0) or 0)}), "
+                f"fallback ears={int(caption_quality.get('local_asr_passes', 0) or 0)} local"
+            )
+            if caption_quality.get("target_met") is True:
+                print(f"   ✅ Caption QA: {summary}")
             else:
                 book.warn(
-                    "Caption QA hedefi precision consensus sonrasında da karşılanmadı; "
-                    f"ASR consensus={best_agreement * 100:.1f}% / hedef={target * 100:.0f}%, "
-                    f"unresolved_local_conflicts={unresolved}. "
-                    "Whisper/diarization metniyle kelime uydurulmadan en güvenli ASR metni korunarak devam edildi."
+                    "Caption QA: bazı kelimeler kanıtla kesinleşmedi veya bir sağlayıcı yedeğe düştü; "
+                    f"kelime uydurulmadı, belirsiz kelimeler işaretli. {summary}"
                 )
 
         return captions.create_clip_captions(
@@ -3039,10 +3042,21 @@ def run_pipeline(
             timeline_path,
             speaker_scan_path,
             *_module_paths([captions, speaker_caption_support, speaker_naming, speaker_role_judge, vod_processor,
-                            caption_judge]),
+                            caption_judge, *caption_stack_modules]),
         ],
         error_message="Caption ASS dosyası oluşmadı.",
     )
+    # Provider degradations (Qwen -> fallback ear, aligner -> fallback clock) are
+    # explicit, non-silent V6 fallbacks, also when the caption stage was cached.
+    try:
+        final_profile_path = _speaker_profile_path(edited_clip_path, selected_clip_index)
+        final_quality = _load_json(final_profile_path).get("caption_quality", {}) if final_profile_path else {}
+    except Exception:
+        final_quality = {}
+    for row in (final_quality.get("degradations") or []) if isinstance(final_quality, dict) else []:
+        if isinstance(row, dict):
+            v6_run.fallback(str(row.get("subsystem", "caption_stack")), str(row.get("reason", "")),
+                            str(row.get("level", "fallback")))
 
     # --------------------------------------------------------
     # 7B. VERIFIED PARTICIPANT NAME LOCK (caption truth)

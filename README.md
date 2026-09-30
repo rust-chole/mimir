@@ -27,19 +27,31 @@ cache), `--no-memes`, `--verbose`.
 1. **Story** — whole-VOD transcript + visual facts; Luna scouts money moments, Terra
    judges the story, protected ranges keep setup / escalation / payoff / reaction.
 2. **Pacing** — dead air is cut only where it does not touch protected story.
-3. **Caption truth** — on the exact final audio: primary `gpt-transcribe`, a
-   model-diverse cross-check (with token confidence) and the Whisper word clock.
-   Disagreements, low-confidence words and near-miss names are re-heard in small
-   local windows by 3-5 independent ears. A span the ears hear unanimously is settled;
-   every other span goes, in one call, to the **caption judge (Astra 6)** with all the
-   evidence (both transcripts, every ear's model/view/wording, token confidence,
-   verified names, measured clock words). It decides **what** was said; a deterministic
-   guard rejects any word no ear heard (then the strict 3/3-4/5 acoustic vote decides),
-   and "not settled" keeps the primary word marked uncertain. It never touches **when**:
-   timing is the measured word clock (plus a backward-only acoustic guard for late phrase
-   starts); speakers come from diarization + your voice-confirmed names; verified-name
-   spelling the name lock cannot decide is a closed choice for the judge (verified
-   spelling / keep / uncertain). The result is **frozen**, with who decided each word.
+3. **Caption truth** — on the exact final short's audio (one mono 16 kHz analysis WAV
+   of the edited clip). Three owners, never mixed:
+   - **What was said** — `qwen3.8-omni-flash` listens twice: a primary ear with minimal
+     domain context and no names, and a precision ear that gets verified names only as
+     spelling references (never as proof a name was said). Harmless differences (case,
+     punctuation, apostrophe glyph, hyphenation, "twelve"/"12") are ignored; a different,
+     missing or inserted word, negation, number or name is a *local* dispute. One small
+     model-diverse ear (`gpt-transcribe`, a few seconds of audio) settles it when it agrees
+     with one reading; otherwise the **caption judge (Astra 6)** decides it in one batched
+     call from the smallest evidence package (both Qwen readings, the independent ear,
+     verified names, a little context). A deterministic guard rejects any word no ear
+     heard; "not settled" keeps the primary words, marked uncertain. OpenAI transcription
+     is only a bounded fallback (Qwen unavailable, invalid JSON after a retry, material
+     disagreement), never the normal authority. The wording is then **frozen** (signed).
+   - **When** — `Qwen3-ForcedAligner-0.6B` (official `qwen_asr`, loaded lazily, CPU or
+     GPU) aligns the *frozen* words to the audio. Every result is validated (lexical
+     parity, order, positive duration, monotonic, in range, full coverage, no overlap,
+     no collapsed region); a small failed region is re-aligned locally with its trusted
+     neighbours as anchors; otherwise the legacy Whisper clock re-times the whole
+     transcript (disclosed). One timing authority per run; no global shifts, no invented
+     times.
+   - **Who** — diarization + your voice-confirmed names; never changes a word or a time.
+   Verified-name spelling the name lock cannot decide is a closed choice for the judge
+   (verified spelling / keep / uncertain). Caption truth proves the words still equal the
+   frozen transcript and freezes the final result with who decided each word.
 4. **Cold open** — the model chooses *which* moment; its length is measured from the
    event (sound onset and decay, whole phrases, shot changes). It is the real moving
    peak with its real audio, **no speech captions**, an optional grounded headline,
@@ -79,22 +91,31 @@ speaker labels and every disclosed degradation, plus Accept / Reject boxes.
 
 | Role | Default | Why |
 | --- | --- | --- |
+| Caption ears (what was said, final short) | `qwen3.8-omni-flash`, reasoning none | a verbatim listener, twice |
+| Caption word timing | `Qwen/Qwen3-ForcedAligner-0.6B` (local) | forced alignment of the frozen words |
 | Caption judge (disputed words, name spelling) | `gpt-6-astra`, high | the words ARE the short |
 | Edit director (editorial intent) | `gpt-6-astra`, high | the edit IS the short |
 | Story judge, headline judge | `gpt-5.6-terra` | story authority |
 | Scouting, teaser, headline drafts, speaker roles, memes, visual support | `gpt-5.6-luna` | cheap and sufficient |
 
 Override any role in `.env` (see `.env.example`); `python -m ai.model_check --live`
-checks that every configured model answers.
+checks that every configured model answers (OpenAI models and the DashScope Qwen ear).
+The whole-VOD scouting transcript stays on `gpt-4o-mini-transcribe` + Whisper; only the
+published short gets the caption stack (`ai/caption_stack/`).
 
 ## Setup
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-copy .env.example .env      # add OPENAI_API_KEY (and GEMINI_API_KEY for visual facts)
+copy .env.example .env      # add OPENAI_API_KEY, DASHSCOPE_API_KEY + DASHSCOPE_BASE_URL (your
+                            # Model Studio region's compatible-mode URL), GEMINI_API_KEY for visual facts
 .\.venv\Scripts\python.exe .\verify_unified_clean.py
 ```
+
+For an NVIDIA GPU, install the CUDA build of PyTorch from pytorch.org before
+`requirements.txt` (the plain wheel runs the aligner on CPU). The aligner weights download
+to the Hugging Face cache on first use of final-caption timing, never at import.
 
 FFmpeg/ffprobe (with libass) must be on `PATH`. OpenCV (in `requirements.txt`) is
 required: the camera and final QC are proven in pixels. Local SFX files go in

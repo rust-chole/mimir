@@ -1,35 +1,35 @@
 """Caption judge: lexical truth decided from evidence by the strongest model (Astra).
 
-Four authorities, never merged:
+Authorities, never merged:
 
-    LEXICAL  WHAT was said  -> this judge, over the evidence of every ear
-    TIMING   WHEN           -> the measured word clock only; the judge never emits
-                               or edits a time (text goes through the fixed-clock aligner)
+    LEXICAL  WHAT was said  -> the ears' evidence (ai.caption_stack.lexical); this judge
+                               decides only the spans the evidence did not settle
+    TIMING   WHEN           -> the word-alignment provider over the FROZEN words; the judge
+                               never emits or edits a time
     SPEAKER  WHO            -> diarization + the human identity checkpoint
     DISPLAY  HOW            -> the deterministic caption renderer
 
 Two bounded decisions:
 
 1. Disputed spans (caption stage). ONE batched call per short covering every
-   span the independent ears did not settle: the primary transcript, the
-   model-diverse cross-check with its token confidence, every local micro-ASR
-   ear (model, audio view, prompted or not, what it heard in the window and in
-   the disputed core), the verified names, why the span is suspect, and the
-   measured clock words inside the window. Verdicts: ``keep_primary`` |
-   ``use_heard`` | ``unresolved``. A ``use_heard`` text is accepted only when
-   every word was heard by some ear or the word clock (or is a verified name),
-   the change stays local, and a deletion is backed by a majority of ears that
-   heard nothing where the clock has no word. A rejected or missing decision
-   falls back to the strict acoustic vote for that span.
+   span that deterministic agreement did not settle, each with the smallest
+   useful evidence package: the disputed audio window, what the Qwen primary
+   ear (least biased) and the Qwen precision ear (verified spellings given as
+   reference only) heard there, any alternatives an ear itself reported, the
+   optional model-diverse fallback ear, verified names, a little neighbouring
+   context and why it was escalated. Verdicts: ``keep_primary`` | ``use_heard``
+   | ``unresolved``. A ``use_heard`` text is accepted only when every word was
+   heard by some ear (or is a verified name), the change stays local, and a
+   deletion is backed by a majority of ears that heard nothing there. A rejected
+   or missing decision falls back to the deterministic rule for that span.
 
 2. Verified-name spelling (caption truth freeze). A closed choice per candidate
    word: ``canonical`` (the verified spelling) | ``keep`` | ``uncertain``.
    Word count, id, time and speaker never change.
 
-Spans that >=3 independent ears heard identically are already settled and are
-not sent (no strong-model budget where the acoustic evidence is unanimous).
-No judge (no key, API error) -> the strict acoustic vote (3/3, then 4/5)
-decides, and the run records that degradation. Nothing here guesses.
+No judge (no key, API error) -> the deterministic rule decides (an agreed
+reading, else the primary words marked uncertain) and the run records that
+degradation. Nothing here guesses.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ai import model_config
 
-JUDGE_VERSION = 1
+JUDGE_VERSION = 2
 MIN_CONFIDENCE = float(os.getenv("MIMIR_CAPTION_JUDGE_MIN_CONFIDENCE", "0.6") or 0.6)
 MAX_EXTRA_TOKENS = 3             # a span decision is a local repair, never a rewrite
 JUDGE_TIMEOUT_S = float(os.getenv("MIMIR_CAPTION_JUDGE_TIMEOUT", "300") or 300)
@@ -97,22 +97,24 @@ ENTITY_JUDGE_SCHEMA: dict[str, Any] = {
 
 SPAN_INSTRUCTIONS = """
 You are the lexical judge for the captions of ONE finished short video. You decide WHAT was said in each
-disputed span, using ONLY the evidence given: several independent speech-recognition "ears" listened to the
-same audio (full clip and a few seconds around each span), with their models, audio views and whether they
-were prompted with context. You also get the measured word clock (words a timing model heard, with times).
+disputed span, using ONLY the evidence given. Independent speech-recognition "ears" listened to the same audio:
+"qwen_primary" (the least-biased pass, no names given), "qwen_precision" (a second pass that was given verified
+names only as spelling references), alternatives an ear itself reported as possible hearings, and sometimes a
+model-diverse fallback ear that listened to the whole short or to a few seconds around the span.
 
 Decide per span:
-- "keep_primary": the primary transcript's core words are what was said.
-- "use_heard": a different wording was said. "text" = the exact core words, taken from what the ears / the
-  word clock actually heard (you may pick the best-supported variant or combine words the ears heard; you may
-  use a verified name when an ear heard a near-spelling of it). List the ear ids that support it.
+- "keep_primary": the primary ear's core words are what was said.
+- "use_heard": a different wording was said. "text" = the exact core words, taken from what the ears actually
+  heard (you may pick the best-supported variant or combine words the ears heard; you may use a verified name
+  when an ear heard a near-spelling of it). List the ear ids that support it.
 - "unresolved": the evidence does not settle it. The primary words stay and are marked uncertain.
 
 Rules:
 - The audio evidence decides. Never invent a word no ear heard. Never "improve" grammar, style or slang.
-- Unprompted acoustic ears weigh more than context-prompted ones (a prompted ear can echo the context).
-- Keep tiny function words and fillers when the ears heard them. Deleting the core requires ears that heard
-  nothing there.
+- Unprompted ears weigh more than the name-prompted precision ear (a prompted ear can echo its references).
+  Agreement between different models weighs more than agreement between two passes of the same model.
+- Keep tiny function words, fillers, repetitions, negations and profanity when the ears heard them. Deleting
+  the core requires ears that heard nothing there.
 - You do NOT decide timing, speakers or display. Never output times.
 - Prefer "unresolved" over a fluent guess. confidence = how strongly the evidence supports your verdict (0..1).
 - Return one decision for every span_id.
@@ -159,13 +161,13 @@ class SpanEvidence:
     audio_window: tuple[float, float]
     suspicion: list[str]
     ears: list[dict[str, Any]]                 # ear, model, view, prompted, heard_window, heard_core
-    strict: dict[str, Any] | None              # strict acoustic vote result (phrase, votes, of) or None
-    clock: list[tuple[str, float, float]]      # measured clock words inside the audio window
-    core_clock: list[str]                      # measured clock words overlapping the core
+    strict: dict[str, Any] | None              # deterministic vote (phrase, votes, of) or None
+    clock: list[tuple[str, float, float]]      # words an acoustic timing ear heard in the window (optional)
+    core_clock: list[str]                      # such words overlapping the core (optional)
     low_confidence: list[tuple[str, float]] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "span_id": self.span_id,
             "primary_core": self.current,
             "primary_window": self.window_text,
@@ -176,11 +178,16 @@ class SpanEvidence:
             "ears": [{"ear": e["ear"], "model": e.get("model", ""), "view": e.get("view", ""),
                       "prompted_with_context": bool(e.get("prompted")), "heard_in_window": e.get("heard_window", ""),
                       "heard_at_core": e.get("heard_core", "")} for e in self.ears],
-            "strict_acoustic_vote": self.strict,
-            "measured_clock_words": [[w, round(a, 2), round(b, 2)] for w, a, b in self.clock],
-            "measured_clock_at_core": list(self.core_clock),
-            "crosscheck_low_confidence": [[w, round(p, 3)] for w, p in self.low_confidence],
         }
+        # Optional evidence is sent only when it exists (the smallest useful package).
+        if self.strict is not None:
+            payload["deterministic_vote"] = self.strict
+        if self.clock:
+            payload["measured_clock_words"] = [[w, round(a, 2), round(b, 2)] for w, a, b in self.clock]
+            payload["measured_clock_at_core"] = list(self.core_clock)
+        if self.low_confidence:
+            payload["low_confidence_words"] = [[w, round(p, 3)] for w, p in self.low_confidence]
+        return payload
 
     def heard_vocabulary(self, verified_names: Sequence[str] = ()) -> set[str]:
         """Every canonical word some evidence source actually heard in this window."""
@@ -215,7 +222,7 @@ class SpanDecision:
 
 
 def strict_decision(span: SpanEvidence, *, guard: str = "") -> SpanDecision:
-    """The deterministic acoustic rule: a non-empty strict-majority phrase, else unresolved."""
+    """The deterministic rule: a non-empty agreed phrase, else unresolved (primary kept, uncertain)."""
     strict = span.strict or {}
     phrase = str(strict.get("phrase") or "").strip()
     if phrase:
@@ -297,7 +304,7 @@ def _judge_identity(judge: Judge | None) -> dict[str, str]:
     return {"model": str(getattr(judge, "model", "custom")), "effort": str(getattr(judge, "effort", ""))}
 
 
-def resolve_spans(spans: Sequence[SpanEvidence], *, primary_text: str, crosscheck_text: str,
+def resolve_spans(spans: Sequence[SpanEvidence], *, primary_text: str, precision_text: str,
                   verified_names: Sequence[str] = (), clip_duration: float = 0.0,
                   judge: Judge | None = None) -> tuple[dict[str, SpanDecision], dict[str, Any]]:
     """One judge call for every unsettled span; guard each decision; strict vote on any gap."""
@@ -305,12 +312,14 @@ def resolve_spans(spans: Sequence[SpanEvidence], *, primary_text: str, crosschec
         return {}, {"status": "not_needed", "version": JUDGE_VERSION}
     meta: dict[str, Any] = {"version": JUDGE_VERSION, "spans": len(spans), **_judge_identity(judge)}
     if judge is None:
-        meta.update(status="unavailable", reason="no caption judge (OPENAI_API_KEY missing); strict acoustic vote")
+        meta.update(status="unavailable",
+                    reason="no caption judge (OPENAI_API_KEY missing); disputed words keep the primary reading, uncertain")
         return {s.span_id: strict_decision(s) for s in spans}, meta
     payload = {
         "clip_duration_s": round(float(clip_duration), 2),
-        "primary_transcript": {"role": "primary wording (whole clip)", "text": primary_text},
-        "crosscheck_transcript": {"role": "independent model, whole clip", "text": crosscheck_text},
+        "primary_transcript": {"role": "primary ear, whole short (least-biased pass)", "text": primary_text},
+        "precision_transcript": {"role": "precision ear, whole short (verified names given as spelling references)",
+                                 "text": precision_text},
         "verified_names": list(verified_names),
         "spans": [s.to_payload() for s in spans],
     }

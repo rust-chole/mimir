@@ -4,6 +4,7 @@ import ast
 import compileall
 import inspect
 import math
+import os
 import shutil
 import sys
 import tempfile
@@ -26,6 +27,11 @@ REQUIRED = [
     AI / "editor" / "teaser_analyzer.py",
     AI / "editor" / "intro_analyzer.py",
     AI / "editor" / "intro_renderer.py",
+    AI / "caption_stack" / "final_captions.py",
+    AI / "caption_stack" / "lexical.py",
+    AI / "caption_stack" / "alignment.py",
+    AI / "caption_stack" / "qwen_omni.py",
+    AI / "caption_stack" / "legacy_whisper.py",
 ]
 FORBIDDEN_DIR_NAMES = {"__pycache__", "mimir_*_patch", "cache"}
 FORBIDDEN_SYMBOLS = {
@@ -34,6 +40,13 @@ FORBIDDEN_SYMBOLS = {
     "_assign_words_identity_locked",
     "_hybrid_segment_word_clock",
     "transcribe_caption_segment_timing",
+    # Pre-Qwen final-caption authority mix (gpt-transcribe words mapped onto Whisper
+    # anchors inside one function, multi-ear micro votes): replaced by ai.caption_stack.
+    "_transcribe_edited_words",
+    "_micro_refine_caption",
+    "transcribe_caption_micro_pass",
+    "transcribe_caption_crosscheck_text",
+    "transcribe_caption_independent_text",
 }
 
 for path in REQUIRED:
@@ -60,6 +73,7 @@ for path in AI.rglob("*.py"):
 sys.path.insert(0, str(ROOT))
 try:
     from ai import vod_processor
+    from ai.caption_stack import legacy_whisper, lexical
     from ai.editor import captions, intro_renderer, speaker_caption_support, speaker_naming, teaser_analyzer
 except Exception as error:
     errors.append(f"core import failed: {type(error).__name__}: {error}")
@@ -84,7 +98,7 @@ else:
 
     try:
         data = timing(["You", "right"], [1.0, 1.45], [1.25, 1.75])
-        rows, _ = vod_processor.align_text_to_fixed_whisper_clock("You are right", data, 3.0)
+        rows, _ = legacy_whisper.align_text_to_fixed_whisper_clock("You are right", data, 3.0)
         right = next(row for row in rows if row["word"] == "right")
         if abs(float(right["start"]) - 1.45) > 1e-9:
             errors.append("later Whisper anchor moved during GPT-only insertion")
@@ -101,7 +115,7 @@ else:
     # cross a later immutable onset must be shortened, not crash the profile.
     try:
         dense = timing(["A", "B", "C"], [1.000, 1.012, 1.060], [1.020, 1.050, 1.100])
-        dense_rows, _ = vod_processor.align_text_to_fixed_whisper_clock("A B C", dense, 2.0)
+        dense_rows, _ = legacy_whisper.align_text_to_fixed_whisper_clock("A B C", dense, 2.0)
         if [row["word"] for row in dense_rows] != ["A", "B", "C"]:
             errors.append("dense clock wording changed")
         if abs(float(dense_rows[1]["start"]) - 1.012) > 1e-9:
@@ -138,37 +152,34 @@ else:
         errors.append("caption output cache version is stale")
 
     # V7 verified participant-name orthography: a homophonic/near-homophonic
-    # spelling may be normalized only in a conservative direct-address vocative.
+    # spelling may be normalized only in a conservative direct-address vocative
+    # (lexical stage, before the freeze; token count never changes).
     try:
-        fixed, meta = speaker_caption_support._apply_verified_vocative_name_orthography(
-            "My only option is um, Tyler, would you like to go on a date with me?",
-            ["KAI", "TYLA"],
-        )
+        def vocative(text: str) -> tuple[str, dict]:
+            tokens, meta = lexical.apply_vocative_name_orthography(
+                lexical.display_tokens(text), ["KAI", "TYLA"], similarity=0.64)
+            return " ".join(tokens), meta
+
+        fixed, meta = vocative("My only option is um, Tyler, would you like to go on a date with me?")
         if "Tyla," not in fixed or "Tyler," in fixed:
             errors.append(f"V7 vocative verified-name spelling lock failed: {fixed}")
         if meta.get("status") != "corrected":
             errors.append("V7 vocative verified-name correction audit missing")
 
-        untouched, untouched_meta = speaker_caption_support._apply_verified_vocative_name_orthography(
-            "I watched Tyler play yesterday.",
-            ["KAI", "TYLA"],
-        )
+        untouched, untouched_meta = vocative("I watched Tyler play yesterday.")
         if untouched != "I watched Tyler play yesterday.":
             errors.append("V7 verified-name spelling lock rewrote third-party mention")
         if untouched_meta.get("status") == "corrected":
             errors.append("V7 third-party mention incorrectly audited as corrected")
 
-        no_second_person, _ = speaker_caption_support._apply_verified_vocative_name_orthography(
-            "Tyler, come here.",
-            ["KAI", "TYLA"],
-        )
+        no_second_person, _ = vocative("Tyler, come here.")
         if no_second_person != "Tyler, come here.":
             errors.append("V7 verified-name spelling lock bypassed conservative second-person gate")
     except Exception as error:
         errors.append(f"V7 verified-name orthography regression failed: {error}")
 
-    # No phrase-specific spelling rules: wording changes only through the strict
-    # independent acoustic micro-vote, never through a per-word alias table.
+    # No phrase-specific spelling rules: wording changes only through evidence
+    # (agreement of independent ears or a grounded judge verdict), never an alias table.
     if hasattr(speaker_caption_support, "_streamer_slang_evidence_resolution"):
         errors.append("phrase-specific caption spelling resolver is back")
 
@@ -199,7 +210,7 @@ else:
                 {"word": "How", "edited_start": 1.00, "edited_end": 1.20, "timing_source": "whisper_exact_anchor"},
                 {"word": "Sixteen.", "edited_start": 2.80, "edited_end": 3.20, "timing_source": "whisper_exact_anchor"},
             ]
-            guarded, guard_meta = speaker_caption_support._apply_local_acoustic_clock_guard(
+            guarded, guard_meta = legacy_whisper.apply_local_acoustic_clock_guard(
                 audio_path=wav_path, words=base_words, duration=duration_seconds
             )
             if int(guard_meta.get("corrected_groups", 0) or 0) != 1:
@@ -531,6 +542,37 @@ else:
     except Exception as error:
         errors.append(f"V6 risky phrase micro identity regression failed: {error}")
 
+    # Final-caption authority contract: Qwen ears own WHAT, one aligner owns WHEN.
+    try:
+        from ai.caption_stack import alignment, config as caption_stack_config, final_captions
+
+        stack = caption_stack_config.load_settings()
+        if stack.primary_provider != "qwen_omni" and not os.getenv("MIMIR_CAPTION_PRIMARY_PROVIDER", "").strip():
+            errors.append("the default final-caption lexical ear is not Qwen Omni")
+        if stack.alignment_provider != "qwen3_forced_aligner" and not os.getenv("MIMIR_WORD_ALIGNMENT_PROVIDER", "").strip():
+            errors.append("the default word-alignment provider is not the Qwen forced aligner")
+        for module in (vod_processor, speaker_caption_support):
+            if hasattr(module, "align_text_to_fixed_whisper_clock") or hasattr(module, "_apply_local_acoustic_clock_guard"):
+                errors.append(f"{module.__name__} still owns a Whisper caption clock (legacy_whisper only)")
+        if "torch" in sys.modules or "qwen_asr" in sys.modules:
+            errors.append("importing MIMIR loaded the forced aligner eagerly (must be lazy)")
+        stack_rows = captions._profile_edited_words({
+            "status": "ok", "timing_basis": final_captions.TIMING_BASIS,
+            "words": [{"word": "hello", "edited_start": 0.2, "edited_end": 0.5}]}, 2.0)
+        if len(stack_rows) != 1:
+            errors.append("the caption renderer does not accept the caption-stack timing basis")
+        frozen_tokens = ("hello", "there")
+        frozen = lexical.FrozenTranscript(frozen_tokens, ("agreed", "agreed"), (0, 0), ((0.0, 1.0),), (), "en",
+                                          lexical.lexical_signature(frozen_tokens, ((0.0, 1.0),)))
+        if not frozen.intact():
+            errors.append("frozen transcript signature does not verify")
+        check = alignment.validate_units([alignment.AlignedUnit(0, 1, 0.2, 0.2, "x"),
+                                          alignment.AlignedUnit(1, 2, 0.3, 0.5, "x")], 2, (0.0, 1.0), 1.0)
+        if check.ok:
+            errors.append("a zero-duration word passed alignment validation")
+    except Exception as error:
+        errors.append(f"caption stack contract check failed: {type(error).__name__}: {error}")
+
     # Exact-final timing failure must not silently publish legacy-timed ASS.
     try:
         pipeline_source = (AI / "shorts_pipeline.py").read_text(encoding="utf-8")
@@ -605,7 +647,7 @@ try:
               "test_pro_edit_planner", "test_pro_edit_filters", "test_pro_edit_captions", "test_pro_edit_captions_v4",
               "test_pro_edit_v5", "test_pro_edit_render", "test_pro_edit_current_root",
               "test_v6_caption_truth", "test_v6_camera", "test_intro_bounds", "test_final_qc", "test_caption_accuracy",
-              "test_production_contracts"]
+              "test_caption_stack", "test_production_contracts"]
     if os.environ.get("MIMIR_VERIFY_E2E", "").strip() == "1":
         suites.extend(["test_pro_edit_pipeline", "test_v6_pipeline"])
     stream = io.StringIO()
@@ -633,8 +675,8 @@ if errors:
 print("UNIFIED CLEAN VERIFY: PASS")
 print(" - compile/import contracts: OK")
 print(" - legacy calibration/identity-word engines: absent")
-print(" - GPT wording / Whisper anchor invariants: OK")
-print(" - local exact-PCM caption clock outlier guard: OK")
+print(" - caption stack: Qwen ears (WHAT) / frozen transcript / one lazy word aligner (WHEN): OK")
+print(" - legacy Whisper fallback clock: frozen wording + fixed anchors + exact-PCM guard: OK")
 print(" - no phrase-specific caption spelling rules: OK")
 print(" - caption display readability without clock mutation: OK")
 print(" - speaker boundary QA / retry gate: OK")

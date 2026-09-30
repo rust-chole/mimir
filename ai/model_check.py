@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from ai import model_config
+from ai.caption_stack import config as caption_stack_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +31,46 @@ def _check_external_tools() -> None:
             missing.append(command)
     if missing:
         raise RuntimeError("Eksik sistem aracı: " + ", ".join(missing))
+
+
+def _print_caption_stack() -> None:
+    """Final-caption routing: WHAT (Qwen ears) and WHEN (word aligner). Never prints a key."""
+    import importlib.util
+
+    settings = caption_stack_config.load_settings()
+    print()
+    print("🎙️ FINAL CAPTION STACK")
+    print("-" * 60)
+    print(f"LEXICAL EAR       : {settings.primary_provider} -> {settings.qwen_model} "
+          f"[reasoning {settings.qwen_reasoning_effort}] (DashScope key/url set: {settings.qwen_configured})")
+    print(f"TRANSCRIBE BACKUP : {settings.transcribe_fallback_provider} -> {settings.transcribe_fallback_model}")
+    print(f"WORD ALIGNMENT    : {settings.alignment_provider} -> {settings.aligner_model} "
+          f"[device {settings.aligner_device}, dtype {settings.aligner_dtype}]")
+    print(f"ALIGNMENT BACKUP  : {settings.alignment_fallback_provider}")
+    installed = importlib.util.find_spec("qwen_asr") is not None
+    print(f"qwen-asr installed: {installed} (the aligner loads lazily, only for final caption timing)")
+
+
+def _live_qwen_check() -> None:
+    settings = caption_stack_config.load_settings()
+    if settings.primary_provider != "qwen_omni":
+        return
+    if not settings.qwen_configured:
+        raise RuntimeError("DASHSCOPE_API_KEY / DASHSCOPE_BASE_URL bulunamadı (final caption Qwen ear).")
+    client = OpenAI(api_key=settings.dashscope_api_key, base_url=settings.dashscope_base_url,
+                    timeout=settings.qwen_timeout_s, max_retries=settings.qwen_max_retries)
+    print(f"⏳ {settings.qwen_model} (DashScope) ...", end=" ", flush=True)
+    try:
+        stream = client.chat.completions.create(
+            model=settings.qwen_model, messages=[{"role": "user", "content": "Reply exactly with: OK"}],
+            modalities=["text"], reasoning_effort=settings.qwen_reasoning_effort, stream=True)
+        text = "".join(str(getattr(getattr(c, "delta", None), "content", "") or "")
+                       for chunk in stream for c in (getattr(chunk, "choices", None) or []))
+        print("✅" if text.strip() else "✅ response received")
+    except Exception as error:
+        print("❌")
+        message = str(error).replace(settings.dashscope_api_key, "***")[:300]
+        raise RuntimeError(f"{settings.qwen_model} live check başarısız: {type(error).__name__}: {message}") from None
 
 
 def _live_check() -> None:
@@ -68,6 +109,7 @@ def _live_check() -> None:
         except Exception as error:
             print("❌")
             raise RuntimeError(f"{model} live check başarısız: {error}") from error
+    _live_qwen_check()
 
 
 def main() -> None:
@@ -77,7 +119,7 @@ def main() -> None:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Her benzersiz OpenAI modeline küçük bir gerçek API isteği gönder.",
+        help="Her benzersiz OpenAI modeline ve Qwen Omni'ye küçük bir gerçek API isteği gönder.",
     )
     args = parser.parse_args()
 
@@ -89,6 +131,7 @@ def main() -> None:
 
     model_config.validate_model_plan()
     model_config.print_model_plan()
+    _print_caption_stack()
     _check_external_tools()
 
     if args.live:

@@ -104,7 +104,7 @@ def install_fakes(video: Path) -> None:
         return {"profile_path": str(speaker_profile_path), "preview_path": None}
 
     def create_speaker_profile(edited_clip_path, clip_index, transcript_path=None, timeline_path=None,
-                               speaker_scan_path=None):
+                               speaker_scan_path=None, verified_terms=None):
         path = speaker_caption_support._output_path(edited_clip_path, clip_index)
         words = [(w, s, e) for w, s, e in WORDS if e < 27.9]
         return write(Path(path), {

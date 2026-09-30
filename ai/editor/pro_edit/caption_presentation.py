@@ -190,7 +190,7 @@ def presentation_tokens(profile: Mapping[str, Any] | None, duration: float) -> t
     """
     if not profile or str(profile.get("status", "")) != "ok":
         return ()
-    if str(profile.get("timing_basis", "")).strip() not in {"edited_clip", "exact_final_48k_audio"}:
+    if str(profile.get("timing_basis", "")).strip() not in {"edited_clip", "exact_final_48k_audio", "exact_final_short_audio"}:
         return ()
     rows: list[CaptionTokenRef] = []
     for index, raw in enumerate(profile.get("words", []) or []):

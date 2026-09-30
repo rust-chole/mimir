@@ -5,8 +5,9 @@ MP4; a human then accepts or rejects it. This module turns evidence MIMIR
 already holds into a short checklist of the places worth looking at, on the
 FINAL clock of the published file:
 
-* caption words the caption judge could not settle (shown, marked uncertain);
-* caption words the caption judge changed from the primary transcript;
+* caption words the evidence could not settle (shown as the primary ear heard them, marked uncertain);
+* caption words changed from the primary ear's transcript (by independent-ear agreement or the
+  caption judge; who decided is shown);
 * verified-name spelling decisions;
 * the cold open (window, headline or none) and any effect;
 * every disclosed degradation (anything that made the run ``published_degraded``).
@@ -127,8 +128,8 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
     focus = packet.get("focus") or []
     lines.append("## Look here first")
     if not focus:
-        lines.append("- Nothing flagged: no caption word was left unsettled, changed by the caption judge or "
-                     "respelled as a name.")
+        lines.append("- Nothing flagged: no caption word was left unsettled, changed from the primary ear's "
+                     "transcript or respelled as a name.")
     for item in focus:
         at = _clock(item.get("final_s"))
         kind = item.get("kind")
@@ -137,7 +138,7 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
             lines.append(f"- [ ] {at} caption \"{item['text']}\": not settled by the evidence{near}; "
                          f"shown as heard, marked uncertain")
         elif kind == "caption_changed_by_judge":
-            lines.append(f"- [ ] {at} caption changed from the primary transcript: \"{item['from']}\" -> "
+            lines.append(f"- [ ] {at} caption changed from the primary ear's transcript: \"{item['from']}\" -> "
                          f"\"{item['to']}\" ({item.get('decided_by', '')}, confidence {item.get('confidence')})")
         elif kind == "name_spelling_by_judge":
             lines.append(f"- [ ] {at} name spelling \"{item['from']}\" -> \"{item['to']}\" "

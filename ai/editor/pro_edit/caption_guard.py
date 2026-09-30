@@ -24,7 +24,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ai.editor.pro_edit.errors import ProEditError
 
-ACCEPTED_TIMING_BASES = frozenset({"edited_clip", "exact_final_48k_audio"})
+ACCEPTED_TIMING_BASES = frozenset({"edited_clip", "exact_final_48k_audio", "exact_final_short_audio"})
 LINE_HEIGHT_FACTOR = 1.22
 BAND_PADDING = 0.012
 

@@ -1,12 +1,12 @@
 """Caption Truth V6: resolve, escalate and FREEZE final caption truth.
 
-Four separate authorities own the final caption words:
+Separate authorities own the final caption words:
 
-    LEXICAL  what was spoken      -> the caption judge (strongest model) over the
-                                     evidence of every ear (gpt-transcribe primary,
-                                     model-diverse cross-check, micro votes, word clock);
-                                     strict acoustic votes when no judge is available
-    TIMING   when it was spoken   -> the immutable Whisper word clock (+ local PCM guard)
+    LEXICAL  what was spoken      -> ai.caption_stack: Qwen primary + precision ears,
+                                     deterministic agreement or the caption judge
+                                     (Astra) for disputed spans -> a FROZEN transcript
+    TIMING   when it was spoken   -> one word-alignment provider over the frozen words
+                                     (Qwen3-ForcedAligner; a validated fallback otherwise)
     SPEAKER  who spoke it         -> diarization + human identity checkpoint
     IDENTITY canonical spelling of verified people/entities
                                   -> participant_name_lock (evidence-gated), then the
@@ -16,17 +16,18 @@ Four separate authorities own the final caption words:
 This stage runs once per selected short, AFTER the caption stage, and never
 re-transcribes the clip. It:
 
-1. canonicalizes verified entity names (spelling only; id/time/speaker kept);
-2. spends extra inference only on ambiguous high-impact name spans: one
-   UNPROMPTED model-diverse ear (independent of the names, logprobs when the
-   backend offers them) + one ear biased with the small verified vocabulary,
-   on a few seconds of audio around the word (bounded, cached);
-3. asks the caption judge to decide the verified-name candidates the lock
+1. proves the profile words still ARE the frozen transcript (text byte for byte,
+   in order); the only permitted difference is a recorded verified-name spelling;
+2. canonicalizes verified entity names (spelling only; id/time/speaker kept);
+3. spends extra inference only on ambiguous high-impact name spans: one
+   unprompted model-diverse ear + one ear given the small verified vocabulary as
+   spelling references, on a few seconds of audio around the word (bounded, cached);
+4. asks the caption judge to decide the verified-name candidates the lock
    could not (spelling only), and records who decided every disputed word
    (``lexical_decisions``, ``entity_decisions``) in the truth document;
-4. marks words the evidence could not settle as ``caption_uncertain`` (shown,
+5. marks words the evidence could not settle as ``caption_uncertain`` (shown,
    never emphasized) instead of guessing;
-5. validates timing/speaker invariants and FREEZES the result: a truth
+6. validates timing/speaker invariants and FREEZES the result: a truth
    document with a signature over (id, text, start, end, speaker, label).
    Downstream presentation may only consume it; the final quality gate proves
    the published captions still equal the frozen truth.
@@ -38,7 +39,6 @@ import json
 import math
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -57,8 +57,6 @@ MAX_ESCALATIONS = max(0, min(6, int(os.getenv("MIMIR_V6_CAPTION_ESCALATIONS", "3
 ESCALATION_PAD_S = 1.5
 ESCALATION_MIN_WINDOW_S = 3.0
 MAX_VOCABULARY = 8
-LOW_CONFIDENCE_PROB = 0.5
-MIN_TOKEN_LEVEL_EARS = 3        # recorded micro ears needed to judge an unresolved span word by word
 TIMING_EPS = 1e-3
 ESCALATION_REASONS = ("no_reference_evidence", "score_below_threshold", "insufficient_support",
                       "ordinary_word_without_acoustic_evidence")
@@ -231,182 +229,71 @@ def speaker_issues(profile: Mapping[str, Any]) -> list[str]:
 
 
 # ============================================================
-# UNCERTAINTY (ASR ears could not agree)
+# LEXICAL FREEZE (the caption stage's frozen transcript)
 # ============================================================
 
-def _ear_phrases(detail: Mapping[str, Any]) -> list[tuple[str, list[str]]]:
-    """(source, canonical tokens) of every micro-ASR ear of one span.
-
-    An empty phrase is kept: that ear heard nothing where the caption shows
-    words, which is evidence AGAINST them."""
-    ears: list[tuple[str, list[str]]] = []
-    for row in detail.get("candidate_votes", []) or []:
-        if not isinstance(row, Mapping):
-            continue
-        phrase = [_canon(t) for t in _tokens(str(row.get("phrase", "")))]
-        for source in row.get("sources", []) or []:
-            ears.append((str(source), phrase))
-    return ears
+def _lexical_record(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
+    lexical = quality.get("lexical") if isinstance(quality.get("lexical"), Mapping) else {}
+    return lexical
 
 
-def disputed_positions(texts: Sequence[str], ears: Sequence[tuple[str, Sequence[str]]],
-                       center: float | None = None) -> list[int] | None:
-    """Window positions whose displayed token is NOT confirmed by the ears (None: nothing mappable).
+def lexical_freeze_issues(profile: Mapping[str, Any]) -> list[str]:
+    """Profile words that are not the frozen transcript (empty = intact).
 
-    Each ear's phrase (the caption stage's mapping of that ear to the disputed
-    core) is anchored where it matches the window best. The core is where the
-    most ears anchor (overlapping anchors form one location; a tie goes to the
-    location nearest ``center``, the expected core position); an ear anchored
-    elsewhere was mis-mapped and confirms nothing there. Inside the core a
-    displayed token is confirmed when a strict majority of ALL ears of the span
-    (an ear that heard nothing counts against) heard exactly it, including at
-    least one unprompted acoustic ear (a context-prompted majority alone can
-    echo the caption's wording). The context padding around the core is not
-    part of the dispute.
+    Every word shows exactly the frozen tokens it was timed for, in order; the
+    only allowed difference is a recorded verified-name spelling (``name_lock``).
+    Speaker assignment may omit proven ambient words, never change or reorder
+    one. A profile without a frozen transcript (older contract) has nothing to prove.
     """
-    anchors: list[tuple[str, Sequence[str], tuple[int, int]]] = []
-    for source, phrase in ears:
-        region = _best_contiguous_alignment(texts, phrase) if phrase else None
-        if region is not None:
-            anchors.append((source, phrase, region))
-    if not anchors:
-        return None
-    locations: list[list[tuple[str, Sequence[str], tuple[int, int]]]] = []
-    for row in sorted(anchors, key=lambda r: r[2]):
-        if locations and row[2][0] < max(r[2][1] for r in locations[-1]):
-            locations[-1].append(row)
-        else:
-            locations.append([row])
-    target = (len(texts) - 1) / 2.0 if center is None else center
+    lexical = _lexical_record(profile)
+    frozen = lexical.get("frozen_tokens")
+    if not isinstance(frozen, list):
+        return []
+    from ai.caption_stack.lexical import lexical_signature
 
-    def rank(rows: list[tuple[str, Sequence[str], tuple[int, int]]]) -> tuple[int, float]:
-        lo, hi = min(r[2][0] for r in rows), max(r[2][1] for r in rows)
-        return len({r[0] for r in rows}), -abs((lo + hi - 1) / 2.0 - target)
-
-    core = max(locations, key=rank)
-    lo, hi = min(r[2][0] for r in core), max(r[2][1] for r in core)
-    confirmations: list[set[str]] = [set() for _ in texts]
-    for source, phrase, region in core:
-        a, b = max(0, region[0] - 1), min(len(texts), region[1] + 1)   # boundary substitutions
-        for block in SequenceMatcher(None, list(texts[a:b]), list(phrase), autojunk=False).get_matching_blocks():
-            for k in range(block.size):
-                confirmations[a + block.a + k].add(source)
-    unprompted = {source for source, _phrase in ears if not name_lock._micro_source_prompted(source)}
-    disputed = []
-    for index in range(lo, hi):
-        agree = confirmations[index]
-        if len(agree) * 2 <= len(ears) or (unprompted and not agree & unprompted):
-            disputed.append(index)
-    return disputed
-
-
-def _core_center(inside_times: Sequence[tuple[float, float]], window: tuple[float, float], duration: float) -> float:
-    """Expected index of the disputed core inside the micro window.
-
-    The caption stage centres the window on the core and clamps it at the clip
-    edges, so a window touching the clip start/end holds its core near that edge."""
-    if not inside_times:
-        return 0.0
-    w0, w1 = window
-    if w0 <= 1e-3 and not (duration > 0 and w1 >= duration - 1e-3):
-        t = w0 + 0.25 * (w1 - w0)
-    elif duration > 0 and w1 >= duration - 1e-3 and w0 > 1e-3:
-        t = w0 + 0.75 * (w1 - w0)
-    else:
-        t = (w0 + w1) / 2.0
-    return float(min(range(len(inside_times)), key=lambda i: abs(sum(inside_times[i]) / 2.0 - t)))
+    issues: list[str] = []
+    try:
+        chunks = [(float(a), float(b)) for a, b in lexical.get("chunks") or []]
+    except (TypeError, ValueError):
+        chunks = []
+    if lexical_signature([str(t) for t in frozen], chunks) != lexical.get("signature"):
+        issues.append("frozen transcript record does not match its signature")
+    previous = 0
+    for index, word in enumerate(profile.get("words", []) or []):
+        if not isinstance(word, Mapping):
+            continue
+        ids = word.get("token_ids")
+        try:
+            a, b = int(ids[0]), int(ids[1])
+        except (TypeError, ValueError, IndexError):
+            issues.append(f"word {index}: no frozen token ids")
+            continue
+        if a < previous or b <= a or b > len(frozen):
+            issues.append(f"word {index}: frozen token ids {a}-{b} out of order")
+            continue
+        previous = b
+        expected = " ".join(str(t) for t in frozen[a:b])
+        shown = str(word.get("word", ""))
+        lock = word.get("name_lock") if isinstance(word.get("name_lock"), Mapping) else {}
+        if shown != expected and not (str(lock.get("from", "")) == expected and shown == str(lock.get("to", ""))):
+            issues.append(f"word {index}: {shown!r} is not the frozen {expected!r}")
+    return issues
 
 
 def unresolved_span_word_ids(profile: Mapping[str, Any], words: Sequence[Any]) -> list[tuple[list[int], str]]:
-    """Profile word ids the caption-stage micro ears could not confirm (unresolved spans).
+    """Word ids the caption stage froze as uncertain, one row per disputed span.
 
-    Mapping is by audio time + lexical anchor (never by the stage's token
-    index, which refers to the pre-alignment text). With at least
-    ``MIN_TOKEN_LEVEL_EARS`` recorded ears the dispute is judged per displayed
-    word (``disputed_positions``): words the independent majority heard stay
-    certain, only unconfirmed ones are flagged. With fewer ears the whole
-    region matching the top candidate phrase is flagged. Nothing mappable ->
-    the span is reported as unmapped and nothing is flagged.
+    The caption stack marks every such word explicitly (``lexical_status`` =
+    ``uncertain``: no agreement and no accepted judge verdict, so the primary
+    ear's words were kept). Nothing is inferred from times or votes here.
     """
-    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
-    micro = quality.get("micro_accuracy") if isinstance(quality.get("micro_accuracy"), Mapping) else {}
-    try:
-        duration = float(profile.get("clip_duration", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        duration = 0.0
-    found: list[tuple[list[int], str]] = []
-    for detail in micro.get("details", []) or []:
-        if not isinstance(detail, Mapping) or detail.get("resolved") is not False:
-            continue
-        window = detail.get("audio_window") or []
-        try:
-            w0, w1 = float(window[0]), float(window[1])
-        except (TypeError, ValueError, IndexError):
-            continue
-        votes = sorted((row for row in detail.get("candidate_votes", []) or []
-                        if isinstance(row, Mapping) and _tokens(str(row.get("phrase", "")))),
-                       key=lambda row: -int(row.get("votes", 0) or 0))
-        if not votes:
-            continue
-        phrase = [_canon(t) for t in _tokens(str(votes[0].get("phrase", "")))]
-        # Token level: one profile word may hold several spoken tokens ("mall ever."), and the
-        # ears' phrases are tokens; every token keeps the id of the word that shows it.
-        owners: list[int] = []
-        texts: list[str] = []
-        times: list[tuple[float, float]] = []
-        for index, word in enumerate(words):
-            if not isinstance(word, Mapping):
-                continue
-            try:
-                start, end = float(word.get("edited_start", -1)), float(word.get("edited_end", -1))
-            except (TypeError, ValueError):
-                continue
-            if w0 - 1e-3 <= start and end <= w1 + 1e-3:
-                for token in _tokens(str(word.get("word", ""))):
-                    owners.append(index)
-                    texts.append(_canon(token))
-                    times.append((start, end))
-        ears = _ear_phrases(detail)
-        if len(ears) >= MIN_TOKEN_LEVEL_EARS:
-            disputed = disputed_positions(texts, ears, _core_center(times, (w0, w1), duration))
-            if disputed is None:
-                found.append(([], "unmapped"))
-            elif disputed:
-                found.append((sorted({owners[k] for k in disputed}), "asr_ears_disagree"))
-            continue
-        best = _best_contiguous_alignment(texts, phrase)
-        if best is None:
-            found.append(([], "unmapped"))
-            continue
-        lo, hi = best
-        found.append((sorted({owners[k] for k in range(lo, hi)}), "asr_ears_disagree"))
-    return found
-
-
-def _best_contiguous_alignment(texts: Sequence[str], phrase: Sequence[str]) -> tuple[int, int] | None:
-    """Tightest contiguous run of window words that spells the disputed phrase.
-
-    Slides the phrase over the window (a repeated phrase can never stretch the
-    region across both occurrences); the run needs at least half of the phrase
-    tokens in order. Ties prefer the run closest to the window centre.
-    """
-    if not texts or not phrase:
-        return None
-    size = min(len(phrase), len(texts))
-    centre = (len(texts) - size) / 2.0
-    best: tuple[float, float, int] | None = None
-    for offset in range(0, len(texts) - size + 1):
-        window = texts[offset:offset + size]
-        matched = sum(block.size for block in SequenceMatcher(None, window, phrase, autojunk=False)
-                      .get_matching_blocks())
-        score = matched / float(len(phrase))
-        key = (score, -abs(offset - centre), offset)
-        if best is None or key > best:
-            best = key
-    if best is None or best[0] < 0.5:
-        return None
-    offset = best[2]
-    return offset, offset + size
+    del profile
+    spans: dict[str, list[int]] = {}
+    for index, word in enumerate(words):
+        if isinstance(word, Mapping) and word.get("lexical_status") == "uncertain":
+            spans.setdefault(str(word.get("lexical_span") or f"word_{index}"), []).append(index)
+    return [(ids, "lexical_evidence_unresolved") for ids in spans.values()]
 
 
 # ============================================================
@@ -590,82 +477,34 @@ def run_escalations(
 
 
 # ============================================================
-# REAL EARS (existing MIMIR caption ASR functions; no new provider)
+# REAL EARS (the caption stack's providers; no separate ASR path)
 # ============================================================
 
 def extract_clip_audio(edited_clip_path: Path) -> Path:
-    """Exact-final 48 kHz mono PCM of the edited clip (same master as the caption stage)."""
-    from ai import vod_processor
+    """The caption stack's analysis audio (mono 16 kHz PCM) of the exact final edited clip."""
+    from ai.caption_stack import audio as analysis_audio
 
+    return analysis_audio.extract_analysis_audio(edited_clip_path, directory=TEMP_DIR).path
+
+
+def caption_stack_ear(audio_path: Path, start: float, end: float, *, prompted: bool, vocabulary: Sequence[str],
+                      context_before: str = "", context_after: str = "") -> EarResult:
+    """Unprompted ear: the model-diverse fallback ear (no names). Prompted ear: the Qwen
+    precision ear with the verified vocabulary as spelling references (audio always wins)."""
+    import tempfile
+
+    from ai.caption_stack import audio as analysis_audio
+    from ai.caption_stack import lexical
+    from ai.caption_stack.config import load_settings
+
+    del context_before, context_after          # the local window itself is the evidence
+    audio = analysis_audio.load_analysis_audio(audio_path)
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(str(Path(edited_clip_path).resolve()).encode("utf-8")).hexdigest()[:12]
-    output = TEMP_DIR / f"truth_{digest}.wav"
-    command = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(edited_clip_path), "-vn", "-ac", "1",
-               "-ar", str(getattr(vod_processor, "CAPTION_MASTER_SAMPLE_RATE", 48000)), "-c:a", "pcm_s16le",
-               str(output)]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               check=False)
-    if completed.returncode != 0 or not output.is_file() or output.stat().st_size < 1024:
-        raise RuntimeError("caption truth audio extraction failed: " + (completed.stderr.strip()[-300:] or "ffmpeg"))
-    return output
-
-
-def _probabilities(response: Any) -> tuple[tuple[str, float], ...]:
-    raw = getattr(response, "logprobs", None)
-    if raw is None and isinstance(response, Mapping):
-        raw = response.get("logprobs")
-    rows: list[tuple[str, float]] = []
-    for item in raw or []:
-        token = getattr(item, "token", None) if not isinstance(item, Mapping) else item.get("token")
-        logprob = getattr(item, "logprob", None) if not isinstance(item, Mapping) else item.get("logprob")
-        try:
-            rows.append((str(token), math.exp(float(logprob))))
-        except (TypeError, ValueError, OverflowError):
-            continue
-    return tuple(rows)
-
-
-def openai_micro_ear(audio_path: Path, start: float, end: float, *, prompted: bool, vocabulary: Sequence[str],
-                     context_before: str = "", context_after: str = "") -> EarResult:
-    """Unprompted ear: the model-diverse cross-check model, no names, logprobs when
-    supported. Prompted ear: the primary caption model with the verified vocabulary
-    as recognition bias (reference only; the audio always wins)."""
-    from ai import vod_processor
-
-    clip = vod_processor.extract_caption_micro_audio(audio_path, start=start, end=end, label="truth_v6",
-                                                     enhanced=False)
-    try:
-        if prompted:
-            instruction = ("Verified names that may occur (reference only): " + ", ".join(vocabulary)
-                           + ". If the audio clearly says one of these names, spell it exactly. Never force a name "
-                             "the audio does not contain.") if vocabulary else ""
-            text = vod_processor.transcribe_caption_micro_pass(
-                clip, model=vod_processor.CAPTION_ACCURATE_MODEL, label="v6 verified-vocabulary listen",
-                context_before=context_before, context_after=context_after, extra_instruction=instruction,
-                use_context=True, known_names=list(vocabulary))
-            return EarResult(str(text or "").strip(), vod_processor.CAPTION_ACCURATE_MODEL, True)
-        from ai.openai_client import client
-
-        model = vod_processor.CAPTION_CROSSCHECK_MODEL
-        kwargs: dict[str, Any] = {"model": model}
-        if vod_processor.TRANSCRIPTION_LANGUAGE:
-            kwargs["language"] = vod_processor.TRANSCRIPTION_LANGUAGE
-        with clip.open("rb") as handle:
-            try:
-                response = client.audio.transcriptions.create(file=handle, response_format="json",
-                                                              include=["logprobs"], **kwargs)
-            except Exception:  # backend/SDK without logprobs: same ear, text only
-                handle.seek(0)
-                response = client.audio.transcriptions.create(file=handle, **kwargs)
-        text = getattr(response, "text", None)
-        if text is None and isinstance(response, Mapping):
-            text = response.get("text")
-        return EarResult(str(text or "").strip(), model, False, _probabilities(response))
-    finally:
-        try:
-            clip.unlink(missing_ok=True)
-        except OSError:
-            pass
+    with tempfile.TemporaryDirectory(dir=str(TEMP_DIR)) as tmp:
+        text, _provider, model = lexical.listen_window(audio, start, end, prompted=prompted,
+                                                       vocabulary=list(vocabulary), settings=load_settings(),
+                                                       workdir=Path(tmp))
+    return EarResult(str(text or "").strip(), model, prompted)
 
 
 # ============================================================
@@ -673,42 +512,27 @@ def openai_micro_ear(audio_path: Path, start: float, end: float, *, prompted: bo
 # ============================================================
 
 def lexical_decision_rows(profile: Mapping[str, Any], words: Sequence[Any]) -> list[dict[str, Any]]:
-    """The caption stage's per-span lexical decisions, mapped to profile word ids by audio time."""
-    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
-    micro = quality.get("micro_accuracy") if isinstance(quality.get("micro_accuracy"), Mapping) else {}
+    """The caption stage's disputed-span decisions, mapped to word ids by their frozen span id."""
+    ids_by_span: dict[str, list[int]] = {}
+    for index, word in enumerate(words):
+        if isinstance(word, Mapping) and word.get("lexical_span"):
+            ids_by_span.setdefault(str(word["lexical_span"]), []).append(index)
     rows: list[dict[str, Any]] = []
-    for detail in micro.get("details", []) or []:
-        decision = detail.get("lexical_decision") if isinstance(detail, Mapping) else None
-        if not isinstance(decision, Mapping):
+    for span in _lexical_record(profile).get("spans", []) or []:
+        if not isinstance(span, Mapping):
             continue
+        ids = ids_by_span.get(str(span.get("span_id")), [])
+        window = span.get("audio_window") or [0.0]
         try:
-            w0, w1 = (float(v) for v in (detail.get("audio_window") or [])[:2])
+            paced = float(words[ids[0]].get("edited_start", 0.0)) if ids else float(window[0] or 0.0)
         except (TypeError, ValueError):
-            continue
-        before = str(detail.get("primary_phrase", ""))
-        after = detail.get("selected_phrase")
-        shown = str(after) if after is not None else before
-        owners, texts = [], []
-        for index, word in enumerate(words):
-            if not isinstance(word, Mapping):
-                continue
-            try:
-                start, end = float(word.get("edited_start", -1)), float(word.get("edited_end", -1))
-            except (TypeError, ValueError):
-                continue
-            if w0 - 1e-3 <= start and end <= w1 + 1e-3:
-                for token in _tokens(str(word.get("word", ""))):
-                    owners.append(index)
-                    texts.append(_canon(token))
-        found = _best_contiguous_alignment(texts, [_canon(t) for t in _tokens(shown)]) if _tokens(shown) else None
-        ids = sorted({owners[k] for k in range(*found)}) if found else []
-        paced = float(words[ids[0]].get("edited_start", w0)) if ids else w0
+            paced = 0.0
         rows.append({
-            "span_id": decision.get("span_id"), "from": before, "to": shown,
-            "changed": after is not None and [_canon(t) for t in _tokens(before)] != [_canon(t) for t in _tokens(shown)],
-            "resolved": bool(decision.get("resolved")), "decided_by": decision.get("source"),
-            "confidence": decision.get("confidence"), "supporting_ears": decision.get("supporting_ears", []),
-            "guard": decision.get("guard", ""), "word_ids": ids, "paced_start": round(paced, 3),
+            "span_id": span.get("span_id"), "from": str(span.get("from", "")), "to": str(span.get("to", "")),
+            "changed": bool(span.get("changed")), "resolved": bool(span.get("resolved")),
+            "decided_by": span.get("decided_by"), "confidence": span.get("confidence"),
+            "supporting_ears": list(span.get("supporting_ears") or []), "guard": span.get("guard", ""),
+            "reasons": list(span.get("reasons") or []), "word_ids": ids, "paced_start": round(paced, 3),
         })
     return rows
 
@@ -797,6 +621,9 @@ def run_caption_truth(
         raise ValueError("speaker profile root is not an object")
     original_json = json.dumps(profile, ensure_ascii=False, sort_keys=True)
     before_words = [dict(w) for w in profile.get("words", []) or [] if isinstance(w, dict)]
+    frozen_issues = lexical_freeze_issues(profile)
+    if frozen_issues:
+        raise ValueError("caption words differ from the frozen transcript: " + "; ".join(frozen_issues[:3]))
     try:
         duration = float(profile.get("clip_duration", 0.0) or 0.0)
     except (TypeError, ValueError):
@@ -816,9 +643,9 @@ def run_caption_truth(
     if audio_source is None and edited_clip_path is not None and Path(edited_clip_path).is_file():
         clip = Path(edited_clip_path)
         audio_source = lambda: extract_clip_audio(clip)  # noqa: E731
-    ear_id = "openai_micro_v1" if ear is None else getattr(ear, "ear_id", getattr(ear, "__name__", "custom"))
+    ear_id = "caption_stack_ear_v1" if ear is None else getattr(ear, "ear_id", getattr(ear, "__name__", "custom"))
     if ear is None and spans:
-        ear = openai_micro_ear
+        ear = caption_stack_ear
     alternatives, escalations, escalation_fallbacks = run_escalations(
         spans, words=first.words, duration=duration, audio_source=audio_source, ear=ear, vocabulary=vocabulary,
         clip_fingerprint=clip_fp, cached=cached, ear_id=ear_id) if spans else ({}, [], [])
@@ -901,7 +728,7 @@ def run_caption_truth(
     if isinstance(quality.get("lexical_judge"), Mapping):
         lexical_judge = dict(quality["lexical_judge"])
     if lexical_judge.get("status") in ("unavailable", "failed"):
-        fallbacks.append({"subsystem": "caption_lexical_judge", "level": "strict_acoustic_vote",
+        fallbacks.append({"subsystem": "caption_lexical_judge", "level": "primary_words_marked_uncertain",
                           "reason": str(lexical_judge.get("reason", lexical_judge.get("status")))})
     lexical_rows = lexical_decision_rows(profile, words)
 
@@ -929,8 +756,9 @@ def run_caption_truth(
         "profile": {"path": str(profile_file.resolve()), "words": len(truth_rows(profile))},
         "signature": signature,
         "authorities": {
-            "lexical": "caption judge over every ear's evidence (grounding-guarded); strict micro votes without it",
-            "timing": "immutable Whisper word clock (+ backward-only exact-PCM guard); never moved by spelling",
+            "lexical": "caption stack frozen transcript: Qwen ears, deterministic agreement or the caption judge "
+                       "(grounding-guarded); unresolved -> primary words marked uncertain",
+            "timing": "one word-alignment provider over the frozen words; never moved by spelling",
             "speaker": "diarization + human identity checkpoint; never changed by text",
             "identity": "verified roster (human-confirmed speakers + user-verified entities); evidence-gated spelling",
         },
