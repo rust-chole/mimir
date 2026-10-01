@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ai.editor import render_backend
+
 
 # ============================================================
 # PATHS
@@ -75,9 +77,9 @@ OUTPUT_LIMITER = 0.95
 # ENCODE
 # ============================================================
 
-VIDEO_CODEC = "libx264"
-VIDEO_PRESET = "fast"
-VIDEO_CRF = "18"
+# A visual meme re-encodes video with the shared render backend
+# (ai/editor/render_backend.py); an audio-only meme stream-copies the video.
+# The overlay graph itself still normalizes to this pixel format.
 PIXEL_FORMAT = "yuv420p"
 
 AUDIO_CODEC = "aac"
@@ -1748,6 +1750,144 @@ def build_visual_filter(
 # RENDER
 # ============================================================
 
+def build_render_command(
+    *,
+    base_video: Path,
+    asset_path: Path,
+    event: dict[str, Any],
+    base_info: dict[str, Any],
+    output_path: Path,
+    profile: render_backend.EncoderProfile | None,
+) -> list[str]:
+    """One meme event. Audio: video stream-copied (``profile`` unused). Visual:
+    CPU overlay graph, video encoder from the render backend, audio copied."""
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(
+            base_video
+        ),
+        "-i",
+        str(
+            asset_path
+        ),
+    ]
+
+    # --------------------------------------------------------
+    # AUDIO
+    # --------------------------------------------------------
+
+    if event[
+        "media_type"
+    ] == "audio":
+
+        (
+            filter_complex,
+            audio_label,
+        ) = build_audio_filter(
+            input_index=1,
+            event=event,
+            base_duration=float(
+                base_info[
+                    "duration"
+                ]
+            ),
+            base_has_audio=bool(
+                base_info[
+                    "has_audio"
+                ]
+            ),
+        )
+
+        command.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+
+                "-map",
+                "0:v:0",
+
+                "-map",
+                audio_label,
+
+                "-c:v",
+                "copy",
+
+                "-c:a",
+                AUDIO_CODEC,
+
+                "-b:a",
+                AUDIO_BITRATE,
+            ]
+        )
+
+    # --------------------------------------------------------
+    # VISUAL
+    # --------------------------------------------------------
+
+    else:
+
+        if profile is None:
+            raise ValueError("visual meme render needs a render-backend encoder profile")
+
+        (
+            filter_complex,
+            video_label,
+        ) = build_visual_filter(
+            input_index=1,
+            event=event,
+            base_info=base_info,
+        )
+
+        command.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+
+                "-map",
+                video_label,
+
+                *profile.video_args(),
+            ]
+        )
+
+        if base_info[
+            "has_audio"
+        ]:
+
+            command.extend(
+                [
+                    "-map",
+                    "0:a:0?",
+
+                    "-c:a",
+                    "copy",
+                ]
+            )
+
+    command.extend(
+        [
+            "-map_metadata",
+            "0",
+
+            "-movflags",
+            "+faststart",
+
+            # No -shortest: both branches already keep the base length exactly
+            # (audio apad+atrim to it, overlay eof_action=pass). With a stream-
+            # copied video, -shortest cut the short at the muxer's interleave
+            # point and silently dropped its last frames.
+            str(
+                output_path
+            ),
+        ]
+    )
+
+    return command
+
+
 def render_clip(
     discovery_package: dict[str, Any],
     timeline: dict[str, Any],
@@ -1945,166 +2085,76 @@ def render_clip(
         ]
     ).resolve()
 
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(
-            base_video
-        ),
-        "-i",
-        str(
-            asset_path
-        ),
-    ]
-
-    # --------------------------------------------------------
-    # AUDIO
-    # --------------------------------------------------------
-
-    if event[
-        "media_type"
-    ] == "audio":
-
-        (
-            filter_complex,
-            audio_label,
-        ) = build_audio_filter(
-            input_index=1,
-            event=event,
-            base_duration=float(
-                base_info[
-                    "duration"
-                ]
-            ),
-            base_has_audio=bool(
-                base_info[
-                    "has_audio"
-                ]
-            ),
-        )
-
-        command.extend(
-            [
-                "-filter_complex",
-                filter_complex,
-
-                "-map",
-                "0:v:0",
-
-                "-map",
-                audio_label,
-
-                "-c:v",
-                "copy",
-
-                "-c:a",
-                AUDIO_CODEC,
-
-                "-b:a",
-                AUDIO_BITRATE,
-            ]
-        )
-
-    # --------------------------------------------------------
-    # VISUAL
-    # --------------------------------------------------------
-
-    else:
-
-        (
-            filter_complex,
-            video_label,
-        ) = build_visual_filter(
-            input_index=1,
-            event=event,
-            base_info=base_info,
-        )
-
-        command.extend(
-            [
-                "-filter_complex",
-                filter_complex,
-
-                "-map",
-                video_label,
-
-                "-c:v",
-                VIDEO_CODEC,
-
-                "-preset",
-                VIDEO_PRESET,
-
-                "-crf",
-                VIDEO_CRF,
-
-                "-pix_fmt",
-                PIXEL_FORMAT,
-            ]
-        )
-
-        if base_info[
-            "has_audio"
-        ]:
-
-            command.extend(
-                [
-                    "-map",
-                    "0:a:0?",
-
-                    "-c:a",
-                    "copy",
-                ]
-            )
-
-    command.extend(
-        [
-            "-map_metadata",
-            "0",
-
-            "-movflags",
-            "+faststart",
-
-            # No -shortest: both branches already keep the base length exactly
-            # (audio apad+atrim to it, overlay eof_action=pass). With a stream-
-            # copied video, -shortest cut the short at the muxer's interleave
-            # point and silently dropped its last frames.
-            str(
-                output_path
-            ),
-        ]
-    )
-
     print()
     print(
         "🎞️ Render başlıyor..."
     )
 
-    try:
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+    def run_meme_command(command: list[str]) -> None:
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "FFmpeg bulunamadı."
+            ) from error
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg Meme Renderer V2 hatası:\n\n"
+                + result.stderr
+            )
+
+        if not output_path.exists():
+            raise RuntimeError(
+                "Meme final video oluşmadı."
+            )
+
+    if event[
+        "media_type"
+    ] == "audio":
+
+        # Audio-only effect: the video stream is copied, no encoder involved.
+        run_meme_command(
+            build_render_command(
+                base_video=base_video,
+                asset_path=asset_path,
+                event=event,
+                base_info=base_info,
+                output_path=output_path,
+                profile=None,
+            )
         )
 
-    except FileNotFoundError as error:
-        raise RuntimeError(
-            "FFmpeg bulunamadı."
-        ) from error
+    else:
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            "FFmpeg Meme Renderer V2 hatası:\n\n"
-            + result.stderr
-        )
+        def encode(profile: render_backend.EncoderProfile) -> None:
+            run_meme_command(
+                build_render_command(
+                    base_video=base_video,
+                    asset_path=asset_path,
+                    event=event,
+                    base_info=base_info,
+                    output_path=output_path,
+                    profile=profile,
+                )
+            )
+            render_backend.check_output(
+                output_path,
+                profile,
+            )
 
-    if not output_path.exists():
-        raise RuntimeError(
-            "Meme final video oluşmadı."
+        render_backend.run_encode(
+            "meme_render",
+            encode,
         )
 
     output_info = get_media_info(

@@ -983,6 +983,7 @@ def render_with_fallback(
                 script_path=prep.artifacts.filter_script, interpolation=prep.interpolation,
                 keep_failed=prep.keep_failed,
                 fonts_dir=prep.caption_fonts_dir if label == "presentation" else None,
+                render_stage="pro_edit_main",
             )
             verify_truth(prep, "main render")
             outcome.update(status="pro_edit", captions=label, reason=prep.reason, output=str(result.output_path),
@@ -1011,7 +1012,7 @@ def render_intro_source(prep: ProEditPreparation, *, clean_clip: Path, outcome: 
             edited_clip=clean_clip, caption_file=None, output_path=prep.intro_output_path,
             resolved=prep.intro_resolved, caps=prep.caps, source_media=prep.media,
             script_path=prep.artifacts.intro_filter_script, interpolation=prep.interpolation,
-            keep_failed=prep.keep_failed,
+            keep_failed=prep.keep_failed, render_stage="pro_edit_intro",
         )
         verify_truth(prep, "intro camera render")
         outcome.update(status="pro_edit", output=str(result.output_path))

@@ -6,6 +6,12 @@ temporary file, validates the result against the input (duration, frame
 count, fps, geometry, audio clock) and only then atomically replaces the
 target. It never runs anything derived from model text: the filter graph is
 built exclusively from numbers produced by the deterministic preset engine.
+
+The video encoder comes from the shared render backend (hardware H.264 when a
+verified one exists, else libx264). The graph itself (crop -> perspective ->
+subtitles) stays on the CPU and is still ONE graph with ONE encode; a hardware
+encode that fails or breaks the post-render validation is retried once on
+libx264 by the backend.
 """
 from __future__ import annotations
 
@@ -13,7 +19,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ai.editor import caption_renderer
+from ai.editor import caption_renderer, render_backend
 from ai.editor.pro_edit.errors import EditRenderError
 from ai.editor.pro_edit.ffmpeg_filters import (
     FfmpegCapabilities,
@@ -52,16 +58,15 @@ class RenderResult:
     command: tuple[str, ...]
 
 
-def build_render_command(edited_clip: Path, script_path: Path, output_path: Path, caps: FfmpegCapabilities) -> list[str]:
-    """Same encoder settings as caption_renderer.render_captioned_clip; audio is copied."""
+def build_render_command(edited_clip: Path, script_path: Path, output_path: Path, caps: FfmpegCapabilities,
+                         profile: render_backend.EncoderProfile | None = None) -> list[str]:
+    """One filter-script graph, the shared render-backend encoder (default: the active one); audio is copied."""
+    encoder = profile if profile is not None else render_backend.active_profile()
     return [
         "ffmpeg", "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-i", str(edited_clip),
         *script_arguments(caps, script_path),
-        "-c:v", caption_renderer.VIDEO_CODEC,
-        "-preset", caption_renderer.VIDEO_PRESET,
-        "-crf", caption_renderer.VIDEO_CRF,
-        "-pix_fmt", caption_renderer.PIXEL_FORMAT,
+        *encoder.video_args(),
         "-c:a", "copy",
         "-movflags", "+faststart",
         str(output_path),
@@ -105,6 +110,7 @@ def render_camera_captions(
     interpolation: str = "cubic",
     keep_failed: bool = False,
     fonts_dir: str | Path | None = None,
+    render_stage: str = "pro_edit",
 ) -> RenderResult:
     edited = Path(edited_clip).resolve()
     output = Path(output_path).resolve()
@@ -120,20 +126,31 @@ def render_camera_captions(
     script.write_text(graph, encoding="utf-8")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    temp = output.with_name(output.stem + ".proedit-tmp" + output.suffix)
-    temp.unlink(missing_ok=True)
-    command = build_render_command(edited, script, temp, caps)
     timeout = max(900.0, source_media.duration_s * 40.0)
-    try:
-        run_command(command, timeout=timeout, what="pro edit render")
-        if not temp.is_file() or temp.stat().st_size < 1024:
-            raise EditRenderError("pro edit render produced no output", command=command)
-        width, height = resolved.output_size
-        result = probe_media(temp)
-        validate_output(result, ExpectedOutput(width, height, source_media))
-    except EditRenderError:
-        if not keep_failed:
-            temp.unlink(missing_ok=True)
-        raise
+
+    def encode(profile: render_backend.EncoderProfile) -> tuple[Path, list[str]]:
+        # A failed hardware attempt keeps its own temp name (keep_failed debugging).
+        tag = ".proedit-tmp" if not profile.is_hardware else f".proedit-tmp-{profile.backend}"
+        temp = output.with_name(output.stem + tag + output.suffix)
+        temp.unlink(missing_ok=True)
+        command = build_render_command(edited, script, temp, caps, profile)
+        try:
+            run_command(command, timeout=timeout, what="pro edit render")
+            if not temp.is_file() or temp.stat().st_size < 1024:
+                raise EditRenderError("pro edit render produced no output", command=command)
+            width, height = resolved.output_size
+            result = probe_media(temp)
+            validate_output(result, ExpectedOutput(width, height, source_media))
+            try:
+                render_backend.check_output(temp, profile)
+            except render_backend.HardwareOutputError as error:
+                raise EditRenderError(str(error), command=command) from error
+        except EditRenderError:
+            if not keep_failed:
+                temp.unlink(missing_ok=True)
+            raise
+        return temp, command
+
+    temp, command = render_backend.run_encode(render_stage, encode)
     os.replace(temp, output)
     return RenderResult(output, probe_media(output), tuple(command))

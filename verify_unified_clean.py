@@ -26,6 +26,7 @@ REQUIRED = [
     AI / "editor" / "teaser_analyzer.py",
     AI / "editor" / "intro_analyzer.py",
     AI / "editor" / "intro_renderer.py",
+    AI / "editor" / "render_backend.py",
     AI / "caption_stack" / "final_captions.py",
     AI / "caption_stack" / "lexical.py",
     AI / "caption_stack" / "alignment.py",
@@ -446,6 +447,20 @@ else:
     except Exception as error:
         errors.append(f"intro policy test failed: {error}")
 
+# Shared render backend: every real video encode asks it; libx264 stays the CPU profile.
+try:
+    from ai.editor import caption_renderer, intro_renderer, meme_renderer, pacing_cutter, render_backend
+    if render_backend.CPU_PROFILE.video_args() != ["-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                                                   "-pix_fmt", "yuv420p"]:
+        errors.append("render backend: the CPU profile drifted from libx264 preset fast / CRF 18 / yuv420p")
+    if render_backend.DEFAULT_MODE != "auto":
+        errors.append("render backend: the default must be MIMIR_RENDER_BACKEND=auto")
+    for module in (pacing_cutter, caption_renderer, intro_renderer, meme_renderer):
+        if any(hasattr(module, name) for name in ("VIDEO_CODEC", "VIDEO_PRESET", "VIDEO_CRF")):
+            errors.append(f"private encoder constants are back in {module.__name__}")
+except Exception as error:
+    errors.append(f"render backend check failed: {type(error).__name__}: {error}")
+
 # Single production path: Pro Edit presentation + caption truth + rendered-MP4
 # QC + final gate always run. Unit / caption / render / QC suites run here;
 # the multi-minute end-to-end run_pipeline suites run only with MIMIR_VERIFY_E2E=1.
@@ -486,9 +501,9 @@ try:
               "test_pro_edit_planner", "test_pro_edit_filters", "test_pro_edit_captions", "test_pro_edit_captions_v4",
               "test_pro_edit_v5", "test_pro_edit_render", "test_pro_edit_current_root",
               "test_v6_caption_truth", "test_v6_camera", "test_intro_bounds", "test_final_qc", "test_caption_accuracy",
-              "test_caption_stack", "test_production_contracts", "test_speaker_colors"]
+              "test_caption_stack", "test_production_contracts", "test_speaker_colors", "test_render_backend"]
     if os.environ.get("MIMIR_VERIFY_E2E", "").strip() == "1":
-        suites.extend(["test_pro_edit_pipeline", "test_v6_pipeline"])
+        suites.extend(["test_pro_edit_pipeline", "test_v6_pipeline", "test_render_backend_pipeline"])
     stream = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()):
         suite = unittest.defaultTestLoader.loadTestsFromNames(suites)
@@ -526,4 +541,5 @@ print(" - speaker colours per voice (A -> B -> A, uncertain neutral, no one-word
 print(" - human speaker naming / identity engines: absent")
 print(" - V7 verified direct-address participant-name orthography: OK")
 print(" - intro exact-path + evidence-derived cold-open bounds: OK")
+print(" - shared render backend (auto hardware H.264, smoke-tested; libx264 fallback): OK")
 print(f" - single production path + rendered-MP4 QC contracts + tests: OK ({pro_edit_summary})")

@@ -20,6 +20,15 @@ Modes (there is ONE production path; modes only inject faults):
                    bounded repair drops the effect and publishes the re-checked base, DEGRADED
     fail_after_publish  the short reaches final/, then writing its review sheet fails ->
                    the state must say failed_after_publish and name the published file
+    hw_ok          a simulated hardware encoder (libx264 stand-in, other settings) is detected
+                   and encodes every render
+    cpu_after_hw   a normal rerun of the same source on the CPU encoder: render stages
+                   re-render, upstream analysis caches stay valid (same edit, other encoder)
+    hw_broken      a simulated hardware encoder passes detection but fails on real media:
+                   one CPU retry, then the CPU for the rest of the run
+
+Render backend: HARNESS_RENDER_BACKEND (default cpu, so byte-identity checks stay
+deterministic on GPU machines; set it to auto to exercise a real GPU encoder).
 """
 from __future__ import annotations
 
@@ -183,13 +192,31 @@ def install_fakes(video: Path) -> None:
         meme_discovery.discover_memes = discover_memes
 
 
+def install_fake_hardware(kind: str) -> None:
+    """Detection reports a working 'NVENC'; ``ok`` encodes with a libx264 stand-in
+    (other settings than the CPU profile), ``broken`` names an encoder FFmpeg lacks."""
+    from ai.editor import render_backend as rb
+
+    encoder = "libx264" if kind == "ok" else "h264_mimir_harness_missing"
+    rb.ENCODERS[rb.NVENC] = encoder
+    rb.HARDWARE_PROFILES[rb.NVENC] = (
+        rb.EncoderProfile(rb.NVENC, "hq", "harness_stand_in", "yuv420p", ("-preset", "fast", "-crf", "17")),)
+    caps = rb.RenderCapabilities(probed=True, ffmpeg_available=True, version="harness ffmpeg",
+                                 h264_encoders=("libx264", encoder))
+    rb.probe_capabilities = lambda: caps
+    rb.smoke_test = lambda profile: rb.SmokeResult(True, "harness: assumed working", 0.0)
+    os.environ["MIMIR_RENDER_BACKEND"] = "nvenc"
+    rb.reset()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
     parser.add_argument("--video", required=True)
     parser.add_argument("--mode", required=True, choices=["run", "rerender", "no_headline", "broken_render",
                                                           "stage_crash", "planner_down", "memes", "effect_broken",
-                                                          "fail_after_publish", "publish_copy_broken"])
+                                                          "fail_after_publish", "publish_copy_broken", "hw_ok",
+                                                          "cpu_after_hw", "hw_broken"])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -199,12 +226,15 @@ def main() -> int:
         if key.startswith("MIMIR_PRO_EDIT") or key in ("OPENAI_API_KEY", "MIMIR_V6", "MIMIR_CAPTION_ENTITIES"):
             os.environ.pop(key)
     os.environ["MIMIR_PRO_EDIT_PLANNER"] = "static" if args.mode == "planner_down" else "rules"
+    os.environ["MIMIR_RENDER_BACKEND"] = os.environ.get("HARNESS_RENDER_BACKEND", "cpu")
     if args.mode == "no_headline":
         os.environ["HARNESS_NO_HEADLINE"] = "1"
     if args.mode in ("memes", "effect_broken"):
         os.environ["HARNESS_MEMES"] = "1"
     video = Path(args.video).resolve()
     install_fakes(video)
+    if args.mode in ("hw_ok", "hw_broken"):
+        install_fake_hardware("ok" if args.mode == "hw_ok" else "broken")
     from ai import shorts_pipeline
 
     if args.mode == "broken_render":
@@ -277,6 +307,8 @@ def main() -> int:
                   keep_temp=True)
     if args.mode == "rerender":
         kwargs.update(force=False, rerender=True)
+    if args.mode == "cpu_after_hw":
+        kwargs.update(force=False)
     summary: dict = {"mode": args.mode}
     try:
         result = shorts_pipeline.run_pipeline(video, **kwargs)
@@ -326,6 +358,9 @@ def main() -> int:
             Path(state["stages"]["intro_final_base"]["path"]).stem + ".timeline.json").read_text(encoding="utf-8")),
         "meme_stages": {k: state["stages"].get(k, {}).get("status") for k in ("meme_analysis", "meme_discovery",
                                                                                "meme_render")},
+        "render_backend": state.get("render_backend"),
+        "render_profile": (state.get("profile") or {}).get("render"),
+        "pacing_clock": (state["stages"].get("pacing_cut", {}).get("media") or {}).get("clock"),
     })
     Path(args.out).write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return 0

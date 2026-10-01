@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ai.editor import render_backend
+
 
 # ============================================================
 # PATHS
@@ -23,10 +25,8 @@ OUTPUT_ROOT = (
 # CONFIG
 # ============================================================
 
-VIDEO_CODEC = "libx264"
-VIDEO_PRESET = "fast"
-VIDEO_CRF = "18"
-
+# Video encoder settings come from the shared render backend (libx264 preset
+# fast / CRF 18 / yuv420p on CPU, or a verified hardware H.264 encoder).
 CUTTER_REVISION = 9
 
 AUDIO_CODEC = "aac"
@@ -1279,6 +1279,64 @@ def calculate_expected_duration(
 # RENDER SINGLE CLIP
 # ============================================================
 
+def build_render_command(
+    *,
+    source_video: Path,
+    filter_complex: str,
+    video_output: str,
+    audio_output: str | None,
+    output_path: Path,
+    profile: render_backend.EncoderProfile,
+) -> list[str]:
+    """The pacing encode: one trim/concat graph, video encoder from the render backend."""
+
+    command = [
+        "ffmpeg",
+        "-y",
+
+        "-i",
+        str(
+            source_video
+        ),
+
+        "-filter_complex",
+        filter_complex,
+
+        "-map",
+        video_output,
+
+        *profile.video_args(),
+    ]
+
+    if audio_output is not None:
+
+        command.extend(
+            [
+                "-map",
+                audio_output,
+
+                "-c:a",
+                AUDIO_CODEC,
+
+                "-b:a",
+                AUDIO_BITRATE,
+            ]
+        )
+
+    command.extend(
+        [
+            "-movflags",
+            "+faststart",
+
+            str(
+                output_path
+            ),
+        ]
+    )
+
+    return command
+
+
 def render_clip(
     timeline_data: dict[str, Any],
     clip_timeline: dict[str, Any],
@@ -1508,94 +1566,61 @@ def render_clip(
     # FFMPEG COMMAND
     # --------------------------------------------------------
 
-    command = [
-        "ffmpeg",
-        "-y",
-
-        "-i",
-        str(
-            source_video
-        ),
-
-        "-filter_complex",
-        filter_complex,
-
-        "-map",
-        video_output,
-
-        "-c:v",
-        VIDEO_CODEC,
-
-        "-preset",
-        VIDEO_PRESET,
-
-        "-crf",
-        VIDEO_CRF,
-
-        "-pix_fmt",
-        "yuv420p",
-    ]
-
-    if audio_output is not None:
-
-        command.extend(
-            [
-                "-map",
-                audio_output,
-
-                "-c:a",
-                AUDIO_CODEC,
-
-                "-b:a",
-                AUDIO_BITRATE,
-            ]
-        )
-
-    command.extend(
-        [
-            "-movflags",
-            "+faststart",
-
-            str(
-                output_path
-            ),
-        ]
-    )
-
     print()
     print(
         "⚙️ Frame-accurate pacing edit render ediliyor..."
     )
 
-    try:
+    def encode(profile: render_backend.EncoderProfile) -> None:
 
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+        command = build_render_command(
+            source_video=source_video,
+            filter_complex=filter_complex,
+            video_output=video_output,
+            audio_output=audio_output,
+            output_path=output_path,
+            profile=profile,
         )
 
-    except FileNotFoundError as error:
+        try:
 
-        raise RuntimeError(
-            "FFmpeg bulunamadı."
-        ) from error
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
 
-    if result.returncode != 0:
+        except FileNotFoundError as error:
 
-        raise RuntimeError(
-            "FFmpeg pacing render hatası:\n\n"
-            + result.stderr
+            raise RuntimeError(
+                "FFmpeg bulunamadı."
+            ) from error
+
+        if result.returncode != 0:
+
+            raise RuntimeError(
+                "FFmpeg pacing render hatası:\n\n"
+                + result.stderr
+            )
+
+        if not output_path.exists():
+
+            raise RuntimeError(
+                "FFmpeg tamamlandı fakat çıktı oluşmadı."
+            )
+
+        render_backend.check_output(
+            output_path,
+            profile,
         )
 
-    if not output_path.exists():
-
-        raise RuntimeError(
-            "FFmpeg tamamlandı fakat çıktı oluşmadı."
-        )
+    render_backend.run_encode(
+        "pacing_cut",
+        encode,
+    )
 
     # --------------------------------------------------------
     # VERIFY DURATION

@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from ai.editor import render_backend
+
 try:
     import winreg
 except ImportError:
@@ -35,9 +37,9 @@ RENDERER_VERSION = 11
 # Renderer also enforces the analyzer quality gate.
 MIN_RENDER_SCORE = 8.0
 
-VIDEO_CODEC = "libx264"
-VIDEO_PRESET = "fast"
-VIDEO_CRF = "18"
+# Video encoder settings come from the shared render backend
+# (ai/editor/render_backend.py). The filter graph still normalizes both
+# sources to this pixel format before the hard restart.
 PIXEL_FORMAT = "yuv420p"
 
 # Final output is rebuilt from two sources:
@@ -1501,6 +1503,53 @@ def intro_quality_status(
     )
 
 
+def build_render_command(
+    *,
+    edited_clip: Path,
+    captioned_preview: Path,
+    filter_complex: str,
+    maps: list[str],
+    fps: float,
+    reencode_audio: bool,
+    output_path: Path,
+    profile: render_backend.EncoderProfile,
+) -> list[str]:
+    """Cold open + hard restart in one graph; video encoder from the render backend."""
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(edited_clip),
+        "-i",
+        str(captioned_preview),
+        "-filter_complex",
+        filter_complex,
+        *maps,
+        "-r",
+        f"{fps:.6f}",
+        *profile.video_args(),
+    ]
+
+    if reencode_audio:
+        command.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                AUDIO_BITRATE,
+            ]
+        )
+
+    command.extend(
+        [
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    )
+    return command
+
+
 def render_clip(
     intro_json_path: str | Path,
     intro_package: dict[str, Any],
@@ -1704,83 +1753,65 @@ def render_clip(
     print()
     print("🎞️ Render başlıyor...")
 
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(edited_clip),
-        "-i",
-        str(captioned_preview),
-        "-filter_complex",
-        filter_complex,
-        *maps,
-        "-r",
-        f"{fps:.6f}",
-        "-c:v",
-        VIDEO_CODEC,
-        "-preset",
-        VIDEO_PRESET,
-        "-crf",
-        VIDEO_CRF,
-        "-pix_fmt",
-        PIXEL_FORMAT,
-    ]
-
-    if bool(edited_info["has_audio"]) and bool(main_info["has_audio"]):
-        command.extend(
-            [
-                "-c:a",
-                "aac",
-                "-b:a",
-                AUDIO_BITRATE,
-            ]
-        )
-
+    both_have_audio = bool(edited_info["has_audio"]) and bool(main_info["has_audio"])
     temp_output = output_path.with_name(output_path.stem + ".rendering" + output_path.suffix)
-    command.extend(
-        [
-            "-movflags",
-            "+faststart",
-            str(temp_output),
-        ]
-    )
 
-    try:
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as error:
-        raise RuntimeError("FFmpeg bulunamadı.") from error
-
-    if result.returncode != 0:
-        temp_output.unlink(missing_ok=True)
-        raise RuntimeError(
-            "FFmpeg intro render hatası:\n\n"
-            + result.stderr[-4000:]
+    def encode(profile: render_backend.EncoderProfile) -> float:
+        command = build_render_command(
+            edited_clip=edited_clip,
+            captioned_preview=captioned_preview,
+            filter_complex=filter_complex,
+            maps=maps,
+            fps=fps,
+            reencode_audio=both_have_audio,
+            output_path=temp_output,
+            profile=profile,
         )
 
-    if not temp_output.exists():
-        raise RuntimeError("Final intro preview oluşmadı.")
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as error:
+            raise RuntimeError("FFmpeg bulunamadı.") from error
 
-    actual_info = get_video_info(temp_output)
-    actual_duration = float(actual_info["duration"])
-    difference = abs(actual_duration - expected_duration)
+        if result.returncode != 0:
+            temp_output.unlink(missing_ok=True)
+            raise RuntimeError(
+                "FFmpeg intro render hatası:\n\n"
+                + result.stderr[-4000:]
+            )
 
-    print()
-    print(f"✅ Expected final : {expected_duration:.3f}s")
-    print(f"✅ Actual final   : {actual_duration:.3f}s")
+        if not temp_output.exists():
+            raise RuntimeError("Final intro preview oluşmadı.")
 
-    tolerance = 2.0 / max(1.0, fps) + 0.05
-    if difference > tolerance:
-        temp_output.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Intro composition clock mismatch: rendered {actual_duration:.3f}s, expected "
-            f"{expected_duration:.3f}s (intro {teaser_duration:.3f}s + main {main_effective_duration:.3f}s)."
-        )
+        actual_info = get_video_info(temp_output)
+        actual_duration = float(actual_info["duration"])
+        difference = abs(actual_duration - expected_duration)
+
+        print()
+        print(f"✅ Expected final : {expected_duration:.3f}s")
+        print(f"✅ Actual final   : {actual_duration:.3f}s")
+
+        tolerance = 2.0 / max(1.0, fps) + 0.05
+        if difference > tolerance:
+            temp_output.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Intro composition clock mismatch: rendered {actual_duration:.3f}s, expected "
+                f"{expected_duration:.3f}s (intro {teaser_duration:.3f}s + main {main_effective_duration:.3f}s)."
+            )
+        try:
+            render_backend.check_output(temp_output, profile)
+        except render_backend.HardwareOutputError:
+            temp_output.unlink(missing_ok=True)
+            raise
+        return actual_duration
+
+    actual_duration = render_backend.run_encode("intro_render", encode)
 
     os.replace(temp_output, output_path)
     write_final_timeline(

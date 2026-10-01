@@ -637,11 +637,15 @@ def run_caption_truth(
     max_escalations: int = MAX_ESCALATIONS,
     truth_path: str | Path | None = None,
     judge: Any = "default",
+    clip_fingerprint: Mapping[str, Any] | None = None,
 ) -> TruthResult:
     """Resolve + escalate + judge + freeze. Rewrites the profile only when it changes.
 
     ``judge``: the caption judge for undecided verified-name candidates
-    ("default" = caption_judge.default_judge(); None = no judge)."""
+    ("default" = caption_judge.default_judge(); None = no judge).
+    ``clip_fingerprint``: the paced clip's identity for the escalation cache when
+    the pipeline proved a re-render is the same edit with identical audio (only
+    the video encoder differs); default = the file's own name/size/mtime."""
     profile_file = Path(profile_path)
     target = Path(truth_path) if truth_path else truth_path_for(profile_file)
     profile = json.loads(profile_file.read_text(encoding="utf-8"))
@@ -666,7 +670,9 @@ def run_caption_truth(
     first = name_lock.lock_participant_names(profile, extra_entities=extras)
     spans = plan_escalations(first.audit, first.words, max_spans=max_escalations)
     clip_fp: dict[str, Any] = {}
-    if edited_clip_path is not None and Path(edited_clip_path).is_file():
+    if clip_fingerprint is not None:
+        clip_fp = dict(clip_fingerprint)
+    elif edited_clip_path is not None and Path(edited_clip_path).is_file():
         clip_fp = _file_fingerprint(Path(edited_clip_path))
     if audio_source is None and edited_clip_path is not None and Path(edited_clip_path).is_file():
         clip = Path(edited_clip_path)

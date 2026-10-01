@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ai.editor import render_backend
+
 
 # ============================================================
 # PATHS
@@ -35,12 +37,8 @@ PREVIEW_DIR = (
 # CONFIG
 # ============================================================
 
-VIDEO_CODEC = "libx264"
-VIDEO_PRESET = "fast"
-VIDEO_CRF = "18"
-
-PIXEL_FORMAT = "yuv420p"
-
+# Video encoder settings come from the shared render backend
+# (ai/editor/render_backend.py); audio is stream-copied.
 DURATION_WARNING_TOLERANCE = 0.20
 
 
@@ -463,6 +461,43 @@ def get_output_path(
 # RENDER
 # ============================================================
 
+def build_render_command(
+    *,
+    edited_clip: Path,
+    subtitle_filter: str,
+    output_path: Path,
+    profile: render_backend.EncoderProfile,
+) -> list[str]:
+    """Caption burn-in: libass on the CPU, video encoder from the render backend."""
+
+    return [
+        "ffmpeg",
+        "-y",
+
+        "-i",
+        str(
+            edited_clip
+        ),
+
+        "-vf",
+        subtitle_filter,
+
+        *profile.video_args(),
+
+        # Video tekrar encode olmak zorunda,
+        # ama sesi tekrar encode etmeye gerek yok.
+        "-c:a",
+        "copy",
+
+        "-movflags",
+        "+faststart",
+
+        str(
+            output_path
+        ),
+    ]
+
+
 def render_captioned_clip(
     timeline_path: str | Path,
     clip_index: int,
@@ -604,77 +639,59 @@ def render_captioned_clip(
     # FFMPEG
     # --------------------------------------------------------
 
-    command = [
-        "ffmpeg",
-        "-y",
-
-        "-i",
-        str(
-            edited_clip
-        ),
-
-        "-vf",
-        subtitle_filter,
-
-        "-c:v",
-        VIDEO_CODEC,
-
-        "-preset",
-        VIDEO_PRESET,
-
-        "-crf",
-        VIDEO_CRF,
-
-        "-pix_fmt",
-        PIXEL_FORMAT,
-
-        # Video tekrar encode olmak zorunda,
-        # ama sesi tekrar encode etmeye gerek yok.
-        "-c:a",
-        "copy",
-
-        "-movflags",
-        "+faststart",
-
-        str(
-            output_path
-        ),
-    ]
-
     print()
     print(
         "📝 Dinamik altyazılar videoya basılıyor..."
     )
 
-    try:
+    def encode(profile: render_backend.EncoderProfile) -> None:
 
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+        command = build_render_command(
+            edited_clip=edited_clip,
+            subtitle_filter=subtitle_filter,
+            output_path=output_path,
+            profile=profile,
         )
 
-    except FileNotFoundError as error:
+        try:
 
-        raise RuntimeError(
-            "FFmpeg bulunamadı."
-        ) from error
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
 
-    if result.returncode != 0:
+        except FileNotFoundError as error:
 
-        raise RuntimeError(
-            "FFmpeg caption render hatası:\n\n"
-            + result.stderr
+            raise RuntimeError(
+                "FFmpeg bulunamadı."
+            ) from error
+
+        if result.returncode != 0:
+
+            raise RuntimeError(
+                "FFmpeg caption render hatası:\n\n"
+                + result.stderr
+            )
+
+        if not output_path.exists():
+
+            raise RuntimeError(
+                "Render tamamlandı fakat çıktı oluşmadı."
+            )
+
+        render_backend.check_output(
+            output_path,
+            profile,
         )
 
-    if not output_path.exists():
-
-        raise RuntimeError(
-            "Render tamamlandı fakat çıktı oluşmadı."
-        )
+    render_backend.run_encode(
+        "caption_render",
+        encode,
+    )
 
     # --------------------------------------------------------
     # OUTPUT VERIFY

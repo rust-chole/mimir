@@ -127,5 +127,14 @@ FFmpeg/ffprobe (with libass) must be on `PATH`. OpenCV (in `requirements.txt`) i
 required: the camera and final QC are proven in pixels. Local SFX files go in
 `meme_library/local_sfx/`.
 
+Video encoding picks the fastest safe H.264 encoder by itself
+(`MIMIR_RENDER_BACKEND=auto`, nothing to configure): it asks the installed FFmpeg which
+of NVIDIA NVENC, AMD AMF, Intel Quick Sync or Apple VideoToolbox it has, proves the
+candidate with a tiny test encode, and otherwise uses `libx264` on the CPU. Captions,
+camera and cuts stay CPU filters; only the encode moves. A hardware encode that fails
+mid-run is retried once on the CPU and the hardware encoder is skipped for the rest of
+that run. The startup summary and the run state (`render_backend`, `profile.render`)
+say which encoder rendered each stage. The same final QC decides either way.
+
 Development: `python -m pytest tests` (the end-to-end suites render real media;
 `MIMIR_VERIFY_E2E=1 python verify_unified_clean.py` runs everything).

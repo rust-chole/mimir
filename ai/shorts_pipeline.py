@@ -41,6 +41,7 @@ from ai.editor import (
     pacing,
     pacing_cutter,
     participant_name_lock,
+    render_backend,
     speaker_caption_support,
     speaker_role_judge,
     teaser_analyzer,
@@ -271,6 +272,12 @@ def _print_friendly_result(result: dict[str, Any]) -> None:
     else:
         print(f"   İşlem süresi: {_human_time(float(result.get('run_seconds', 0.0)))}")
     print(f"   Uyarı       : {warning_count}")
+    render_line = render_backend.describe_usage(result.get("render_backend"))
+    if render_line:
+        print(f"   Render      : {render_line}")
+        backend_data = result.get("render_backend")
+        if isinstance(backend_data, dict) and backend_data.get("fallback_reason"):
+            print(f"      ↳ {' '.join(str(backend_data['fallback_reason']).split())[:220]}")
     if result.get("human_review"):
         print(f"🧑‍⚖️ Son onay insanda: {result['human_review']}")
 
@@ -360,17 +367,32 @@ def _contains_clip(path: str | Path, list_key: str, clip_index: int, version: in
     return _package_clip(path, list_key, clip_index) is not None
 
 
-def _file_fingerprint(path: str | Path) -> dict[str, Any]:
+# Semantic stages (captions, caption truth, visual support, teaser / intro
+# analysis, Pro Edit planning) fingerprint the paced clip. When a re-render is
+# the SAME edit (pacing signature without the render backend) with the SAME
+# audio packets and video clock, only the video encoder differs; the paced clip
+# is then pinned to the fingerprint those stages recorded, so a render-backend
+# change (or a non-bit-exact hardware encoder) never re-bills upstream analysis.
+# Render stages always use the actual file (``actual=True``). Reset per run.
+_ANALYSIS_PINS: dict[str, dict[str, Any]] = {}
+
+
+def _file_fingerprint(path: str | Path, *, actual: bool = False) -> dict[str, Any]:
     path = Path(path).resolve()
     if not path.exists():
         return {"path": str(path), "exists": False}
     stat = path.stat()
-    return {
+    fingerprint = {
         "path": str(path),
         "exists": True,
         "size": int(stat.st_size),
         "mtime_ns": int(stat.st_mtime_ns),
     }
+    if not actual:
+        pin = _ANALYSIS_PINS.get(str(path))
+        if pin is not None and pin.get("actual") == {"size": fingerprint["size"], "mtime_ns": fingerprint["mtime_ns"]}:
+            return dict(pin["fingerprint"])
+    return fingerprint
 
 
 _MODULE_HASHES: dict[tuple[str, int, int], str] = {}
@@ -412,16 +434,30 @@ def _stage_signature(
     inputs: Iterable[str | Path] = (),
     modules: Iterable[Any] = (),
     options: dict[str, Any] | None = None,
+    actual_inputs: bool = False,
 ) -> str:
     return _hash(
         {
             "pipeline_version": PIPELINE_VERSION,
             "stage": name,
-            "inputs": [_file_fingerprint(path) for path in inputs],
+            "inputs": [_file_fingerprint(path, actual=actual_inputs) for path in inputs],
             "modules": [_module_fingerprint(module) for module in modules],
             "options": options or {},
         }
     )
+
+
+def _render_signature(
+    name: str,
+    *,
+    backend: dict[str, Any],
+    inputs: Iterable[str | Path] = (),
+    modules: Iterable[Any] = (),
+    options: dict[str, Any] | None = None,
+) -> str:
+    """Render-stage identity: actual input files + the render backend that encodes (or encoded) it."""
+    return _stage_signature(name, inputs=inputs, modules=modules,
+                            options={**(options or {}), "render_backend": backend}, actual_inputs=True)
 
 
 def _module_paths(modules: Iterable[Any]) -> list[Path]:
@@ -776,13 +812,57 @@ _PROFILE_LABELS = {
     "pacing_encode_worker": "Pacing encode (worker)",
     "visual_support_worker": "Visual support (worker)",
     "caption_render_worker": "Caption render (worker)",
+    "pro_edit_intro_worker": "Pro Edit intro camera (worker)",
+    "final_qc": "Final QC",
+    "final_qc_repair": "Final QC (after repair)",
 }
+
+# Render comparison rows: (label, StageBook stage, background worker key, backend stage keys).
+_RENDER_PROFILE_ROWS = (
+    ("Pacing encode", "pacing_cut", "pacing_encode_worker", ("pacing_cut",)),
+    ("Caption / Pro Edit render", "caption_render", "caption_render_worker", ("pro_edit_main", "caption_render")),
+    ("Pro Edit intro camera", None, "pro_edit_intro_worker", ("pro_edit_intro",)),
+    ("Intro render", "intro_final_base", None, ("intro_render",)),
+    ("Meme render", "meme_render", None, ("meme_render",)),
+    ("Final QC", None, "final_qc", ()),
+)
+
+
+def _render_profile(
+    stage_wall: dict[str, float],
+    stage_status: dict[str, str],
+    background_tasks: dict[str, float],
+    run_seconds: float,
+    backend_report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Existing stage / worker wall times side by side with the encoder that actually ran."""
+    backend_stages = (backend_report or {}).get("stages") or {}
+    rows: list[dict[str, Any]] = []
+    for label, stage_key, worker_key, backend_keys in _RENDER_PROFILE_ROWS:
+        row: dict[str, Any] = {"label": label}
+        if stage_key is not None and stage_key in stage_wall:
+            row["stage_wall_seconds"] = stage_wall[stage_key]
+            row["status"] = stage_status.get(stage_key, "")
+        if worker_key is not None and worker_key in background_tasks:
+            row["worker_seconds"] = round(float(background_tasks[worker_key]), 3)
+        used = [backend_stages[key] for key in backend_keys if isinstance(backend_stages.get(key), dict)]
+        if used:
+            backends = sorted({name for item in used for name in item.get("backends", [])})
+            row["backend"] = backends[0] if len(backends) == 1 else ("mixed" if backends else "failed")
+            row["encoder_seconds"] = round(sum(float(item.get("seconds", 0.0)) for item in used), 3)
+            row["fallback"] = any(item.get("fallback") for item in used)
+        elif backend_keys:
+            row["backend"] = "not encoded (cached, copied or skipped)"
+        if len(row) > 1:
+            rows.append(row)
+    return {"rows": rows, "total_seconds": round(max(0.0, float(run_seconds)), 3)}
 
 
 def _build_profile(
     state: dict[str, Any],
     run_seconds: float,
     background_tasks: dict[str, float],
+    backend_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stage_wall: dict[str, float] = {}
     stage_status: dict[str, str] = {}
@@ -828,6 +908,7 @@ def _build_profile(
             for key, value in background_tasks.items()
         },
         "slowest": candidates[:8],
+        "render": _render_profile(stage_wall, stage_status, background_tasks, run_seconds, backend_report),
         "note": (
             "Stage wall süreleri paralel çalışan işleri overlap nedeniyle çift sayabilir; "
             "background_worker_seconds gerçek worker sürelerini ayrıca gösterir."
@@ -865,6 +946,7 @@ def _print_header(
         print(f"🎥 Pro Edit: AÇIK ({pro_edit})")
     if v6 is not None:
         print(f"🧪 MIMIR V6: AÇIK ({v6})")
+    render_backend.print_summary_once()
     model_config.print_model_plan()
 
 
@@ -1526,6 +1608,120 @@ def _keep_render_clock(path: Path, previous: dict[str, Any], signature: str) -> 
     return identity
 
 
+def _audio_packet_digest(path: Path) -> str | None:
+    """SHA-256 of the first audio stream's packets (stream copy; independent of the video encoder)."""
+    try:
+        completed = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(path), "-map", "0:a:0",
+             "-c", "copy", "-f", "hash", "-hash", "sha256", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (completed.stdout or "").strip()
+    if completed.returncode != 0 or not text.upper().startswith("SHA256="):
+        return None
+    return text.split("=", 1)[1].strip().lower()
+
+
+def _paced_analysis_identity(path: Path, edit_signature: str) -> dict[str, Any] | None:
+    """What semantic stages consume from the paced clip, without the video encoder's bits:
+    the edit (pacing signature without render backend), the audio packets and the video clock."""
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "stream=codec_type,width,height,r_frame_rate,nb_frames,start_time", "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
+        if completed.returncode != 0:
+            return None
+        streams = json.loads(completed.stdout or "{}").get("streams") or []
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        return None
+    video = next((row for row in streams if isinstance(row, dict) and row.get("codec_type") == "video"), None)
+    audio = next((row for row in streams if isinstance(row, dict) and row.get("codec_type") == "audio"), None)
+    if video is None or not str(video.get("nb_frames", "")).isdigit():
+        return None
+
+    def start(row: dict[str, Any]) -> float | None:
+        try:
+            return round(float(row.get("start_time")), 3)
+        except (TypeError, ValueError):
+            return None
+
+    identity: dict[str, Any] = {
+        "edit": edit_signature,
+        "video": {"width": int(video.get("width") or 0), "height": int(video.get("height") or 0),
+                  "rate": str(video.get("r_frame_rate", "")), "frames": int(video["nb_frames"]),
+                  "start": start(video)},
+        "audio": None,
+    }
+    if audio is not None:
+        digest = _audio_packet_digest(path)
+        if digest is None:
+            return None
+        identity["audio"] = {"sha256": digest, "start": start(audio)}
+    return identity
+
+
+def _valid_pin(fingerprint: Any, path: Path) -> bool:
+    return (isinstance(fingerprint, dict) and fingerprint.get("exists") is True
+            and fingerprint.get("path") == str(path.resolve())
+            and isinstance(fingerprint.get("size"), int) and isinstance(fingerprint.get("mtime_ns"), int))
+
+
+def _settle_paced_analysis(
+    path: Path,
+    previous: dict[str, Any],
+    edit_signature: str,
+    media: dict[str, Any],
+    *,
+    rendered: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Analysis identity + the fingerprint semantic stages see for the paced clip (pins it if equivalent).
+
+    ``rendered``: the clip was (re-)encoded in this run; otherwise it was reused
+    unchanged and keeps the previous run's analysis fingerprint."""
+    path = path.resolve()
+    actual = {"path": str(path), "exists": True, "size": int(media["size"]), "mtime_ns": int(media["mtime_ns"])}
+    previous_fp = previous.get("analysis_fingerprint")
+    previous_analysis = previous.get("analysis") if isinstance(previous.get("analysis"), dict) else None
+    previous_media = previous.get("media") if isinstance(previous.get("media"), dict) else {}
+    same_path = bool(previous.get("path")) and Path(str(previous.get("path"))).resolve() == path
+    pinned = actual
+    if not rendered:
+        unchanged = (previous_media.get("size") == actual["size"]
+                     and previous_media.get("mtime_ns") == actual["mtime_ns"])
+        analysis = previous_analysis if unchanged and previous_analysis else _paced_analysis_identity(
+            path, edit_signature)
+        if unchanged and same_path and _valid_pin(previous_fp, path):
+            pinned = dict(previous_fp)
+    else:
+        analysis = _paced_analysis_identity(path, edit_signature)
+        if media.get("clock") == "restored_identical_render":
+            if _valid_pin(previous_fp, path):
+                pinned = dict(previous_fp)
+        elif (same_path and analysis is not None and previous_analysis == analysis
+              and _valid_pin(previous_fp, path)):
+            pinned = dict(previous_fp)
+            media["clock"] = "pinned_equivalent_render"
+    if pinned != actual:
+        _ANALYSIS_PINS[str(path)] = {"actual": {"size": actual["size"], "mtime_ns": actual["mtime_ns"]},
+                                     "fingerprint": dict(pinned)}
+    return analysis, pinned
+
+
+def _caption_truth_clip_fingerprint(path: Path) -> dict[str, Any] | None:
+    """The pinned paced-clip identity in caption_truth's own fingerprint shape (None: not pinned)."""
+    pin = _ANALYSIS_PINS.get(str(Path(path).resolve()))
+    if pin is None:
+        return None
+    current = _file_fingerprint(path, actual=True)
+    if pin.get("actual") != {"size": current.get("size"), "mtime_ns": current.get("mtime_ns")}:
+        return None
+    fingerprint = pin["fingerprint"]
+    return {"name": Path(str(fingerprint["path"])).name, "size": int(fingerprint["size"]),
+            "mtime_ns": int(fingerprint["mtime_ns"])}
+
+
 def _meme_slots(slot_path: Path, clip_index: int) -> list[dict[str, Any]]:
     clip = _package_clip(slot_path, "clips", clip_index)
     if not isinstance(clip, dict):
@@ -1745,6 +1941,7 @@ def _code_signature(video_brain_enabled: bool, video_brain_model: str) -> str:
         meme_analyzer,
         meme_discovery,
         meme_renderer,
+        render_backend,
         final_qc,
         human_review,
         v6_runtime,
@@ -1773,6 +1970,7 @@ def _request_signature(
     enable_video_brain: bool,
     video_brain_model: str,
     presentation_signature: str,
+    render_identity: dict[str, Any] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "pipeline_version": PIPELINE_VERSION,
@@ -1785,6 +1983,9 @@ def _request_signature(
         "code_signature": _code_signature(enable_video_brain, video_brain_model),
     }
     payload["presentation"] = presentation_signature
+    if render_identity is not None:
+        # Which encoder produces the short (and whether it degraded at run time).
+        payload["render_backend"] = render_identity
     return _hash(payload)
 
 
@@ -1828,6 +2029,7 @@ def _fast_resume(
         "fast_resume": True,
         "status": str(state.get("publish_status", "published")),
         "human_review": state.get("human_review"),
+        "render_backend": state.get("render_backend"),
         **({"v6": state["v6"].get("summary", {})} if isinstance(state.get("v6"), dict) else {}),
     }
 
@@ -1968,8 +2170,12 @@ def _run_caption_truth_v6(
                     elapsed=time.perf_counter() - started)
         return caption_path, truth_path
     try:
+        # A pinned paced clip (same edit, other video encoder) keeps the clip
+        # identity the escalation cache recorded.
+        pinned_clip = _caption_truth_clip_fingerprint(edited_clip_path)
         result = truth_mod.run_caption_truth(profile_path, edited_clip_path=edited_clip_path,
-                                             creator_name=creator_name, entities=entities)
+                                             creator_name=creator_name, entities=entities,
+                                             **({"clip_fingerprint": pinned_clip} if pinned_clip else {}))
         if result.changed_text:
             caption_path = Path(
                 captions.create_clip_captions(
@@ -2207,6 +2413,10 @@ def run_pipeline(
         except BaseException as error:
             if book_out:
                 book = book_out[0]
+                try:
+                    book.state["render_backend"] = render_backend.report()
+                except Exception:
+                    pass
                 book.close_run(error)
                 if book.state.get("publish_status") in {"published", "published_degraded"}:
                     try:
@@ -2234,6 +2444,9 @@ def _run_pipeline(
     rerender = bool(rerender or force_v6)
     run_started = time.perf_counter()
     runtime_profiler = RuntimeProfiler()
+    _ANALYSIS_PINS.clear()
+    # Hardware detection runs once per process; health marks and encoder usage are per run.
+    render_backend.begin_run()
     creator_name = str(creator_name).strip() if creator_name else None
 
     config_vb, video_brain_model = _video_brain_config()
@@ -2270,6 +2483,7 @@ def _run_pipeline(
         enable_video_brain=resolved_vb,
         video_brain_model=video_brain_model,
         presentation_signature=presentation_sig,
+        render_identity=render_backend.run_identity(),
     )
 
     if not force and not rerender and same_source:
@@ -2303,6 +2517,7 @@ def _run_pipeline(
     state["video_brain_report"] = None
     state["final_output"] = None
     state["run_status"] = "running"
+    state["render_backend"] = render_backend.report()
 
     book = StageBook(
         state_path,
@@ -2806,12 +3021,15 @@ def _run_pipeline(
     # scheduling overlaps.
     existing_edited = _resolve_edited_clip(expected_edited)
     previous_pacing = dict((state.get("stages") or {}).get("pacing_cut") or {})
-    pacing_cut_sig = _stage_signature(
-        "pacing_cut",
+    pacing_cut_spec: dict[str, Any] = dict(
         inputs=[timeline_path],
         modules=[pacing_cutter],
         options={"clip_index": selected_clip_index},
     )
+    # The EDIT (which frames / samples) vs. its RENDER (which encoder): semantic
+    # stages depend on the former only (see _settle_paced_analysis).
+    pacing_edit_sig = _stage_signature("pacing_cut", **pacing_cut_spec)
+    pacing_cut_sig = _render_signature("pacing_cut", backend=render_backend.signature_payload(), **pacing_cut_spec)
     pacing_cut_cached = book.reusable(
         "pacing_cut",
         pacing_cut_sig,
@@ -2927,6 +3145,8 @@ def _run_pipeline(
         if not (paced_media and paced_media.get("size") == paced_stat.st_size
                 and paced_media.get("mtime_ns") == paced_stat.st_mtime_ns):
             paced_media = _media_identity(edited_clip_path)
+        paced_analysis, paced_analysis_fp = _settle_paced_analysis(
+            edited_clip_path, previous_pacing, pacing_edit_sig, paced_media, rendered=False)
         book.record(
             "pacing_cut",
             "skipped",
@@ -2954,9 +3174,18 @@ def _run_pipeline(
                 raise ShortsPipelineError("Edited clip oluşmadı.")
             edited_clip_path = recovered
 
+        # Recorded under the encoder that ACTUALLY produced it (a runtime CPU
+        # fallback is never cached as a hardware render).
+        pacing_cut_sig = _render_signature("pacing_cut", backend=render_backend.stage_payload("pacing_cut"),
+                                           **pacing_cut_spec)
         paced_media = _keep_render_clock(edited_clip_path, previous_pacing, pacing_cut_sig)
+        paced_analysis, paced_analysis_fp = _settle_paced_analysis(
+            edited_clip_path, previous_pacing, pacing_edit_sig, paced_media, rendered=True)
         if paced_media.get("clock") == "restored_identical_render":
             print("♻️ Paced clip byte-identical to the cached render; downstream caches stay valid.")
+        elif paced_media.get("clock") == "pinned_equivalent_render":
+            print("♻️ Paced clip is the same edit (identical audio + frame clock; only the video encoder differs); "
+                  "upstream analysis caches stay valid.")
         _stage_done(edited_clip_path)
         book.record(
             "pacing_cut",
@@ -2966,8 +3195,11 @@ def _run_pipeline(
             elapsed=time.perf_counter() - started,
         )
     # Content identity of the paced clip: lets a later re-render (after the temp
-    # cleanup) prove it produced the same media.
+    # cleanup) prove it produced the same media (bytes) or the same edit
+    # (encoder-independent analysis identity).
     book.state["stages"]["pacing_cut"]["media"] = paced_media
+    book.state["stages"]["pacing_cut"]["analysis"] = paced_analysis
+    book.state["stages"]["pacing_cut"]["analysis_fingerprint"] = paced_analysis_fp
     book.save()
 
     temp_candidates.append(edited_clip_path)
@@ -3209,12 +3441,13 @@ def _run_pipeline(
     captioned_preview_path = Path(
         caption_renderer.get_output_path(timeline_data, selected_timeline)
     ).resolve()
-    caption_render_sig = _stage_signature(
-        "caption_render",
+    caption_render_spec: dict[str, Any] = dict(
         inputs=[edited_clip_path, caption_path, timeline_path],
         modules=[caption_renderer],
         options={"clip_index": selected_clip_index},
     )
+    caption_render_sig = _render_signature("caption_render", backend=render_backend.signature_payload(),
+                                           **caption_render_spec)
 
     def _start_caption_render(
         preview_path: Path,
@@ -3712,6 +3945,7 @@ def _run_pipeline(
     # then trims the same range, so selection/order/handoff are unchanged.
     baseline_preview_path = captioned_preview_path
     baseline_render_sig = caption_render_sig
+    baseline_render_spec = caption_render_spec
     baseline_render_job = caption_render_job
     render_modules: list[Any] = [caption_renderer]
     try:
@@ -3796,8 +4030,7 @@ def _run_pipeline(
 
         if pro_prep.ready:
             captioned_preview_path = pro_prep.output_path
-            caption_render_sig = _stage_signature(
-                "caption_render",
+            caption_render_spec = dict(
                 inputs=[edited_clip_path, caption_path, timeline_path],
                 modules=[caption_renderer, *pro_edit_pkg.MODULES],
                 options={
@@ -3805,6 +4038,8 @@ def _run_pipeline(
                     "pro_edit": pro_prep.render_options,
                 },
             )
+            caption_render_sig = _render_signature("caption_render", backend=render_backend.signature_payload(),
+                                                   **caption_render_spec)
             caption_render_job = functools.partial(
                 pro_stage.render_with_fallback,
                 pro_prep,
@@ -3819,6 +4054,7 @@ def _run_pipeline(
     except Exception as error:  # Pro Edit must never be a single point of failure
         captioned_preview_path = baseline_preview_path
         caption_render_sig = baseline_render_sig
+        caption_render_spec = baseline_render_spec
         caption_render_job = baseline_render_job
         render_modules = [caption_renderer]
         pro_render_outcome.clear()
@@ -3897,6 +4133,9 @@ def _run_pipeline(
             )
         if pro_render_outcome and isinstance(state.get("pro_edit"), dict):
             state["pro_edit"]["render"] = dict(pro_render_outcome)
+        caption_render_sig = _render_signature(
+            "caption_render", backend=render_backend.stage_payload("pro_edit_main", "caption_render"),
+            **caption_render_spec)
         _stage_done(captioned_preview_path)
         book.record(
             "caption_render",
@@ -3954,8 +4193,7 @@ def _run_pipeline(
             elif intro_source_path != edited_clip_path and pro_prep_ref is not None:
                 v6_intro_proof = pro_edit_pkg.stage.prove_intro_render(pro_prep_ref, intro_source_path)
 
-    intro_render_sig = _stage_signature(
-        "intro_final_base",
+    intro_render_spec: dict[str, Any] = dict(
         inputs=[
             intro_path,
             teaser_path,
@@ -3974,6 +4212,8 @@ def _run_pipeline(
             ),
         },
     )
+    intro_render_sig = _render_signature("intro_final_base", backend=render_backend.signature_payload(),
+                                         **intro_render_spec)
 
     expected_intro_video = Path(
         intro_renderer.get_output_path(
@@ -4036,6 +4276,9 @@ def _run_pipeline(
             clip_index=selected_clip_index,
         )
 
+    # The encoder that actually composed the base (incl. a Pro Edit intro recovery re-render).
+    intro_render_sig = _render_signature("intro_final_base", backend=render_backend.stage_payload("intro_render"),
+                                         **intro_render_spec)
     _stage_done(final_preview_path)
     book.record(
         "intro_final_base",
@@ -4269,8 +4512,7 @@ def _run_pipeline(
     started = _stage_start(14, "Final meme render")
     final_source = final_preview_path
 
-    meme_render_sig = _stage_signature(
-        "meme_render",
+    meme_render_spec: dict[str, Any] = dict(
         inputs=[meme_discovery_path, final_preview_path, timeline_path],
         modules=[meme_renderer],
         options={
@@ -4278,6 +4520,8 @@ def _run_pipeline(
             "selected_meme_count": selected_meme_count,
         },
     )
+    meme_render_sig = _render_signature("meme_render", backend=render_backend.signature_payload(),
+                                        **meme_render_spec)
 
     if not enable_memes or selected_meme_count <= 0:
         print("⏭️ Render edilecek meme yok; base preview kullanılıyor.")
@@ -4338,6 +4582,8 @@ def _run_pipeline(
                 if not _valid_file(final_source, MIN_VIDEO_BYTES):
                     raise RuntimeError("Meme renderer output dosyası geçersiz.")
 
+                meme_render_sig = _render_signature(
+                    "meme_render", backend=render_backend.stage_payload("meme_render"), **meme_render_spec)
                 _stage_done(final_source)
                 book.record(
                     "meme_render",
@@ -4398,10 +4644,11 @@ def _run_pipeline(
         start = float(event.get("start", 0.0))
         return [(start, start + float(event.get("duration", 0.0)))]
 
-    def _evaluate(candidate: Path, main_render: Path, doc: dict[str, Any]) -> list[dict[str, Any]]:
+    def _evaluate(candidate: Path, main_render: Path, doc: dict[str, Any],
+                  timing_key: str = "final_qc") -> list[dict[str, Any]]:
         context = final_qc.QcContext(candidate=candidate, timeline_doc=doc, main_render=main_render,
                                      effect_windows=_effect_windows(candidate), **qc_common)
-        rows = final_qc.run_final_qc(context)
+        rows = runtime_profiler.timed(timing_key, final_qc.run_final_qc, context)
         for row in rows:
             mark = "✅" if row["status"] == "pass" else ("⚠️" if row["status"] == "warn" else "❌")
             print(f"   {mark} {row['check']}: {row['detail']}")
@@ -4443,7 +4690,7 @@ def _run_pipeline(
                 selected_meme_count = 0
                 v6_run.fallback("memes", "deterministic repair: effect removed after the effect candidate failed "
                                 + ", ".join(sorted(failed_checks)), "effect_dropped")
-            qc_rows = _evaluate(candidate, main_render_used, candidate_doc)
+            qc_rows = _evaluate(candidate, main_render_used, candidate_doc, "final_qc_repair")
         except Exception as error:
             book.warn(f"Deterministic repair başarısız: {type(error).__name__}: {error}")
             qc_rows = [*qc_rows, final_qc._check("deterministic_repair", "fail",
@@ -4471,6 +4718,7 @@ def _run_pipeline(
     )
     gate = dict(v6_run.gate)
     state["final_qc"] = {"checks": qc_rows, "repairs": repairs}
+    state["render_backend"] = render_backend.report()
     publish_sig = _stage_signature("publish", inputs=[candidate], options={"gate": gate.get("status")})
     if gate.get("status") == v6_runtime.GATE_FAILED:
         rejected = _reject_candidate(candidate, video_path, gate, state)
@@ -4537,10 +4785,26 @@ def _run_pipeline(
         "file_size_mb": round(_file_size_mb(published_path), 3),
     }
 
+    backend_report = render_backend.report()
+    state["render_backend"] = backend_report
+    if backend_report.get("unhealthy"):
+        # A hardware encoder failed at run time: the next run must not fast-resume
+        # this output as if the selected backend had produced it.
+        state["request_signature"] = _request_signature(
+            source,
+            creator_name=creator_name,
+            clip_index=clip_index,
+            enable_memes=bool(enable_memes),
+            enable_video_brain=resolved_vb,
+            video_brain_model=video_brain_model,
+            presentation_signature=presentation_sig,
+            render_identity=render_backend.run_identity(),
+        )
     profile = _build_profile(
         state=state,
         run_seconds=run_seconds,
         background_tasks=runtime_profiler.snapshot(),
+        backend_report=backend_report,
     )
     state["last_run_seconds"] = round(run_seconds, 3)
     state["summary_stats"] = summary_stats
@@ -4592,6 +4856,7 @@ def _run_pipeline(
         "status": state.get("publish_status", "published"),
         "final_qc": state.get("final_qc"),
         "human_review": state.get("human_review"),
+        "render_backend": state.get("render_backend"),
     }
     if isinstance(state.get("pro_edit"), dict):
         result["pro_edit"] = dict(state["pro_edit"])
@@ -4725,6 +4990,9 @@ def main() -> None:
     if args.terra_visual:
         print("   Görsel analiz: TERRA (Gemini tamamen bypass)")
     print("   Detaylı teknik çıktı için: --verbose")
+    print()
+    # One concise render summary at startup (hardware detection is cached for the run).
+    render_backend.print_summary_once()
 
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
