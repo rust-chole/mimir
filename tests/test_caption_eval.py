@@ -242,6 +242,40 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn(case_store.GOLD_TODO, case.gold_text())
         self.assertEqual(case_store.list_cases(self.root, ["draft_only"])[0].names, ["Tyla", "KAI"])
 
+    def test_one_text_sheet_round_trips_and_scores_without_audio(self) -> None:
+        from ai.caption_eval import sheet
+
+        path, count = sheet.export_sheet(root=self.root)
+        self.assertEqual(count, 3)
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("=== draft_only [ ]", text)                         # unfinished gold -> unchecked
+        self.assertIn("=== one [x]", text)
+        self.assertIn("we are not done", text)
+        # A person corrects the unfinished block (the draft had no captions here) and ticks it.
+        edited = text.replace("=== draft_only [ ]", "=== draft_only [x]").replace(
+            "# MIMIR: (no captions recorded for this case)",
+            "# MIMIR: (no captions recorded for this case)\nhey Tyla come here")
+        edited = edited.replace("=== one [x]", "=== one [x]\n# a note\nnames: Kai", 1)
+        edited += "\n=== not_here [x]\nsomething\n"
+        sent = self.root / "sent.txt"
+        sent.write_text(edited, encoding="utf-8")
+        rows = {r["case_id"]: r["status"] for r in sheet.import_sheet(sent, root=self.root)}
+        self.assertEqual(rows["draft_only"], "saved (gold ready)")
+        self.assertTrue(rows["not_here"].startswith("unknown case"))
+        draft_only = case_store.list_cases(self.root, ["draft_only"])[0]
+        self.assertEqual(metrics.gold_body(draft_only.gold_text()).strip(), "hey Tyla come here")
+        self.assertEqual(case_store.list_cases(self.root, ["one"])[0].names, ["Kai"])
+
+        scored = self.root / "scored.txt"
+        scored.write_text("=== a [x]\nnames: Tyla\n# MIMIR: hey Tyler we are done\nhey Tyla, we are not done\n"
+                          "=== b [ ]\n# MIMIR: x\ny\n", encoding="utf-8")
+        result = sheet.score_sheet(scored)
+        self.assertEqual(result["aggregate"]["cases"], 1)
+        self.assertEqual(result["aggregate"]["critical"]["name"]["errors"], 1)
+        self.assertEqual(result["aggregate"]["critical"]["negation"]["errors"], 1)
+        self.assertEqual([r["case_id"] for r in result["skipped"]], ["b"])
+        self.assertTrue(Path(result["report_path"]).is_file())
+
     def test_the_command_line_reports_status(self) -> None:
         with mock.patch("builtins.print") as printed:
             self.assertEqual(cli.main(["--root", str(self.root), "status"]), 0)

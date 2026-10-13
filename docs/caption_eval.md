@@ -41,6 +41,18 @@ play from there; dashed = MIMIR itself was unsure), and saves the gold. Rules:
 
 A text editor works too: edit `gold.txt`, delete the `# TODO` line.
 
+**One file for everything.** Instead of the editor, the whole set can be one text file:
+
+```powershell
+python -m ai.caption_eval export                    # -> vod_output\caption_eval\gold_sheet.txt
+# correct each block under its "# MIMIR:" line, change [ ] to [x]
+python -m ai.caption_eval import vod_output\caption_eval\gold_sheet.txt
+python -m ai.caption_eval score-sheet vod_output\caption_eval\gold_sheet.txt
+```
+
+The sheet holds text only (no audio), so it can be sent to whoever analyses it;
+`score-sheet` scores MIMIR's captions against it with nothing else on disk.
+
 Optional timing reference: `python -m ai.caption_eval align-gold` times the finished
 gold with the forced aligner (machine reference, labelled as such). A human
 `gold_words.json` (`[{"word", "start", "end"}, ...]`, one row per gold word) wins.

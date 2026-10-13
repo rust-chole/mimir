@@ -12,8 +12,10 @@ cases, with the same gold and the same normalization. The workflow:
     python -m ai.caption_eval run ear:openai:gpt-4o-transcribe       # one ear on its own
     python -m ai.caption_eval compare published stack stack-asr      # side by side
 
+Or as one text file: ``export`` -> correct it -> ``import`` / ``score-sheet`` (``sheet``).
+
 Modules: ``cases`` (case folders, prepare), ``metrics`` (normalization, alignment,
 scores), ``systems`` (what can be run), ``runner`` (cached runs, scoring, compare),
-``report`` (markdown), ``cli``. Data lives in ``vod_output/caption_eval`` (never
-committed). See docs/caption_eval.md.
+``report`` (markdown), ``editor`` (local gold editor), ``sheet`` (one-file gold), ``cli``.
+Data lives in ``vod_output/caption_eval`` (never committed). See docs/caption_eval.md.
 """

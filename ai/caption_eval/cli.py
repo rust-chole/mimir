@@ -105,6 +105,35 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    from ai.caption_eval import sheet
+
+    path, count = sheet.export_sheet(root=args.root, only=_names(args.cases) or None, out=args.out)
+    print(f"{count} short(s) -> {path}")
+    print("Correct each block word for word, mark it [x], then `import` it here or send the file as it is.")
+    return 0
+
+
+def _cmd_import(args: argparse.Namespace) -> int:
+    from ai.caption_eval import sheet
+
+    rows = sheet.import_sheet(args.path, root=args.root)
+    for row in rows:
+        print(f"{row['case_id']}: {row['status']}")
+    return 1 if any(r["status"].startswith("unknown") for r in rows) else 0
+
+
+def _cmd_score_sheet(args: argparse.Namespace) -> int:
+    from ai.caption_eval import sheet
+
+    result = sheet.score_sheet(args.path, out=args.out)
+    aggregate = result["aggregate"]
+    wer = aggregate.get("wer")
+    print(f"scored {aggregate.get('cases', 0)} short(s) from the sheet: WER "
+          f"{'n/a' if wer is None else f'{100 * wer:.1f}%'}; report: {result['report_path']}")
+    return 0
+
+
 def _cmd_align_gold(args: argparse.Namespace) -> int:
     rows = runner.align_gold(root=args.root, only=_names(args.cases) or None, force=args.force)
     for row in rows:
@@ -135,6 +164,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="only print the address")
     p.set_defaults(func=_cmd_serve)
+
+    p = sub.add_parser("export", help="one text file with every short's draft transcript to correct")
+    p.add_argument("--out", help="where to write it (default <root>/gold_sheet.txt)")
+    p.add_argument("--cases", help="only these case ids, comma separated")
+    p.set_defaults(func=_cmd_export)
+
+    p = sub.add_parser("import", help="write a corrected gold sheet back into the cases")
+    p.add_argument("path")
+    p.set_defaults(func=_cmd_import)
+
+    p = sub.add_parser("score-sheet", help="score MIMIR's captions against a corrected gold sheet (text only)")
+    p.add_argument("path")
+    p.add_argument("--out", help="report path (default next to the sheet)")
+    p.set_defaults(func=_cmd_score_sheet)
 
     p = sub.add_parser("status", help="list cases and whether their gold is finished")
     p.set_defaults(func=_cmd_status)
