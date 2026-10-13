@@ -11,5 +11,8 @@ opencv-python-headless>=4.10,<4.14
 # GPU install the matching CUDA build from https://pytorch.org before this file.
 qwen-asr>=0.0.6,<0.1
 torch>=2.4
+# Report-only speech-coverage check of the final captions (voice activity; weights ship in the
+# package, it uses the torch above). Missing -> the check reports "unavailable", captions still run.
+silero-vad>=6.0,<7
 # Optional caption shaping backend (MIMIR_CAPTION_SHAPER=auto); not required:
 # uharfbuzz>=0.39

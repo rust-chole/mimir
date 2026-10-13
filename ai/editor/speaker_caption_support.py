@@ -2656,6 +2656,7 @@ def _assign_words(
 
     output: list[dict[str, Any]] = []
     suppressed = 0
+    suppressed_rows: list[dict[str, Any]] = []      # what the viewer will NOT see (human review lists it)
     uncertain = 0
 
     # Decide suppression at TURN level so the transcript cannot lose random
@@ -2698,6 +2699,13 @@ def _assign_words(
     for index, raw in enumerate(stabilized):
         if index in suppress_indexes:
             suppressed += 1
+            suppressed_rows.append({
+                "word": str(raw.get("word", "")),
+                "edited_start": raw.get("edited_start"),
+                "edited_end": raw.get("edited_end"),
+                "speaker": str(raw.get("speaker_candidate", "")),
+                "token_ids": raw.get("token_ids"),
+            })
             continue
         word = dict(raw)
         detected = str(word.get("speaker_candidate", ""))
@@ -2767,6 +2775,7 @@ def _assign_words(
             for item in words
         ]
         suppressed = 0
+        suppressed_rows = []
         coverage_ratio = 1.0
 
     return output, {
@@ -2775,6 +2784,7 @@ def _assign_words(
         "coverage_ratio": round(coverage_ratio, 4),
         "meaning_preservation_ratio": round(coverage_ratio, 4),
         "suppressed_words": suppressed,
+        "suppressed": suppressed_rows,
         "uncertain_words_kept": uncertain,
         "effective_mode": effective_mode,
         "low_confidence_dual_fallback": low_confidence_dual,

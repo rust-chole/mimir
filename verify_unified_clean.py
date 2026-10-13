@@ -647,7 +647,7 @@ try:
               "test_pro_edit_planner", "test_pro_edit_filters", "test_pro_edit_captions", "test_pro_edit_captions_v4",
               "test_pro_edit_v5", "test_pro_edit_render", "test_pro_edit_current_root",
               "test_v6_caption_truth", "test_v6_camera", "test_intro_bounds", "test_final_qc", "test_caption_accuracy",
-              "test_caption_stack", "test_production_contracts"]
+              "test_caption_stack", "test_caption_eval", "test_production_contracts"]
     if os.environ.get("MIMIR_VERIFY_E2E", "").strip() == "1":
         suites.extend(["test_pro_edit_pipeline", "test_v6_pipeline"])
     stream = io.StringIO()

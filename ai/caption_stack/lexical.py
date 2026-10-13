@@ -30,10 +30,10 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 from ai.caption_stack import audio as analysis_audio
-from ai.caption_stack import openai_ears, qwen_omni
+from ai.caption_stack import normalize, openai_ears, qwen3_asr, qwen_omni
 from ai.caption_stack.config import CaptionStackSettings
 
-LEXICAL_VERSION = 1
+LEXICAL_VERSION = 1             # part of the frozen signature: bump only when the freeze format changes
 MAX_DISPUTES = 10               # escalated disputes per short; the rest keep primary words, marked uncertain
 MAX_DISPUTE_TOKENS = 8          # a dispute is a local phrase, never a transcript-sized span
 MERGE_GAP_TOKENS = 1
@@ -111,7 +111,8 @@ def keys_of(tokens: Sequence[str]) -> list[str]:
 
 
 def agreement(left: Sequence[str], right: Sequence[str]) -> float:
-    a, b = keys_of(left), keys_of(right)
+    """Key agreement of two hearings; harmless differences (``normalize``) do not lower it."""
+    a, b = normalize.canonical_sequence(keys_of(left)), normalize.canonical_sequence(keys_of(right))
     if not a and not b:
         return 1.0
     return float(SequenceMatcher(None, a, b, autojunk=False).ratio())
@@ -199,11 +200,16 @@ def _openai_listen(path: Path, *, prompted: bool, model: str, language: str, ver
     return openai_ears.acoustic_listen(path, model=model, language=language)
 
 
+def _asr_listen(path: Path, context: str, settings: CaptionStackSettings) -> tuple[str, dict[str, Any]]:
+    return qwen3_asr.listen(str(path), lambda: analysis_audio.wav_base64(path), context=context, settings=settings)
+
+
 @dataclass
 class Ears:
     """Injectable ear functions (defaults call the real providers)."""
     qwen: Callable[[Path, str, CaptionStackSettings], tuple[Any, dict[str, Any]]] = _qwen_listen
     openai: Callable[..., str] = _openai_listen
+    asr: Callable[[Path, str, CaptionStackSettings], tuple[str, dict[str, Any]]] = _asr_listen
 
 
 def clean_verified_terms(values: Sequence[str] | None) -> list[str]:
@@ -249,14 +255,19 @@ def _flags(core_tokens: Sequence[str], other_tokens: Sequence[str], verified_key
 
 def find_disputes(primary: EarTranscript, precision: EarTranscript, *, chunk: int,
                   verified_terms: Sequence[str] = ()) -> list[Dispute]:
-    """Meaningful A/B differences + spans either ear itself doubted, as local disputes."""
+    """Meaningful A/B differences + spans either ear itself doubted, as local disputes.
+
+    A difference that is harmless by ``normalize`` (a filler, "ok"/"okay", "gonna"/"going to",
+    "twenty-one"/"21") is not a dispute: the primary words stay exactly as heard."""
     a, b = list(primary.tokens), list(precision.tokens)
     ak, ao = key_sequence(a)
     bk, _bo = key_sequence(b)
     raw: list[tuple[int, int, str]] = []
     kind_names = {"replace": "different_word", "delete": "primary_only_words", "insert": "precision_only_words"}
-    for tag, i1, i2, _j1, _j2 in SequenceMatcher(None, ak, bk, autojunk=False).get_opcodes():
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, ak, bk, autojunk=False).get_opcodes():
         if tag == "equal" or not ao:
+            continue
+        if normalize.harmless(ak[i1:i2], bk[j1:j2]):
             continue
         if i1 < i2:
             c0, c1 = ao[i1], ao[i2 - 1] + 1
@@ -370,11 +381,11 @@ def _settle(dispute: Dispute, fallback_ear: str) -> Any:
     from ai.editor import caption_judge
 
     fallback = dispute.candidates.get(fallback_ear)
-    if not fallback or not keys_of(fallback["tokens"]):
+    wanted = normalize.canonical_sequence(keys_of(fallback["tokens"])) if fallback else []
+    if not wanted:
         return None                                 # a deletion is never settled without the judge
-    wanted = keys_of(fallback["tokens"])
     for ear, candidate in dispute.candidates.items():
-        if ear == fallback_ear or keys_of(candidate["tokens"]) != wanted:
+        if ear == fallback_ear or normalize.canonical_sequence(keys_of(candidate["tokens"])) != wanted:
             continue
         if ear == PRIMARY:
             return caption_judge.SpanDecision(dispute.span_id, None, True, f"agreement_{PRIMARY}+{fallback_ear}")
@@ -589,7 +600,22 @@ def _chunk_audio(audio: analysis_audio.AnalysisAudio, chunks: Sequence[tuple[flo
 def _listen_role(role: str, path: Path, *, settings: CaptionStackSettings, terms: Sequence[str], ears: Ears,
                  degradations: list[dict[str, str]]) -> EarTranscript:
     prompted = role == PRECISION
-    if settings.primary_provider == "qwen_omni":
+    if settings.primary_provider in qwen3_asr.ASR_PROVIDERS:
+        context = qwen3_asr.context_text(openai_ears.domain_keywords(), terms if prompted else ())
+        try:
+            text, meta = ears.asr(path, context, settings)
+            tokens = tuple(display_tokens(text))
+            if not tokens:
+                raise qwen3_asr.AsrUnavailable(f"{role}: Qwen3-ASR returned no words")
+            return EarTranscript(role, settings.primary_provider, str(meta.get("model", "")), prompted, tokens,
+                                 (), str(meta.get("language", "") or ""))
+        except qwen3_asr.AsrUnavailable as error:
+            degradations.append({"subsystem": "caption_lexical_primary", "level": settings.transcribe_fallback_provider,
+                                 "reason": f"{role}: {type(error).__name__}: {str(error)[:240]}"})
+            if settings.transcribe_fallback_provider == "none":
+                raise LexicalUnavailable(f"Qwen3-ASR {role} failed and no transcription fallback is configured: "
+                                         f"{error}")
+    elif settings.primary_provider == "qwen_omni":
         domain = openai_ears.domain_keywords()
         instructions = (qwen_omni.precision_instructions(settings.language, domain, terms) if prompted
                         else qwen_omni.primary_instructions(settings.language, domain))
@@ -776,6 +802,7 @@ def resolve_and_freeze(
                               frozen_spans, language, lexical_signature(tokens, chunks))
     report = {
         "version": LEXICAL_VERSION,
+        "normalize_version": normalize.NORMALIZE_VERSION,
         "passes": [ear.summary() for pair in passes for ear in pair],
         "agreement": [round(score, 4) for score in agreements],
         "disputes": len(all_disputes),
@@ -808,12 +835,21 @@ def listen_window(audio: analysis_audio.AnalysisAudio, start: float, end: float,
 
     Unprompted: the model-diverse fallback ear (no names) when configured, else the
     Qwen primary ear. Prompted: the Qwen precision ear with ``vocabulary`` as spelling
-    references, else the fallback precision ear.
+    references, else the fallback precision ear. "Qwen" is the configured primary
+    provider: the Omni ear or a Qwen3-ASR ear (names given as recognition context).
     """
     ears = ears or Ears()
     path = analysis_audio.cut_window(audio, start, end, workdir / f"window_{int(start * 1000):08d}_"
                                                                   f"{int(end * 1000):08d}_{int(prompted)}.wav")[0]
     fallback = settings.transcribe_fallback_provider == "openai_transcribe"
+    if settings.primary_provider in qwen3_asr.ASR_PROVIDERS and (prompted or not fallback):
+        context = qwen3_asr.context_text(openai_ears.domain_keywords(), vocabulary if prompted else ())
+        try:
+            text, meta = ears.asr(path, context, settings)
+            return text, settings.primary_provider, str(meta.get("model", ""))
+        except qwen3_asr.AsrUnavailable:
+            if not fallback:
+                raise
     use_qwen = settings.primary_provider == "qwen_omni" and (prompted or not fallback)
     if use_qwen:
         domain = openai_ears.domain_keywords()

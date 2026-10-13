@@ -8,6 +8,7 @@
                         else the fallback provider re-times everything)
     6. words            canonical timed words for the speaker profile; the frozen
                         signature is re-checked so no step can have rewritten a word
+    7. coverage         report-only VAD check: speech without words, words without speech
 
 The returned words carry per-word lexical provenance (``lexical_status``:
 agreed | resolved | uncertain) that caption truth, the name lock and the human
@@ -21,7 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
-from ai.caption_stack import alignment, lexical
+from ai.caption_stack import alignment, coverage, lexical
 from ai.caption_stack import audio as analysis_audio
 from ai.caption_stack.config import ALIGNER_MAX_INPUT_SECONDS, CaptionStackSettings, load_settings
 
@@ -72,12 +73,14 @@ def transcribe_final_short(
     ears: lexical.Ears | None = None,
     providers: tuple[Any, Any] | None = None,
     judge: Any = "default",
+    coverage_detector: Any = None,
 ) -> tuple[list[dict[str, Any]], float, str, dict[str, Any]]:
     """(words, lexical parity, text source, caption quality) for the final edited short.
 
     ``participant_names``: human-verified speaker names (spelling references and
     direct-address orthography). ``verified_terms``: other user-verified
-    names/terms (creator, entities); spelling references only.
+    names/terms (creator, entities); spelling references only. ``coverage_detector``:
+    injectable voice-activity detector for the report-only coverage check.
     """
     from ai.editor import caption_judge
 
@@ -105,6 +108,9 @@ def transcribe_final_short(
         words = profile_words(frozen, outcome.units)
         if " ".join(w["word"] for w in words).split() != list(frozen.tokens):
             raise RuntimeError("timed words differ from the frozen transcript")
+        coverage_report = ({"status": "off", "version": coverage.COVERAGE_VERSION, "flags": 0}
+                           if settings.coverage_check == "off"
+                           else coverage.check(audio, words, detector=coverage_detector))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         try:
@@ -139,6 +145,7 @@ def transcribe_final_short(
                       "local_recoveries": outcome.recoveries, "reused_locator_alignment": outcome.reused_locator,
                       "version": alignment.ALIGNMENT_VERSION},
         "degradations": degradations,
+        "coverage": coverage_report,
         # Summary keys read by the pipeline QA line, caption truth and the name lock.
         "text_model": f"{text_provider.provider}:{text_provider.model}",
         "timing_model": outcome.describe.get("model", outcome.provider),

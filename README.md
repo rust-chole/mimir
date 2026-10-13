@@ -47,7 +47,12 @@ cache), `--no-memes`, `--verbose`.
      no collapsed region); a small failed region is re-aligned locally with its trusted
      neighbours as anchors; otherwise the legacy Whisper clock re-times the whole
      transcript (disclosed). One timing authority per run; no global shifts, no invented
-     times.
+     times. The aligner is trained on 11 languages (zh en yue fr de it ja ko pt ru es);
+     any other language goes straight to the fallback clock (disclosed).
+   - **Coverage (report only)** — a voice-activity check (Silero VAD) compares the timed
+     words with the speech in the audio: speech with no caption word, a word stretched over
+     far more speech than it needs (words may be missing), a word where no speech was
+     detected. Flags go to the review sheet; nothing is changed.
    - **Who** — diarization + your voice-confirmed names; never changes a word or a time.
    Verified-name spelling the name lock cannot decide is a closed choice for the judge
    (verified spelling / keep / uncertain). Caption truth proves the words still equal the
@@ -84,14 +89,32 @@ re-checked and the repair is disclosed (published as degraded).
 
 No model reviews the final short. `<name>_short.review.md` lists, on the published
 file's clock, every caption word the evidence could not settle, every word the caption
-judge changed, judge-decided name spellings, the cold open and headline, effects,
-speaker labels and every disclosed degradation, plus Accept / Reject boxes.
+judge changed, judge-decided name spellings, words hidden as another speaker's turn,
+speech-coverage flags, the cold open and headline, effects, speaker labels and every
+disclosed degradation, plus Accept / Reject boxes.
+
+## Measuring caption accuracy
+
+Caption changes are decided on numbers, not impressions: `python -m ai.caption_eval`
+builds a gold set from real shorts (a local editor for the human pass), runs the
+published captions, the full stack or single ears on the same audio, and reports WER,
+name / number / negation errors, dropped and invented phrases and timing side by side.
+See [docs/caption_eval.md](docs/caption_eval.md).
+
+```powershell
+python -m ai.caption_eval prepare --final vod_output\final
+python -m ai.caption_eval serve
+python -m ai.caption_eval run published
+python -m ai.caption_eval run stack
+python -m ai.caption_eval compare published stack
+```
 
 ## Model routing
 
 | Role | Default | Why |
 | --- | --- | --- |
 | Caption ears (what was said, final short) | `qwen3.8-omni-flash`, reasoning none | a verbatim listener, twice |
+| Caption ears, measurable alternative | `Qwen3-ASR-1.7B` (local) / `qwen3-asr-flash` | dedicated ASR with context; default only if the eval says so |
 | Caption word timing | `Qwen/Qwen3-ForcedAligner-0.6B` (local) | forced alignment of the frozen words |
 | Caption judge (disputed words, name spelling) | `gpt-6-astra`, high | the words ARE the short |
 | Edit director (editorial intent) | `gpt-6-astra`, high | the edit IS the short |

@@ -17,14 +17,18 @@ from ai import model_config  # noqa: F401  (loads .env once, like every other MI
 DEFAULT_QWEN_OMNI_MODEL = "qwen3.8-omni-flash"
 DEFAULT_QWEN_ALIGNER_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 DEFAULT_TRANSCRIBE_FALLBACK_MODEL = "gpt-transcribe"
+DEFAULT_QWEN_ASR_MODEL = "Qwen/Qwen3-ASR-1.7B"
+DEFAULT_QWEN_ASR_API_MODEL = "qwen3-asr-flash"
 
-PRIMARY_PROVIDERS = ("qwen_omni", "openai_transcribe")
+# qwen3_asr / qwen3_asr_flash: Qwen3-ASR ears (local / DashScope); measured with ai.caption_eval first.
+PRIMARY_PROVIDERS = ("qwen_omni", "openai_transcribe", "qwen3_asr", "qwen3_asr_flash")
 TRANSCRIBE_FALLBACK_PROVIDERS = ("openai_transcribe", "none")
 ALIGNMENT_PROVIDERS = ("qwen3_forced_aligner", "legacy_whisper")
 ALIGNMENT_FALLBACK_PROVIDERS = ("legacy_whisper", "none")
 DEVICES = ("auto", "cpu", "cuda", "mps")
 DTYPES = ("auto", "float32", "float16", "bfloat16")
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+COVERAGE_CHECKS = ("vad", "off")
 
 # The official Qwen3-ForcedAligner accepts at most this much audio per input
 # (qwen_asr.inference.utils.MAX_FORCE_ALIGN_INPUT_SECONDS). Longer shorts are
@@ -79,6 +83,11 @@ class CaptionStackSettings:
     aligner_dtype: str
     language: str
     dashscope_api_key: str = field(default="", repr=False)
+    coverage_check: str = "vad"              # vad | off (report-only acoustic coverage flags)
+    qwen_asr_model: str = DEFAULT_QWEN_ASR_MODEL
+    qwen_asr_api_model: str = DEFAULT_QWEN_ASR_API_MODEL
+    qwen_asr_device: str = "auto"
+    qwen_asr_dtype: str = "auto"
 
     @property
     def qwen_configured(self) -> bool:
@@ -102,6 +111,11 @@ class CaptionStackSettings:
             "aligner_device": self.aligner_device,
             "aligner_dtype": self.aligner_dtype,
             "language": self.language,
+            "coverage_check": self.coverage_check,
+            "qwen_asr_model": self.qwen_asr_model,
+            "qwen_asr_api_model": self.qwen_asr_api_model,
+            "qwen_asr_device": self.qwen_asr_device,
+            "qwen_asr_dtype": self.qwen_asr_dtype,
         }
 
 
@@ -129,6 +143,11 @@ def load_settings() -> CaptionStackSettings:
         aligner_device=_choice("MIMIR_QWEN_ALIGNER_DEVICE", "auto", DEVICES),
         aligner_dtype=_choice("MIMIR_QWEN_ALIGNER_DTYPE", "auto", DTYPES),
         language=_text("CAPTION_LANGUAGE", _text("MIMIR_TRANSCRIPTION_LANGUAGE", "en")),
+        coverage_check=_choice("MIMIR_CAPTION_COVERAGE_CHECK", "vad", COVERAGE_CHECKS),
+        qwen_asr_model=_text("MIMIR_QWEN_ASR_MODEL", DEFAULT_QWEN_ASR_MODEL),
+        qwen_asr_api_model=_text("MIMIR_QWEN_ASR_API_MODEL", DEFAULT_QWEN_ASR_API_MODEL),
+        qwen_asr_device=_choice("MIMIR_QWEN_ASR_DEVICE", "auto", DEVICES),
+        qwen_asr_dtype=_choice("MIMIR_QWEN_ASR_DTYPE", "auto", DTYPES),
     )
 
 
@@ -136,8 +155,8 @@ def load_settings() -> CaptionStackSettings:
 # LANGUAGE
 # ============================================================
 
-# ISO 639-1 -> the language names the official Qwen3 aligner accepts.
-_ALIGNER_LANGUAGES = {
+# ISO 639-1 -> the language names Qwen3-ASR recognizes (qwen_asr SUPPORTED_LANGUAGES).
+_ASR_LANGUAGES = {
     "zh": "Chinese", "en": "English", "yue": "Cantonese", "ar": "Arabic", "de": "German", "fr": "French",
     "es": "Spanish", "pt": "Portuguese", "id": "Indonesian", "it": "Italian", "ko": "Korean", "ru": "Russian",
     "th": "Thai", "vi": "Vietnamese", "ja": "Japanese", "tr": "Turkish", "hi": "Hindi", "ms": "Malay",
@@ -145,20 +164,36 @@ _ALIGNER_LANGUAGES = {
     "fil": "Filipino", "tl": "Filipino", "fa": "Persian", "el": "Greek", "ro": "Romanian", "hu": "Hungarian",
     "mk": "Macedonian",
 }
+# The forced aligner is trained on only 11 of them (Qwen3-ASR README / technical report).
+# qwen_asr does not reject the others: it would time them with an untrained model, so
+# MIMIR refuses them here and the configured fallback clock times the transcript instead.
+_ALIGNER_LANGUAGES = {code: name for code, name in _ASR_LANGUAGES.items()
+                      if name in {"Chinese", "English", "Cantonese", "French", "German", "Italian", "Japanese",
+                                  "Korean", "Portuguese", "Russian", "Spanish"}}
 
 
-def aligner_language(language: str) -> str:
-    """``en`` / ``en-US`` / ``English`` -> ``English`` (the aligner's language names)."""
+def _language_name(language: str, table: dict[str, str], what: str) -> str:
     value = str(language or "").strip()
     if not value:
         raise CaptionStackConfigError("CAPTION_LANGUAGE is empty")
     code = value.replace("_", "-").split("-", 1)[0].casefold()
-    if code in _ALIGNER_LANGUAGES:
-        return _ALIGNER_LANGUAGES[code]
+    if code in table:
+        return table[code]
     named = value[:1].upper() + value[1:].lower()
-    if named in set(_ALIGNER_LANGUAGES.values()):
+    if named in set(table.values()):
         return named
-    raise CaptionStackConfigError(f"the Qwen forced aligner does not support language {value!r}")
+    raise CaptionStackConfigError(f"{what} does not support language {value!r} "
+                                  f"(supported: {', '.join(sorted(set(table.values())))})")
+
+
+def aligner_language(language: str) -> str:
+    """``en`` / ``en-US`` / ``English`` -> ``English`` (the aligner's language names)."""
+    return _language_name(language, _ALIGNER_LANGUAGES, "the Qwen forced aligner")
+
+
+def asr_language(language: str) -> str:
+    """The Qwen3-ASR language name of ``language`` (30 languages)."""
+    return _language_name(language, _ASR_LANGUAGES, "Qwen3-ASR")
 
 
 # ============================================================

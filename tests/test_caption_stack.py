@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from ai.caption_stack import alignment, config, final_captions, lexical, qwen_omni
+from ai.caption_stack import alignment, config, coverage, final_captions, lexical, qwen3_asr, qwen_omni
 from ai.caption_stack import audio as analysis_audio
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -134,6 +134,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.aligner_language("en-US"), "English")
         with self.assertRaises(config.CaptionStackConfigError):
             config.aligner_language("xx")
+
+    def test_the_aligner_accepts_only_its_eleven_trained_languages(self) -> None:
+        for code, name in (("en", "English"), ("es-MX", "Spanish"), ("yue", "Cantonese"), ("ja", "Japanese")):
+            self.assertEqual(config.aligner_language(code), name)
+        for code in ("tr", "Turkish", "ar", "hi", "nl", "pl"):                  # Qwen3-ASR hears them, the aligner
+            with self.subTest(code=code), self.assertRaises(config.CaptionStackConfigError):   # was never trained on them
+                config.aligner_language(code)
+        self.assertEqual(config.asr_language("tr"), "Turkish")
+        self.assertEqual(config.asr_language("en-GB"), "English")
 
 
 class QwenEvidenceTests(unittest.TestCase):
@@ -251,6 +260,82 @@ class ListeningFallbackTests(unittest.TestCase):
                                       ears=lexical.Ears(qwen=qwen, openai=openai), workdir=Path(tmp))
 
 
+class Qwen3AsrEarTests(unittest.TestCase):
+    """The dedicated Qwen3-ASR ear: selectable, measurable, never the silent default."""
+
+    def test_it_is_selectable_but_not_the_default(self) -> None:
+        with mock.patch.dict(os.environ, {k: "" for k in ENV_KEYS}):
+            self.assertEqual(config.load_settings().primary_provider, "qwen_omni")
+            for provider in ("qwen3_asr", "qwen3_asr_flash"):
+                with mock.patch.dict(os.environ, {"MIMIR_CAPTION_PRIMARY_PROVIDER": provider}):
+                    self.assertEqual(config.load_settings().primary_provider, provider)
+            public = config.load_settings().public()
+            self.assertEqual(public["qwen_asr_model"], "Qwen/Qwen3-ASR-1.7B")
+            self.assertEqual(public["qwen_asr_api_model"], "qwen3-asr-flash")
+
+    def test_the_api_request_carries_context_language_and_no_itn(self) -> None:
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=" no  way bro "))])
+
+        text, meta = qwen3_asr.transcribe_api("QUJD", context="ctx", settings=settings(language="en-US"), create=create)
+        self.assertEqual((text, meta["model"]), ("no way bro", "qwen3-asr-flash"))
+        kwargs = calls[0]
+        self.assertEqual(kwargs["messages"][0], {"role": "system", "content": "ctx"})
+        self.assertTrue(kwargs["messages"][1]["content"][0]["input_audio"]["data"].endswith("QUJD"))
+        self.assertEqual(kwargs["extra_body"], {"asr_options": {"enable_itn": False, "language": "en"}})
+        self.assertFalse(kwargs["stream"])
+
+        def failing(**kwargs):
+            raise RuntimeError("401 invalid key sk-secret-value")
+        with self.assertRaises(qwen3_asr.AsrUnavailable) as caught:
+            qwen3_asr.transcribe_api("QUJD", context="", settings=settings(), create=failing)
+        self.assertNotIn("sk-secret-value", str(caught.exception))
+        empty = lambda **k: SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=""))])  # noqa: E731
+        with self.assertRaises(qwen3_asr.AsrUnavailable):
+            qwen3_asr.transcribe_api("QUJD", context="", settings=settings(), create=empty)
+
+    def test_the_local_model_gets_the_qwen_language_name_and_a_long_enough_budget(self) -> None:
+        seen = {}
+
+        class Model:
+            def transcribe(self, audio, context, language):
+                seen.update(audio=audio, context=context, language=language)
+                return [SimpleNamespace(text="bunu hiç beklemiyordum", language="Turkish")]
+
+        text, meta = qwen3_asr.transcribe_local("a.wav", context="c", settings=settings(language="tr"),
+                                                loader=lambda s: Model())
+        self.assertEqual((text, seen["language"], meta["language"]), ("bunu hiç beklemiyordum", "Turkish", "Turkish"))
+        self.assertGreaterEqual(qwen3_asr.MAX_NEW_TOKENS, 2048)
+
+    def test_pass_a_gets_no_names_pass_b_does_and_a_failure_falls_back_with_a_degradation(self) -> None:
+        contexts = []
+
+        def asr(path, context, settings_):
+            contexts.append(context)
+            return "hey Tyla come here", {"model": "fake-asr", "language": "English"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = analysis_audio.load_analysis_audio(write_wav(Path(tmp) / "a.wav", 2.0, [(0.2, 1.5)]))
+            passes, degradations = lexical.listen_passes(
+                audio, [(0.0, audio.duration)], settings=settings(primary_provider="qwen3_asr"),
+                verified_terms=["Tyla"], ears=lexical.Ears(asr=asr), workdir=Path(tmp))
+            self.assertEqual(degradations, [])
+            self.assertEqual([(e.provider, e.model, e.prompted) for e in passes[0]],
+                             [("qwen3_asr", "fake-asr", False), ("qwen3_asr", "fake-asr", True)])
+            self.assertEqual(sum("Tyla" in c for c in contexts), 1)              # names only in pass B
+
+            def broken(path, context, settings_):
+                raise qwen3_asr.AsrUnavailable("qwen_asr not installed")
+            passes, degradations = lexical.listen_passes(
+                audio, [(0.0, audio.duration)], settings=settings(primary_provider="qwen3_asr"), verified_terms=[],
+                ears=lexical.Ears(asr=broken, openai=lambda path, **k: "hey there"), workdir=Path(tmp))
+            self.assertEqual([e.provider for e in passes[0]], ["openai_transcribe", "openai_transcribe"])
+            self.assertEqual(len(degradations), 2)
+
+
 class AlignmentValidationTests(unittest.TestCase):
     def units(self, *times: tuple[float, float]) -> list[alignment.AlignedUnit]:
         return [alignment.AlignedUnit(i, i + 1, a, b, "t") for i, (a, b) in enumerate(times)]
@@ -358,6 +443,26 @@ class AlignmentAuthorityTests(unittest.TestCase):
         self.assertEqual(whisper_calls, ["a.wav"])
         self.assertEqual({u.source.split(":")[0] for u in outcome.units}, {"legacy_whisper"})   # ONE authority
 
+    def test_an_unsupported_aligner_language_is_refused_before_loading_and_the_fallback_times_it(self) -> None:
+        loads = []
+
+        def loader(s):
+            loads.append(1)
+            return alignment.LoadedAligner(FakeAlignerModel(), "cpu", "float32", 180.0, [])
+
+        def whisper(path, known_names=None):
+            return {"words": [{"word": w, "start": 0.4 + i * 0.5, "end": 0.8 + i * 0.5}
+                              for i, w in enumerate("bunu hiç beklemiyordum".split())]}
+
+        primary, fallback = alignment.build_providers(settings(language="tr"), qwen_loader=loader,
+                                                      whisper_transcribe=whisper)
+        outcome = alignment.align_frozen(self.frozen("bunu hiç beklemiyordum"), self.audio, primary=primary,
+                                         fallback=fallback, language="tr", workdir=self.dir)
+        self.assertEqual(loads, [])                                                 # never loaded for Turkish
+        self.assertEqual(outcome.provider, "legacy_whisper")
+        self.assertTrue(outcome.degraded)
+        self.assertIn("does not support language", outcome.attempts[0]["reason"])
+
     def test_no_valid_clock_fails_closed(self) -> None:
         provider = alignment.QwenForcedAlignmentProvider(settings(), lambda s: (_ for _ in ()).throw(
             ImportError("No module named 'qwen_asr'")))
@@ -414,6 +519,41 @@ class AlignmentAuthorityTests(unittest.TestCase):
             self.assertAlmostEqual(unit.start, round(chunk_start + 0.5, 3), places=3)
         starts = [u.start for u in outcome.units]
         self.assertEqual(starts, sorted(starts))
+
+
+class CoverageAssessmentTests(unittest.TestCase):
+    """Report-only acoustic coverage: speech without words, words without speech."""
+
+    @staticmethod
+    def words(*rows):
+        return [{"word": w, "edited_start": s, "edited_end": e, "token_ids": [i, i + 1]}
+                for i, (w, s, e) in enumerate(rows)]
+
+    def test_well_covered_speech_raises_no_flag(self) -> None:
+        words = self.words(("no", 0.50, 0.70), ("way", 0.75, 1.00), ("bro", 1.05, 1.40))
+        report = coverage.assess(words, [(0.45, 1.45)], 3.0)
+        self.assertEqual(report["flags"], 0)
+        self.assertEqual(report["status"], "ok")
+        # Aligner edges a little outside the VAD region are never flagged.
+        self.assertEqual(coverage.assess(words, [(0.58, 1.30)], 3.0)["flags"], 0)
+
+    def test_omitted_speech_is_flagged_as_uncovered_or_stretched(self) -> None:
+        gap = coverage.assess(self.words(("wait", 0.5, 0.8), ("what", 3.0, 3.3)), [(0.45, 3.35)], 4.0)
+        self.assertEqual([(r["start"], r["end"]) for r in gap["uncovered_speech"]], [(0.92, 2.88)])
+        self.assertEqual((gap["uncovered_speech"][0]["after_word"], gap["uncovered_speech"][0]["before_word"]),
+                         ("wait", "what"))
+        stretched = coverage.assess(self.words(("wait", 0.5, 2.9), ("what", 3.0, 3.3)), [(0.45, 3.35)], 4.0)
+        self.assertEqual([r["word"] for r in stretched["stretched_words"]], ["wait"])
+        self.assertEqual(stretched["uncovered_speech"], [])
+
+    def test_a_word_in_a_pause_is_flagged_as_unsupported(self) -> None:
+        report = coverage.assess(self.words(("hello", 0.5, 0.9), ("there", 2.0, 2.4)), [(0.45, 0.95)], 3.0)
+        self.assertEqual([r["word"] for r in report["unsupported_words"]], ["there"])
+
+    def test_a_missing_detector_is_a_status_not_a_failure(self) -> None:
+        def broken(audio):
+            raise RuntimeError("boom")
+        self.assertEqual(coverage.check(SimpleNamespace(duration=1.0), [], detector=broken)["status"], "failed")
 
 
 class LazyLoadingTests(unittest.TestCase):
@@ -499,6 +639,23 @@ class FinalShortTests(unittest.TestCase):
         self.assertEqual(words[-1]["lexical_status"], "uncertain")
         self.assertFalse(quality["target_met"])
         self.assertEqual(quality["lexical_judge"]["status"], "unavailable")
+
+    def test_speech_coverage_is_reported_and_never_changes_a_word_or_time(self) -> None:
+        baseline = self.run_short(self.A, self.A, coverage_detector=lambda audio: [(0.25, 3.8)])[0]
+        self.assertEqual(baseline[3]["coverage"]["flags"], 0)
+        # Speech the ears never transcribed (4.4-5.8 s): flagged, nothing else moves.
+        (words, _p, _s, quality), *_ = self.run_short(
+            self.A, self.A, coverage_detector=lambda audio: [(0.25, 3.8), (4.4, 5.8)])
+        self.assertEqual(words, baseline[0])
+        rows = quality["coverage"]["uncovered_speech"]
+        self.assertEqual([(r["start"], r["end"]) for r in rows], [(4.4, 5.8)])
+        self.assertEqual(rows[0]["after_word"], "Tyler.")
+
+        def unavailable(audio):
+            raise coverage.CoverageUnavailable("no silero-vad")
+        (words, _p, _s, quality), *_ = self.run_short(self.A, self.A, coverage_detector=unavailable)
+        self.assertEqual(quality["coverage"]["status"], "unavailable")
+        self.assertEqual(words, baseline[0])
 
     @mock.patch.dict(os.environ, {"DASHSCOPE_API_KEY": "", "DASHSCOPE_BASE_URL": ""})
     def test_the_speaker_profile_uses_the_stack_and_keeps_its_contract(self) -> None:

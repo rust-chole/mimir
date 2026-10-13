@@ -26,7 +26,9 @@ re-transcribes the clip. It:
    could not (spelling only), and records who decided every disputed word
    (``lexical_decisions``, ``entity_decisions``) in the truth document;
 5. marks words the evidence could not settle as ``caption_uncertain`` (shown,
-   never emphasized) instead of guessing;
+   never emphasized) instead of guessing, and records what the viewer will not
+   see or should double-check: words speaker assignment hid (another speaker's
+   turn) and the caption stage's report-only speech-coverage flags;
 6. validates timing/speaker invariants and FREEZES the result: a truth
    document with a signature over (id, text, start, end, speaker, label).
    Downstream presentation may only consume it; the final quality gate proves
@@ -537,6 +539,46 @@ def lexical_decision_rows(profile: Mapping[str, Any], words: Sequence[Any]) -> l
     return rows
 
 
+SUPPRESSED_PHRASE_GAP_S = 0.6
+
+
+def suppressed_phrases(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Words speaker assignment hid from the captions (another speaker's turn), as phrases.
+
+    The viewer never sees them, so the human review lists them: a diarization error
+    that takes the creator for someone else silently removes the creator's words."""
+    assignment = profile.get("assignment") if isinstance(profile.get("assignment"), Mapping) else {}
+    rows = []
+    for row in assignment.get("suppressed", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            rows.append((float(row.get("edited_start")), float(row.get("edited_end")), str(row.get("word", "")),
+                         str(row.get("speaker", ""))))
+        except (TypeError, ValueError):
+            continue
+    phrases: list[dict[str, Any]] = []
+    for start, end, word, speaker in sorted(rows):
+        last = phrases[-1] if phrases else None
+        if last and last["speaker"] == speaker and start - last["paced_end"] <= SUPPRESSED_PHRASE_GAP_S:
+            last["paced_end"] = round(max(last["paced_end"], end), 3)
+            last["text"] += " " + word
+            last["words"] += 1
+        else:
+            phrases.append({"paced_start": round(start, 3), "paced_end": round(end, 3), "text": word,
+                            "speaker": speaker, "words": 1})
+    return phrases
+
+
+def coverage_record(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The caption stage's report-only acoustic coverage flags (``caption_stack.coverage``)."""
+    quality = profile.get("caption_quality") if isinstance(profile.get("caption_quality"), Mapping) else {}
+    record = quality.get("coverage") if isinstance(quality.get("coverage"), Mapping) else {}
+    keep = ("status", "version", "reason", "flags", "speech_s", "uncovered_speech", "stretched_words",
+            "unsupported_words")
+    return {key: record[key] for key in keep if key in record}
+
+
 def _entity_payload(index: int, row: Mapping[str, Any], words: Sequence[Any],
                     escalations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     texts = [str(w.get("word", "")) if isinstance(w, Mapping) else "" for w in words]
@@ -771,6 +813,8 @@ def run_caption_truth(
         "entity_decisions": entity_decisions,
         "judgments": judgments,
         "uncertain": uncertain,
+        "suppressed": suppressed_phrases(profile),
+        "coverage": coverage_record(profile),
         "timing_issues": t_issues,
         "speaker_issues": s_issues,
         "fallbacks": fallbacks,

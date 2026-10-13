@@ -20,7 +20,8 @@ from ai import model_config, vod_processor
 from ai.caption_stack import alignment as caption_alignment
 from ai.caption_stack import audio as caption_audio
 from ai.caption_stack import config as caption_stack_config
-from ai.caption_stack import final_captions, legacy_whisper, openai_ears as caption_openai_ears, qwen_omni
+from ai.caption_stack import coverage as caption_coverage, final_captions, legacy_whisper, normalize as caption_normalize
+from ai.caption_stack import openai_ears as caption_openai_ears, qwen3_asr as caption_qwen3_asr, qwen_omni
 from ai.caption_stack import lexical as caption_lexical
 from ai.editor import (
     caption_judge,
@@ -2929,7 +2930,8 @@ def run_pipeline(
     caption_stack_settings = caption_stack_config.load_settings()
     caption_verified_terms = [term for term in [creator_name or "", *v6_entities] if term]
     caption_stack_modules = [final_captions, caption_lexical, caption_alignment, caption_audio, qwen_omni,
-                             caption_openai_ears, legacy_whisper, caption_stack_config]
+                             caption_openai_ears, legacy_whisper, caption_stack_config, caption_normalize,
+                             caption_coverage, caption_qwen3_asr]
     captions_sig = _stage_signature(
         "captions",
         inputs=[edited_clip_path, transcript_path, timeline_path, speaker_scan_path],

@@ -40,6 +40,21 @@ class DisputeDetectionTests(unittest.TestCase):
             with self.subTest(a=a):
                 self.assertEqual(self.disputes(a, b), [])
 
+    def test_fillers_variants_contractions_and_spelled_numbers_are_not_disputes(self) -> None:
+        for a, b in (("uh I think we won", "I think we won"),                 # a filler one ear skipped
+                     ("ok bro let's go", "okay bro let's go"),                # spelling variant
+                     ("I'm gonna push", "I'm going to push"),                 # informal contraction
+                     ("I don't know man", "I do not know man"),               # standard contraction
+                     ("twenty-one kills", "21 kills"),                        # compound number
+                     ("two hundred fifty viewers", "250 viewers")):
+            with self.subTest(a=a):
+                self.assertEqual(self.disputes(a, b), [])
+                self.assertEqual(lexical.agreement(lexical.display_tokens(a), lexical.display_tokens(b)), 1.0)
+        for a, b in (("I can do it", "I can't do it"), ("we were late", "we're late"), ("fifty kills", "15 kills"),
+                     ("one two three", "123")):
+            with self.subTest(a=a):
+                self.assertEqual(len(self.disputes(a, b)), 1)                 # meaning differs: still a dispute
+
     def test_meaningful_differences_are_local_disputes(self) -> None:
         cases = {("I can do it", "I can't do it"): "negation",
                  ("he got 12 wins", "he got 20 wins"): "number",
@@ -136,6 +151,13 @@ class ResolutionTests(unittest.TestCase):
         self.assertTrue(report["spans"][0]["decided_by"].startswith("agreement_qwen_precision"))
         frozen, _report, _calls = self.run_stage("then Marra told me", judge)
         self.assertEqual((frozen.tokens[1], frozen.status[1]), ("Marra", "resolved"))
+
+    def test_agreement_ignores_a_harmless_difference_in_the_independent_ear(self) -> None:
+        judge, judge_calls = self.fake_judge("keep_primary")
+        frozen, report, _calls = self.run_stage("uh then Mara told me", judge)   # a filler the Qwen ears skipped
+        self.assertEqual(judge_calls, [])
+        self.assertEqual((frozen.tokens[1], frozen.status[1]), ("Mara", "resolved"))
+        self.assertEqual(report["normalize_version"], 1)
 
     def test_the_judge_decides_a_split_from_the_smallest_evidence_package(self) -> None:
         judge, judge_calls = self.fake_judge("use_heard", "Mara", ears=("qwen_precision",))

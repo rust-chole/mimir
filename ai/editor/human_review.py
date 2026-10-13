@@ -9,6 +9,9 @@ FINAL clock of the published file:
 * caption words changed from the primary ear's transcript (by independent-ear agreement or the
   caption judge; who decided is shown);
 * verified-name spelling decisions;
+* words speaker assignment hid from the captions (another speaker's turn: the viewer never sees them);
+* speech-coverage flags: speech with no caption word, a word stretched over much more speech than it
+  needs (words may be missing), a word where no speech was detected (it may not have been said);
 * the cold open (window, headline or none) and any effect;
 * every disclosed degradation (anything that made the run ``published_degraded``).
 
@@ -91,6 +94,25 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
                       "from": str(row.get("token", "")), "to": str(words[index][1]),
                       "confidence": row.get("confidence")})
 
+    for row in truth.get("suppressed", []) or []:
+        final = _to_final(timeline_doc, float(row.get("paced_start", 0.0)))
+        if final is None:
+            continue
+        focus.append({"kind": "caption_hidden_speaker", "final_s": round(final, 3), "text": str(row.get("text", "")),
+                      "speaker": str(row.get("speaker", "")), "words": int(row.get("words", 0) or 0)})
+
+    coverage = truth.get("coverage") if isinstance(truth.get("coverage"), Mapping) else {}
+    for kind, key, at in (("speech_without_caption", "uncovered_speech", "start"),
+                          ("caption_word_stretched", "stretched_words", "start"),
+                          ("caption_word_without_speech", "unsupported_words", "start")):
+        for row in coverage.get(key, []) or []:
+            final = _to_final(timeline_doc, float(row.get(at, 0.0)))
+            if final is None:
+                continue
+            focus.append({"kind": kind, "final_s": round(final, 3), "word": str(row.get("word", "")),
+                          "seconds": row.get("seconds"), "speech_s": row.get("speech_s"),
+                          "after_word": str(row.get("after_word", "")), "before_word": str(row.get("before_word", ""))})
+
     focus.sort(key=lambda item: item["final_s"])
     speakers: dict[str, int] = {}
     for row in words.values():
@@ -110,6 +132,8 @@ def build_review_packet(*, published: Path, source: Path, status: str, qc_rows: 
         "effects_final_s": [[round(a, 3), round(b, 3)] for a, b in effect_windows],
         "speakers": speakers,
         "focus": focus,
+        "coverage_check": {"status": str(coverage.get("status", "not_run")), "reason": str(coverage.get("reason", "")),
+                           "flags": int(coverage.get("flags", 0) or 0)},
         "degradations": list(degradations),
         "repairs": list(repairs),
     }
@@ -129,7 +153,7 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
     lines.append("## Look here first")
     if not focus:
         lines.append("- Nothing flagged: no caption word was left unsettled, changed from the primary ear's "
-                     "transcript or respelled as a name.")
+                     "transcript, respelled as a name, hidden as another speaker's or outside the detected speech.")
     for item in focus:
         at = _clock(item.get("final_s"))
         kind = item.get("kind")
@@ -143,6 +167,24 @@ def render_markdown(packet: Mapping[str, Any]) -> str:
         elif kind == "name_spelling_by_judge":
             lines.append(f"- [ ] {at} name spelling \"{item['from']}\" -> \"{item['to']}\" "
                          f"(confidence {item.get('confidence')})")
+        elif kind == "caption_hidden_speaker":
+            who = f" ({item['speaker']})" if item.get("speaker") else ""
+            lines.append(f"- [ ] {at} NOT captioned, assigned to another speaker{who}: \"{item['text']}\"; "
+                         "if the creator said it, it is missing from the captions")
+        elif kind == "speech_without_caption":
+            around = " ".join(x for x in (f"after \"{item['after_word']}\"" if item.get("after_word") else "",
+                                          f"before \"{item['before_word']}\"" if item.get("before_word") else "") if x)
+            lines.append(f"- [ ] {at} {item.get('seconds')} s of speech with no caption word"
+                         + (f" ({around})" if around else "") + ": words may be missing")
+        elif kind == "caption_word_stretched":
+            lines.append(f"- [ ] {at} caption \"{item['word']}\" spans {item.get('speech_s')} s of speech: "
+                         "words may be missing around it")
+        elif kind == "caption_word_without_speech":
+            lines.append(f"- [ ] {at} caption \"{item['word']}\" sits where no speech was detected: "
+                         "it may not have been said")
+    check = packet.get("coverage_check") or {}
+    if check.get("status") in ("unavailable", "failed"):
+        lines.append(f"- Speech-coverage check {check['status']}: {check.get('reason', '')}")
     cold = packet.get("cold_open") or {}
     window = cold.get("final_window_s") or [0.0, 0.0]
     lines += ["", "## Cold open",

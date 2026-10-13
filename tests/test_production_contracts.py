@@ -297,5 +297,37 @@ class HumanAcceptanceTests(unittest.TestCase):
         self.assertIn("none (no grounded headline was approved)", text)
         self.assertIn("face_tracking -> stable_wide", text)
 
+    def test_review_packet_lists_hidden_words_and_speech_coverage_flags(self) -> None:
+        from ai.editor import caption_truth
+
+        doc = {"intro": {"duration": 2.0, "paced": [10.0, 12.0]}, "restart": {"main_restart_paced": 1.0}}
+        profile = {"assignment": {"suppressed": [
+            {"word": "nah", "edited_start": 4.0, "edited_end": 4.2, "speaker": "B"},
+            {"word": "bro", "edited_start": 4.3, "edited_end": 4.5, "speaker": "B"},
+            {"word": "early", "edited_start": 0.2, "edited_end": 0.4, "speaker": "B"}]},      # before the restart
+            "caption_quality": {"coverage": {"status": "ok", "flags": 2, "regions": 3,
+                                             "uncovered_speech": [{"start": 6.0, "end": 7.2, "seconds": 1.2,
+                                                                   "after_word": "wait", "before_word": "what"}],
+                                             "stretched_words": [],
+                                             "unsupported_words": [{"word": "there", "start": 9.0, "end": 9.3}]}}}
+        phrases = caption_truth.suppressed_phrases(profile)
+        self.assertEqual([(p["text"], p["words"]) for p in phrases], [("early", 1), ("nah bro", 2)])
+        truth = {"words": [], "suppressed": phrases, "coverage": caption_truth.coverage_record(profile)}
+        self.assertNotIn("regions", truth["coverage"])
+        packet = human_review.build_review_packet(
+            published=Path("x_short.mp4"), source=Path("x.mp4"), status="published", qc_rows=[], timeline_doc=doc,
+            truth=truth, headline="")
+        focus = [(item["kind"], item["final_s"]) for item in packet["focus"]]
+        self.assertEqual(focus, [("caption_hidden_speaker", 5.0), ("speech_without_caption", 7.0),
+                                 ("caption_word_without_speech", 10.0)])
+        text = human_review.render_markdown(packet)
+        self.assertIn('NOT captioned, assigned to another speaker (B): "nah bro"', text)
+        self.assertIn('1.2 s of speech with no caption word (after "wait" before "what")', text)
+        self.assertIn('caption "there" sits where no speech was detected', text)
+        packet = human_review.build_review_packet(
+            published=Path("x_short.mp4"), source=Path("x.mp4"), status="published", qc_rows=[], timeline_doc=doc,
+            truth={"coverage": {"status": "unavailable", "reason": "no silero-vad", "flags": 0}}, headline="")
+        self.assertIn("Speech-coverage check unavailable: no silero-vad", human_review.render_markdown(packet))
+
 if __name__ == "__main__":
     unittest.main()

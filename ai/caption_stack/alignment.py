@@ -260,6 +260,7 @@ class QwenForcedAlignmentProvider:
         start, end = float(window[0]), float(window[1])
         if not tokens:
             return []
+        language_name = aligner_language(language)     # unsupported -> refused before the model loads
         self._loaded = shared_aligner(self.settings, self._loader)
         if end - start > self._loaded.max_input_seconds + 1e-6:
             raise AlignmentError(f"window {end - start:.1f}s exceeds the aligner limit "
@@ -269,7 +270,7 @@ class QwenForcedAlignmentProvider:
         else:
             path, offset, _end = analysis_audio.cut_window(audio, start, end, Path(workdir) / (
                 f"align_{int(start * 1000):08d}_{int(end * 1000):08d}.wav"))
-        results = self._loaded.model.align(audio=str(path), text=" ".join(tokens), language=aligner_language(language))
+        results = self._loaded.model.align(audio=str(path), text=" ".join(tokens), language=language_name)
         if not results:
             raise AlignmentError("aligner returned no result")
         items = getattr(results[0], "items", results[0])

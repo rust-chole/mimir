@@ -21,11 +21,16 @@ Modules (nothing heavy is imported by this package itself):
     config           centralized env settings (providers, models, device, dtype)
     audio            the canonical 16 kHz mono PCM analysis audio of the final short
     qwen_omni        DashScope OpenAI-compatible client + JSON evidence contract
+    qwen3_asr        optional Qwen3-ASR ears (local / DashScope), selected by config
     openai_ears      bounded OpenAI transcription (fallback / model-diverse evidence)
+    normalize        harmless lexical differences, defined once (disputes + evaluation)
     lexical          listening passes, comparison, disputes, judge, freeze
     alignment        provider boundary, validation, local recovery, chunk merge
     legacy_whisper   migration fallback timing provider (isolated Whisper clock)
+    coverage         report-only VAD check: speech without words, words without speech
     final_captions   orchestration for the selected short
+
+Accuracy is measured, not assumed: ``python -m ai.caption_eval`` (docs/caption_eval.md).
 
 Migration map of the pre-Qwen final-caption timing/wording code:
 

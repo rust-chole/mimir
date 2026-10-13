@@ -41,18 +41,56 @@ def _print_caption_stack() -> None:
     print()
     print("🎙️ FINAL CAPTION STACK")
     print("-" * 60)
-    print(f"LEXICAL EAR       : {settings.primary_provider} -> {settings.qwen_model} "
-          f"[reasoning {settings.qwen_reasoning_effort}] (DashScope key/url set: {settings.qwen_configured})")
+    if settings.primary_provider == "qwen3_asr":
+        print(f"LEXICAL EAR       : qwen3_asr -> {settings.qwen_asr_model} (local, loaded lazily) "
+              f"[device {settings.qwen_asr_device}, dtype {settings.qwen_asr_dtype}]")
+    elif settings.primary_provider == "qwen3_asr_flash":
+        print(f"LEXICAL EAR       : qwen3_asr_flash -> {settings.qwen_asr_api_model} "
+              f"(DashScope key/url set: {settings.qwen_configured})")
+    else:
+        print(f"LEXICAL EAR       : {settings.primary_provider} -> {settings.qwen_model} "
+              f"[reasoning {settings.qwen_reasoning_effort}] (DashScope key/url set: {settings.qwen_configured})")
     print(f"TRANSCRIBE BACKUP : {settings.transcribe_fallback_provider} -> {settings.transcribe_fallback_model}")
     print(f"WORD ALIGNMENT    : {settings.alignment_provider} -> {settings.aligner_model} "
           f"[device {settings.aligner_device}, dtype {settings.aligner_dtype}]")
     print(f"ALIGNMENT BACKUP  : {settings.alignment_fallback_provider}")
     installed = importlib.util.find_spec("qwen_asr") is not None
     print(f"qwen-asr installed: {installed} (the aligner loads lazily, only for final caption timing)")
+    vad = importlib.util.find_spec("silero_vad") is not None
+    print(f"COVERAGE CHECK    : {settings.coverage_check} (report only; silero-vad installed: {vad})")
+
+
+def _live_qwen_asr_flash_check(settings: caption_stack_config.CaptionStackSettings) -> None:
+    """One real request with one second of quiet audio: the endpoint, key and model answer."""
+    import base64
+    import io
+    import wave
+
+    from ai.caption_stack import qwen3_asr
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000); wav.writeframes(b"\x00\x00" * 16000)
+    print(f"⏳ {settings.qwen_asr_api_model} (DashScope ASR) ...", end=" ", flush=True)
+    try:
+        qwen3_asr.transcribe_api(base64.b64encode(buffer.getvalue()).decode("ascii"),
+                                 context=qwen3_asr.context_text([]), settings=settings)
+        print("✅")
+    except qwen3_asr.AsrUnavailable as error:
+        if "returned no text" in str(error):               # silence -> no words: the request itself worked
+            print("✅ (no words in silence)")
+            return
+        print("❌")
+        raise RuntimeError(f"{settings.qwen_asr_api_model} live check başarısız: {error}") from None
 
 
 def _live_qwen_check() -> None:
     settings = caption_stack_config.load_settings()
+    if settings.primary_provider == "qwen3_asr_flash":
+        if not settings.qwen_configured:
+            raise RuntimeError("DASHSCOPE_API_KEY / DASHSCOPE_BASE_URL bulunamadı (final caption Qwen3-ASR ear).")
+        _live_qwen_asr_flash_check(settings)
+        return
     if settings.primary_provider != "qwen_omni":
         return
     if not settings.qwen_configured:
