@@ -109,6 +109,24 @@ python -m ai.caption_eval run stack
 python -m ai.caption_eval compare published stack
 ```
 
+## Measuring clip selection
+
+Story / clip selection changes (a Stage 2 prompt, a model, an effort, a setting) are
+decided the same way: `python -m ai.clip_eval` labels real VODs **blind** (a local editor
+with the video and its transcript; MIMIR's picks are never shown), runs Stage 2 alone on
+the frozen transcript as many times as asked, and reports HIT@1, Recall@K, mAP, boundary
+errors, never-pick violations, mid-word cuts, stability and cost, dev and holdout apart,
+with a holdout regression gate. Paid commands need `--max-usd` (`--dry-run` estimates).
+See [docs/clip_eval.md](docs/clip_eval.md).
+
+```powershell
+python -m ai.clip_eval prepare "D:\VODs\stream.mp4"
+python -m ai.clip_eval serve
+python -m ai.clip_eval run --variant baseline --dry-run
+python -m ai.clip_eval run --variant baseline --repeats 3 --max-usd 30
+python -m ai.clip_eval compare baseline__<hash> judge-high__<hash> --gate
+```
+
 ## Model routing
 
 | Role | Default | Why |
