@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -439,34 +440,35 @@ class LabelingToolTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
+        local = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never via a proxy
         try:
-            index = urllib.request.urlopen(base + "/").read().decode("utf-8")
+            index = local.open(base + "/").read().decode("utf-8")
             self.assertIn("dev_one", index)
-            page = urllib.request.urlopen(base + "/case/dev_one").read().decode("utf-8")
+            page = local.open(base + "/case/dev_one").read().decode("utf-8")
             self.assertIn("a60 a61", page)
             for secret in ("SECRET MIMIR PICK", "chair breaks", "Raid Shadow segment"):
                 self.assertNotIn(secret, page)
             video = self.ws.videos["dev_one"].read_bytes()
             request = urllib.request.Request(base + "/video/dev_one", headers={"Range": "bytes=10-19"})
-            with urllib.request.urlopen(request) as response:
+            with local.open(request) as response:
                 self.assertEqual(response.status, 206)
                 self.assertEqual(response.read(), video[10:20])
             request = urllib.request.Request(base + "/video/dev_one", headers={"Range": "bytes=-5"})
-            self.assertEqual(urllib.request.urlopen(request).read(), video[-5:])
+            self.assertEqual(local.open(request).read(), video[-5:])
             body = json.dumps({"moments": [{"start": 98.5, "end": 131, "grade": "great", "note": "the chair"}],
                                "negatives": [], "finished": True}).encode("utf-8")
             request = urllib.request.Request(base + "/save/dev_one", data=body, method="POST",
                                              headers={"Content-Type": "application/json"})
-            answer = json.loads(urllib.request.urlopen(request).read())
+            answer = json.loads(local.open(request).read())
             self.assertEqual(answer["status"], "ready")
             self.assertEqual(self.ws.case("dev_one").labels("second").moments[0].note, "the chair")
             bad = json.dumps({"moments": [{"start": 50, "end": 10}], "finished": True}).encode("utf-8")
             request = urllib.request.Request(base + "/save/dev_one", data=bad, method="POST")
             with self.assertRaises(urllib.error.HTTPError) as caught:
-                urllib.request.urlopen(request)
+                local.open(request)
             self.assertEqual(caught.exception.code, 422)
             with self.assertRaises(urllib.error.HTTPError):
-                urllib.request.urlopen(base + "/case/..%2F..%2Fsecret")
+                local.open(base + "/case/..%2F..%2Fsecret")
         finally:
             server.shutdown()
             server.server_close()
