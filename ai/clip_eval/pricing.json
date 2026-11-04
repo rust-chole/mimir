@@ -1,0 +1,42 @@
+{
+  "_about": "USD prices the clip eval uses to estimate and cap spending. Edit this file (or point MIMIR_CLIP_EVAL_PRICING at a JSON file with the same shape, merged over this one) when a price changes. A model missing here is 'unpriced': a run that needs it is refused, because its cost cannot be capped.",
+  "verified": false,
+  "checked_at": "2026-11-04",
+  "check_against": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://ai.google.dev/gemini-api/docs/pricing"
+  ],
+  "_why_conservative": "The official pages were not reachable when this file was written. Third-party trackers report a 2026-07-30 cut to gpt-5.6-terra 2.00/12.00 and gpt-5.6-luna 0.20/1.20 per 1M tokens; until that is confirmed the older, higher list prices are used, so estimates and the --max-usd cap err on the expensive side.",
+  "sources": [
+    "https://www.eesel.ai/blog/gpt-5-6-pricing",
+    "https://community.openai.com/t/announcing-a-major-price-drop-for-5-6-terra-and-luna-and-fast-mode-for-5-6-sol/1388484",
+    "https://www.eesel.ai/blog/gpt-6-astra-pricing",
+    "https://anotherwrapper.com/tools/llm-pricing/gemini-3.7-flash"
+  ],
+  "per_million_tokens": {
+    "gpt-5.6-luna": {"input": 1.00, "cached_input": 0.10, "output": 6.00},
+    "gpt-5.6-terra": {"input": 2.50, "cached_input": 0.25, "output": 15.00},
+    "gpt-5.6-sol": {"input": 5.00, "cached_input": 0.50, "output": 30.00},
+    "gpt-6-astra": {"input": 10.00, "cached_input": 1.00, "output": 50.00},
+    "gemini-3.7-flash": {"input": 0.75, "cached_input": 0.75, "output": 3.75}
+  },
+  "per_audio_minute": {
+    "gpt-4o-mini-transcribe": 0.003,
+    "whisper-1": 0.006,
+    "gpt-4o-transcribe": 0.006,
+    "gpt-transcribe": 0.006,
+    "gpt-4o-transcribe-diarize": 0.006
+  },
+  "estimate": {
+    "_about": "Heuristics for runs that have no measured cost yet. Once a case has been run, its measured usage replaces them.",
+    "tokens_per_char": 0.32,
+    "reasoning_tokens": {"none": 0, "minimal": 512, "low": 2048, "medium": 6144, "high": 16384, "xhigh": 32768, "max": 65536},
+    "safety_factor": 1.25,
+    "full_stage": {
+      "gemini_video_tokens_per_second": 300,
+      "gemini_output_tokens": 8000,
+      "after_selection_usd": 2.50,
+      "_after_selection": "captions (Qwen Omni x2, gpt-transcribe, Astra judge), diarization, Astra edit director, teaser, headline, speaker roles, memes for ONE short; DashScope Qwen is not in this table, so it is covered by this allowance"
+    }
+  }
+}
