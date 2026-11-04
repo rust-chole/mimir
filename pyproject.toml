@@ -1,0 +1,8 @@
+# Tool configuration only: MIMIR is run from a checkout, not installed as a package.
+
+[tool.pytest.ini_options]
+# `python -m pytest` from the repository root works without PYTHONPATH tweaks: the suites
+# import `ai.*` from the root and shared fixtures (pro_edit_fixtures, pipeline_harness)
+# from tests/.
+pythonpath = [".", "tests"]
+testpaths = ["tests"]
